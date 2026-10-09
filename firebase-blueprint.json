@@ -1,0 +1,97 @@
+{
+  "entities": {
+    "AccessRequest": {
+      "title": "AccessRequest",
+      "description": "HRMS Access request record for Google-authenticated users",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Full name retrieved from Google Auth",
+          "maxLength": 150
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address retrieved from Google Auth",
+          "maxLength": 150
+        },
+        "uid": {
+          "type": "string",
+          "description": "Firebase user UID",
+          "maxLength": 128
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO timestamp of access request",
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "description": "Access approval status",
+          "enum": ["Pending", "Approved", "Rejected"]
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned employee role upon approval",
+          "maxLength": 64
+        },
+        "reviewedBy": {
+          "type": "string",
+          "description": "UID or email of HR/Admin reviewer",
+          "maxLength": 150
+        },
+        "reviewedAt": {
+          "type": "string",
+          "description": "ISO timestamp of review",
+          "maxLength": 64
+        }
+      },
+      "required": ["name", "email", "uid", "timestamp", "status"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role and access details",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase User ID",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name",
+          "maxLength": 150
+        },
+        "email": {
+          "type": "string",
+          "description": "User email",
+          "maxLength": 150
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Pending", "Approved", "Rejected"]
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["uid", "name", "email", "status"]
+    }
+  },
+  "firestore": {
+    "/access_requests/{requestId}": {
+      "schema": "AccessRequest",
+      "description": "Collection of access requests submitted by users for HR review"
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Collection of registered application users"
+    }
+  }
+}

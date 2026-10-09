@@ -1,0 +1,69 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email.lower() == 'modelatech2026@gmail.com' ||
+        request.auth.token.email.lower() == 'sushoovandas@gmail.com'
+      );
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-@.]+$');
+    }
+
+    function isValidAccessRequest(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 150
+        && data.email is string && data.email.size() > 0 && data.email.size() <= 150
+        && data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128
+        && data.timestamp is string && data.timestamp.size() <= 64
+        && (data.status in ['Pending', 'Approved', 'Rejected']);
+    }
+
+    // Access Requests Collection
+    match /access_requests/{requestId} {
+      allow read: if isValidId(requestId);
+
+      allow create: if isValidId(requestId)
+        && isValidAccessRequest(incoming());
+
+      allow update: if isValidId(requestId);
+
+      allow delete: if isValidId(requestId);
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (isAdmin() || isOwner(userId));
+
+      allow create, update: if isSignedIn()
+        && isValidId(userId)
+        && (isOwner(userId) || isAdmin());
+
+      allow delete: if isAdmin();
+    }
+  }
+}
