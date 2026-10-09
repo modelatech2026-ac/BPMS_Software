@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Star,
   MessageSquare,
@@ -22,7 +22,8 @@ import {
   SlidersHorizontal,
   ChevronDown,
   ShieldCheck,
-  Check
+  Check,
+  ExternalLink,
 } from 'lucide-react';
 import { useBimData } from '../context/BimDataContext';
 import { BimProject, ProjectFeedbackItem } from '../types';
@@ -152,6 +153,7 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
 
   // New Feedback Modal State
   const [showAddModal, setShowAddModal] = useState(false);
+  const [copiedClientLink, setCopiedClientLink] = useState(false);
   const [formProjectId, setFormProjectId] = useState(projects[0]?.id || 'p1');
   const [formRating, setFormRating] = useState<number>(5);
   const [formFeedbackText, setFormFeedbackText] = useState('');
@@ -163,10 +165,66 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
   const [formActionItem, setFormActionItem] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Sync feedbacks in real-time across tabs/windows
+  useEffect(() => {
+    const handleFeedbackSync = () => {
+      const saved = localStorage.getItem('bim_project_feedbacks_v1');
+      if (saved) {
+        try {
+          setFeedbacks(JSON.parse(saved));
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener('storage', handleFeedbackSync);
+    window.addEventListener('bim_feedback_updated', handleFeedbackSync);
+    return () => {
+      window.removeEventListener('storage', handleFeedbackSync);
+      window.removeEventListener('bim_feedback_updated', handleFeedbackSync);
+    };
+  }, []);
+
+  // Copy Public Client Link to Clipboard
+  const handleCopyClientLink = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const publicUrl = `${origin}/feedback`;
+    if (navigator?.clipboard) {
+      navigator.clipboard
+        .writeText(publicUrl)
+        .then(() => {
+          setCopiedClientLink(true);
+          setTimeout(() => setCopiedClientLink(false), 2500);
+        })
+        .catch(() => {
+          fallbackCopy(publicUrl);
+        });
+    } else {
+      fallbackCopy(publicUrl);
+    }
+  };
+
+  const fallbackCopy = (text: string) => {
+    try {
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      setCopiedClientLink(true);
+      setTimeout(() => setCopiedClientLink(false), 2500);
+    } catch (e) {
+      console.warn('Copy fallback error:', e);
+    }
+  };
+
   // Save to localStorage
   const saveFeedbacks = (items: ProjectFeedbackItem[]) => {
     setFeedbacks(items);
     localStorage.setItem('bim_project_feedbacks_v1', JSON.stringify(items));
+    window.dispatchEvent(new Event('bim_feedback_updated'));
+    window.dispatchEvent(new Event('storage'));
   };
 
   // Filtered Feedbacks
@@ -281,10 +339,48 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Share Client Link (/feedback) Button */}
             <button
+              type="button"
+              onClick={handleCopyClientLink}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border transition cursor-pointer shadow-xs ${
+                copiedClientLink
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+              }`}
+              title="Copy client evaluation portal link to clipboard"
+            >
+              {copiedClientLink ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Copied Link!</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Share Client Link (/feedback)</span>
+                </>
+              )}
+            </button>
+
+            {/* Preview Portal Button (opens /feedback in new tab) */}
+            <a
+              href="/feedback"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer shadow-xs"
+              title="Open public feedback portal in new tab"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
+              <span>Preview Portal</span>
+            </a>
+
+            {/* Record New Feedback Admin Button */}
+            <button
+              type="button"
               onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold shadow-md transition"
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-md transition cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Record New Feedback</span>

@@ -25,6 +25,7 @@ import { SignInModal } from './components/SignInModal';
 import { PendingApprovalScreen } from './components/PendingApprovalScreen';
 import { AuthGateway } from './components/AuthGateway';
 import { TwoFactorChallengeModal } from './components/TwoFactorChallengeModal';
+import { PublicClientFeedback } from './components/PublicClientFeedback';
 import { BimProject, ViewTab } from './types';
 
 export const ROUTE_TAB_MAP: Record<string, ViewTab> = {
@@ -55,8 +56,9 @@ export const TAB_ROUTE_MAP: Record<ViewTab, string> = {
 
 function getNormalizedPath(): string {
   if (typeof window === 'undefined') return '/';
-  // Check hash first (e.g. #/dashboard or #dashboard)
+  // Check hash first (e.g. #/dashboard or #dashboard or #feedback)
   const hash = window.location.hash.replace(/^#\/?/, '/');
+  if (hash === '/feedback') return '/feedback';
   if (hash && hash !== '/' && ROUTE_TAB_MAP[hash]) {
     return hash;
   }
@@ -99,10 +101,11 @@ function BimAppContent() {
   // 1. Automatic Unauthenticated Redirect:
   // If an unauthenticated user opens any direct dashboard link (e.g. /dashboard, /projects, /admin-nexus),
   // immediately store the attempted target and redirect to the Landing / Sign-In page (/)
+  // Note: /feedback is a public client route and must never be redirected!
   useEffect(() => {
     if (!hasActiveSession) {
       const path = getNormalizedPath();
-      if (path !== '/' && path !== '/login') {
+      if (path !== '/' && path !== '/login' && path !== '/feedback') {
         try {
           sessionStorage.setItem('bpms_redirect_target', path);
         } catch {
@@ -229,6 +232,13 @@ function BimAppContent() {
       return null;
     }
   })();
+
+  // 0. Public Client Route (/feedback)
+  // Registered as a publicly accessible route outside of all authentication guards
+  // Stripped UI: completely hides sidebar navigation, top app headers, user profile dropdowns, and cancel buttons
+  if (currentPath === '/feedback') {
+    return <PublicClientFeedback />;
+  }
 
   // 1. Two-Factor Authentication Login Challenge Step: If 2FA is pending, prompt challenge
   if (is2FAPending) {
