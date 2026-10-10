@@ -32,6 +32,8 @@ import {
 } from 'lucide-react';
 import { SUPER_ADMIN_EMAIL, SUPER_ADMIN_NAME, mapAppRoleToAccessLevel } from '../auth/googleAuth';
 import { SecuritySettingsModal } from './SecuritySettingsModal';
+import { db } from '../firebase/config';
+import { collection, getDocs, onSnapshot } from 'firebase/firestore';
 
 export const AdminNexus: React.FC = () => {
   const {
@@ -98,9 +100,189 @@ export const AdminNexus: React.FC = () => {
     localStorage.setItem('bim_tracker_permissions_map_v5', JSON.stringify(permissionsMap));
   }, [permissionsMap]);
 
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+
+  // Active Real-Time Hook / Query for Pending Access Requests
+  const fetchPendingRequests = async () => {
+    setIsSyncing(true);
+    try {
+      // 1. Fetch from Firestore collection access_requests
+      const colRef = collection(db, 'access_requests');
+      const snapshot = await getDocs(colRef);
+      if (!snapshot.empty) {
+        setOnboardingRequests((prev) => {
+          const updated = [...prev];
+          snapshot.docs.forEach((d) => {
+            const data = d.data();
+            if (!data || !data.email) return;
+            const existingIdx = updated.findIndex(
+              (r) =>
+                r.id === d.id ||
+                (r.email && r.email.toLowerCase() === data.email.toLowerCase())
+            );
+            const rawStatus = (data.status || 'pending').toLowerCase();
+            const mappedStatus =
+              rawStatus === 'approved'
+                ? 'APPROVED'
+                : rawStatus === 'rejected'
+                ? 'REJECTED'
+                : 'pending';
+
+            const reqObj: OnboardingRequest = {
+              id: d.id,
+              googleId: data.uid || d.id,
+              email: data.email,
+              name: data.name || data.email.split('@')[0],
+              avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                data.name || d.id
+              )}`,
+              role: data.role || 'Editor',
+              requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
+              requestedAt: data.requestedAt || data.timestamp || new Date().toISOString(),
+              requestTimestamp: data.requestedAt || data.timestamp || new Date().toISOString(),
+              status: rawStatus === 'pending' ? 'pending' : (mappedStatus as any),
+              organization: data.organization || 'External Applicant (Landing Page)',
+              accessReason: data.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
+              notes: 'Landing page access request. Awaiting Super Admin review in Admin Nexus.',
+            };
+
+            if (existingIdx >= 0) {
+              updated[existingIdx] = {
+                ...updated[existingIdx],
+                ...reqObj,
+              };
+            } else {
+              updated.unshift(reqObj);
+            }
+          });
+          return updated;
+        });
+      }
+    } catch (err) {
+      console.warn('Admin Nexus pending fetch notice:', err);
+    }
+
+    // 2. Cross-tab sync with localStorage
+    try {
+      const savedRaw = localStorage.getItem('bim_tracker_onboarding_v5');
+      if (savedRaw) {
+        const parsed: OnboardingRequest[] = JSON.parse(savedRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setOnboardingRequests((prev) => {
+            const merged = [...prev];
+            parsed.forEach((p) => {
+              const idx = merged.findIndex(
+                (m) => m.id === p.id || m.email.toLowerCase() === p.email.toLowerCase()
+              );
+              if (idx >= 0) {
+                merged[idx] = { ...merged[idx], ...p };
+              } else {
+                merged.unshift(p);
+              }
+            });
+            return merged;
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    setIsSyncing(false);
+    setLastSyncTime(new Date().toLocaleTimeString());
+  };
+
+  // Real-time Firestore listener & event sync in Admin Nexus
+  useEffect(() => {
+    // Initial fetch on mount
+    fetchPendingRequests();
+
+    // Attach Firestore onSnapshot listener
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const colRef = collection(db, 'access_requests');
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          if (!snapshot.empty) {
+            setOnboardingRequests((prev) => {
+              const updated = [...prev];
+              snapshot.docs.forEach((d) => {
+                const data = d.data();
+                if (!data || !data.email) return;
+                const existingIdx = updated.findIndex(
+                  (r) =>
+                    r.id === d.id ||
+                    (r.email && r.email.toLowerCase() === data.email.toLowerCase())
+                );
+                const rawStatus = (data.status || 'pending').toLowerCase();
+                const mappedStatus =
+                  rawStatus === 'approved'
+                    ? 'APPROVED'
+                    : rawStatus === 'rejected'
+                    ? 'REJECTED'
+                    : 'pending';
+
+                const reqObj: OnboardingRequest = {
+                  id: d.id,
+                  googleId: data.uid || d.id,
+                  email: data.email,
+                  name: data.name || data.email.split('@')[0],
+                  avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                    data.name || d.id
+                  )}`,
+                  role: data.role || 'Editor',
+                  requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
+                  requestedAt: data.requestedAt || data.timestamp || new Date().toISOString(),
+                  requestTimestamp: data.requestedAt || data.timestamp || new Date().toISOString(),
+                  status: rawStatus === 'pending' ? 'pending' : (mappedStatus as any),
+                  organization: data.organization || 'External Applicant (Landing Page)',
+                  accessReason: data.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
+                  notes: 'Landing page access request. Awaiting Super Admin review in Admin Nexus.',
+                };
+
+                if (existingIdx >= 0) {
+                  updated[existingIdx] = {
+                    ...updated[existingIdx],
+                    ...reqObj,
+                  };
+                } else {
+                  updated.unshift(reqObj);
+                }
+              });
+              return updated;
+            });
+            setLastSyncTime(new Date().toLocaleTimeString());
+          }
+        },
+        (err) => {
+          console.warn('Admin Nexus onSnapshot notice:', err);
+        }
+      );
+    } catch (err) {
+      console.warn('Failed to attach onSnapshot listener in Admin Nexus:', err);
+    }
+
+    // Cross-tab broadcast listener
+    const handleSyncEvent = () => {
+      fetchPendingRequests();
+    };
+    window.addEventListener('bim_onboarding_updated', handleSyncEvent);
+    window.addEventListener('storage', handleSyncEvent);
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+      window.removeEventListener('bim_onboarding_updated', handleSyncEvent);
+      window.removeEventListener('storage', handleSyncEvent);
+    };
+  }, []);
+
   const isReqPending = (status?: string) =>
     !status ||
+    status === 'pending' ||
     status.toUpperCase() === 'PENDING' ||
+    status.toLowerCase() === 'pending' ||
     status.toLowerCase() === 'pending_approval' ||
     status.toLowerCase().includes('pending');
 
@@ -970,6 +1152,17 @@ export const AdminNexus: React.FC = () => {
                     <span>Rejected Logs ({rejectedRequests.length})</span>
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => fetchPendingRequests()}
+                  disabled={isSyncing}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-sm disabled:opacity-50"
+                  title={lastSyncTime ? `Last synced at ${lastSyncTime}` : 'Real-time re-fetch from access_requests database'}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isSyncing ? 'Syncing...' : 'Live Sync'}</span>
+                </button>
 
                 <button
                   onClick={() => setIsSimulateModalOpen(true)}

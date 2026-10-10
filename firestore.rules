@@ -38,8 +38,9 @@ service cloud.firestore {
       return data.name is string && data.name.size() > 0 && data.name.size() <= 150
         && data.email is string && data.email.size() > 0 && data.email.size() <= 150
         && data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128
-        && data.timestamp is string && data.timestamp.size() <= 64
-        && (data.status in ['Pending', 'Approved', 'Rejected']);
+        && ((!('timestamp' in data) || (data.timestamp is string && data.timestamp.size() <= 64)))
+        && ((!('requestedAt' in data) || (data.requestedAt is string && data.requestedAt.size() <= 64)))
+        && (data.status in ['pending', 'Pending', 'approved', 'Approved', 'rejected', 'Rejected']);
     }
 
     // Access Requests Collection

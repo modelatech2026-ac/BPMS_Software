@@ -25,10 +25,15 @@
           "description": "ISO timestamp of access request",
           "maxLength": 64
         },
+        "requestedAt": {
+          "type": "string",
+          "description": "ISO timestamp of access request",
+          "maxLength": 64
+        },
         "status": {
           "type": "string",
           "description": "Access approval status",
-          "enum": ["Pending", "Approved", "Rejected"]
+          "enum": ["pending", "Pending", "approved", "Approved", "rejected", "Rejected"]
         },
         "role": {
           "type": "string",

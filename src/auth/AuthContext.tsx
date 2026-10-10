@@ -530,24 +530,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // Check Firestore access request record
     const reqRef = doc(db, 'access_requests', params.uid);
-    let firestoreStatus = 'Pending';
+    let firestoreStatus = 'pending';
     let assignedRole: SecurityRole = 'Editor';
+    const isoTimestamp = new Date().toISOString();
 
     try {
       const snap = await getDoc(reqRef);
       if (!snap.exists()) {
         const newRecord = {
+          id: params.uid,
+          uid: params.uid,
           name: params.name,
           email: params.email,
-          uid: params.uid,
           role: 'Editor',
-          status: 'Pending',
-          timestamp: new Date().toISOString(),
+          status: 'pending',
+          requestedAt: isoTimestamp,
+          timestamp: isoTimestamp,
+          requestedRole: 'BIM Modeler / Editor',
           organization: 'External Applicant (Landing Page)',
           accessReason: 'ProductionPulse BPMS Access Request submitted via Landing Page',
         };
-        await setDoc(reqRef, newRecord);
-        firestoreStatus = 'Pending';
+        await setDoc(reqRef, newRecord, { merge: true });
+        firestoreStatus = 'pending';
 
         // Safeguard sync to localStorage onboarding queue
         try {
@@ -561,34 +565,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               email: params.email,
               name: params.name,
               avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(params.name)}`,
+              role: 'Editor',
               requestedRole: 'BIM Modeler / Editor',
               primaryDiscipline: 'BIM - ACS',
-              requestTimestamp: new Date().toLocaleString([], {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              }),
-              status: 'PENDING',
+              requestedAt: isoTimestamp,
+              requestTimestamp: isoTimestamp,
+              timestamp: isoTimestamp,
+              status: 'pending',
               organization: 'External Applicant (Landing Page)',
               accessReason: 'ProductionPulse BPMS Access Request submitted via Landing Page',
               notes: 'Landing page access request awaiting Super Admin review in Admin Nexus.',
             };
             localStorage.setItem('bim_tracker_onboarding_v5', JSON.stringify([fallbackReq, ...currentList]));
             window.dispatchEvent(new Event('bim_onboarding_updated'));
+            window.dispatchEvent(new Event('storage'));
           }
         } catch {
           // ignore
         }
       } else {
         const data = snap.data();
-        firestoreStatus = data?.status || 'Pending';
+        firestoreStatus = data?.status || 'pending';
         if (data?.role) assignedRole = data.role as SecurityRole;
       }
     } catch (fsErr) {
       console.warn('Firestore lookup notice:', fsErr);
-      firestoreStatus = 'Pending';
+      firestoreStatus = 'pending';
     }
 
     const appRole: UserRole =

@@ -349,9 +349,12 @@ export interface OnboardingRequest {
   email: string;
   name: string;
   avatar?: string;
+  role?: string;
   requestedRole: string;
   primaryDiscipline?: Discipline | string;
+  requestedAt?: string;
   requestTimestamp: string;
+  timestamp?: string;
   status: UserApprovalStatus;
   reviewedBy?: string;
   reviewedAt?: string;

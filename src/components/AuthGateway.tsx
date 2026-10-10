@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { TwoFactorChallengeModal } from './TwoFactorChallengeModal';
 import { db } from '../firebase/config';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 interface AuthGatewayProps {
   isModal?: boolean;
@@ -166,9 +166,34 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
       cleanEmail.split('').reduce((acc, char) => (acc << 5) - acc + char.charCodeAt(0), 0)
     );
     const generatedUid = `req_${safePrefix}_${hash}`;
+    const isoTimestamp = new Date().toISOString();
 
     try {
-      // 1. Immediately register in onboarding queue / Firestore
+      // Direct Firestore write ensuring standardized schema with status: "pending", requestedAt: timestamp, email, name, role
+      try {
+        const reqDoc = doc(db, 'access_requests', generatedUid);
+        await setDoc(
+          reqDoc,
+          {
+            id: generatedUid,
+            uid: generatedUid,
+            name: cleanName,
+            email: cleanEmail,
+            role: 'Editor',
+            status: 'pending',
+            requestedAt: isoTimestamp,
+            timestamp: isoTimestamp,
+            requestedRole: 'BIM Modeler / Editor',
+            organization: 'External Applicant (Landing Page)',
+            accessReason: 'ProductionPulse BPMS Access Request submitted via Landing Page',
+          },
+          { merge: true }
+        );
+      } catch (fsErr) {
+        console.warn('Firestore write warning:', fsErr);
+      }
+
+      // 1. Immediately register in onboarding queue / Firestore state
       await registerAccessRequest({
         name: cleanName,
         email: cleanEmail,
