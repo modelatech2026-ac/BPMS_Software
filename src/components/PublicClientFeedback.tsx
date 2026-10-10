@@ -143,7 +143,7 @@ export const PublicClientFeedback: React.FC = () => {
 
       {/* Top Branding Header */}
       <div className="mb-6 flex items-center gap-3 relative z-10 text-center sm:text-left">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-amber-500/20 shrink-0">
+        <div className="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-amber-400/30 shrink-0">
           <Star className="w-5 h-5 fill-slate-950 text-slate-950" />
         </div>
         <div>
@@ -424,10 +424,10 @@ export const PublicClientFeedback: React.FC = () => {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full sm:w-auto px-6 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold transition flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20 cursor-pointer disabled:opacity-50"
+                className="w-full sm:w-auto px-6 py-2.5 rounded-lg bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-slate-950 font-bold transition flex items-center justify-center gap-1.5 shadow-md shadow-amber-400/25 cursor-pointer disabled:opacity-50"
               >
-                <Check className="w-4 h-4" />
-                <span>{isSubmitting ? 'Saving Feedback...' : 'Save Feedback'}</span>
+                <Check className="w-4 h-4 stroke-[2.5]" />
+                <span>{isSubmitting ? 'Saving Feedback...' : '✓ Save Feedback'}</span>
               </button>
             </div>
           </form>

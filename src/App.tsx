@@ -54,16 +54,41 @@ export const TAB_ROUTE_MAP: Record<ViewTab, string> = {
   'admin-nexus': '/admin-nexus',
 };
 
+export function isFeedbackRoute(path?: string): boolean {
+  if (typeof window !== 'undefined') {
+    const pathname = window.location.pathname || '';
+    if (pathname === '/feedback' || pathname.startsWith('/feedback')) {
+      return true;
+    }
+    const hash = window.location.hash || '';
+    if (
+      hash === '#feedback' ||
+      hash === '#/feedback' ||
+      hash.startsWith('#feedback') ||
+      hash.startsWith('#/feedback')
+    ) {
+      return true;
+    }
+  }
+  if (!path) return false;
+  const clean = path.split('?')[0].split('#')[0].replace(/\/+$/, '');
+  return clean === '/feedback' || clean.startsWith('/feedback');
+}
+
 function getNormalizedPath(): string {
   if (typeof window === 'undefined') return '/';
+  // Check if current route is public feedback portal
+  if (isFeedbackRoute()) return '/feedback';
+
   // Check hash first (e.g. #/dashboard or #dashboard or #feedback)
   const hash = window.location.hash.replace(/^#\/?/, '/');
-  if (hash === '/feedback') return '/feedback';
+  if (isFeedbackRoute(hash)) return '/feedback';
   if (hash && hash !== '/' && ROUTE_TAB_MAP[hash]) {
     return hash;
   }
   const pathname = window.location.pathname;
   if (!pathname || pathname === '' || pathname === '/') return '/';
+  if (isFeedbackRoute(pathname)) return '/feedback';
   const clean = pathname.replace(/\/+$/, '');
   return clean || '/';
 }
@@ -101,11 +126,16 @@ function BimAppContent() {
   // 1. Automatic Unauthenticated Redirect:
   // If an unauthenticated user opens any direct dashboard link (e.g. /dashboard, /projects, /admin-nexus),
   // immediately store the attempted target and redirect to the Landing / Sign-In page (/)
-  // Note: /feedback is a public client route and must never be redirected!
+  // Auth Guard Exemption: If window.location.pathname === '/feedback' (or starts with '/feedback'), DO NOT redirect!
   useEffect(() => {
+    // Check if requested route is public feedback
+    if (isFeedbackRoute() || isFeedbackRoute(currentPath)) {
+      return;
+    }
+
     if (!hasActiveSession) {
       const path = getNormalizedPath();
-      if (path !== '/' && path !== '/login' && path !== '/feedback') {
+      if (path !== '/' && path !== '/login' && !isFeedbackRoute(path)) {
         try {
           sessionStorage.setItem('bpms_redirect_target', path);
         } catch {
@@ -117,7 +147,7 @@ function BimAppContent() {
         setCurrentPath('/');
       }
     }
-  }, [hasActiveSession]);
+  }, [hasActiveSession, currentPath]);
 
   // Synchronize browser popstate & hashchange events
   useEffect(() => {
@@ -233,10 +263,18 @@ function BimAppContent() {
     }
   })();
 
-  // 0. Public Client Route (/feedback)
-  // Registered as a publicly accessible route outside of all authentication guards
-  // Stripped UI: completely hides sidebar navigation, top app headers, user profile dropdowns, and cancel buttons
-  if (currentPath === '/feedback') {
+  // 0. Auth Guard Exemption Logic: Public Client Route (/feedback)
+  // Check if window.location.pathname === '/feedback' (or starts with '/feedback')
+  // Bypass Auth Check: If the requested route is /feedback, DO NOT redirect to the login/landing screen even if isAuthenticated is false.
+  // Render ONLY the standalone view matching exact layout (stripped of sidebar, navbar, and cancel buttons)
+  const isPublicFeedback =
+    (typeof window !== 'undefined' &&
+      (window.location.pathname === '/feedback' ||
+        window.location.pathname.startsWith('/feedback'))) ||
+    isFeedbackRoute(currentPath) ||
+    isFeedbackRoute();
+
+  if (isPublicFeedback) {
     return <PublicClientFeedback />;
   }
 

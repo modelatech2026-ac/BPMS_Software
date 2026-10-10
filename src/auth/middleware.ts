@@ -65,6 +65,17 @@ export const ROLE_PERMISSIONS: Record<
 /**
  * State-based Route Guard & RBAC Checker
  */
+export function isPublicFeedbackRoute(path?: string): boolean {
+  if (typeof window !== 'undefined') {
+    const p = path ?? window.location.pathname;
+    if (p === '/feedback' || p.startsWith('/feedback')) return true;
+    const h = window.location.hash;
+    if (h === '#feedback' || h === '#/feedback' || h.startsWith('#feedback') || h.startsWith('#/feedback')) return true;
+  }
+  if (!path) return false;
+  return path === '/feedback' || path.startsWith('/feedback');
+}
+
 export function checkRouteAccess(user: AuthUser | null): RouteGuardResult {
   if (!user) {
     return {
