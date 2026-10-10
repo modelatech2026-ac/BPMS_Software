@@ -5,6 +5,11 @@
       "description": "HRMS Access request record for Google-authenticated users",
       "type": "object",
       "properties": {
+        "fullName": {
+          "type": "string",
+          "description": "Full name of the user requesting access",
+          "maxLength": 150
+        },
         "name": {
           "type": "string",
           "description": "Full name retrieved from Google Auth",
@@ -15,10 +20,25 @@
           "description": "Email address retrieved from Google Auth",
           "maxLength": 150
         },
+        "discipline": {
+          "type": "string",
+          "description": "User discipline or organization division",
+          "maxLength": 150
+        },
+        "reasonForAccess": {
+          "type": "string",
+          "description": "Reason for requesting sign-in access",
+          "maxLength": 500
+        },
         "uid": {
           "type": "string",
           "description": "Firebase user UID",
           "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of access request creation",
+          "maxLength": 64
         },
         "timestamp": {
           "type": "string",
@@ -33,7 +53,7 @@
         "status": {
           "type": "string",
           "description": "Access approval status",
-          "enum": ["pending", "Pending", "approved", "Approved", "rejected", "Rejected"]
+          "enum": ["pending", "Pending", "approved", "Approved", "rejected", "Rejected", "APPROVED", "REJECTED"]
         },
         "role": {
           "type": "string",
@@ -51,7 +71,7 @@
           "maxLength": 64
         }
       },
-      "required": ["name", "email", "uid", "timestamp", "status"]
+      "required": ["email", "status"]
     },
     "UserProfile": {
       "title": "UserProfile",

@@ -103,158 +103,75 @@ export const AdminNexus: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
-  // Active Real-Time Hook / Query for Pending Access Requests
+  const mapDocToRequest = (d: any): OnboardingRequest | null => {
+    const data = d.data();
+    if (!data || !data.email) return null;
+    const rawStatus = (data.status || 'pending').toLowerCase();
+    const mappedStatus =
+      rawStatus === 'approved'
+        ? 'APPROVED'
+        : rawStatus === 'rejected'
+        ? 'REJECTED'
+        : 'pending';
+    const fullName = data.fullName || data.name || data.email.split('@')[0];
+    const discipline = data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS';
+    const reasonForAccess = data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
+    const createdAt = data.createdAt || data.requestedAt || data.timestamp || new Date().toISOString();
+
+    return {
+      id: d.id,
+      googleId: data.uid || d.id,
+      email: data.email,
+      name: fullName,
+      fullName: fullName,
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
+      role: data.role || 'Editor',
+      requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
+      primaryDiscipline: discipline,
+      discipline: discipline,
+      organization: data.organization || discipline,
+      reasonForAccess: reasonForAccess,
+      accessReason: reasonForAccess,
+      createdAt: createdAt,
+      requestedAt: createdAt,
+      requestTimestamp: createdAt,
+      timestamp: createdAt,
+      status: rawStatus === 'pending' ? 'pending' : (mappedStatus as any),
+      notes: data.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+    };
+  };
+
+  // Active Real-Time Hook / Query for Pending Access Requests from Firestore
   const fetchPendingRequests = async () => {
     setIsSyncing(true);
     try {
-      // 1. Fetch from Firestore collection access_requests
+      // 1. Fetch from Firestore collection access_requests (No LocalStorage)
       const colRef = collection(db, 'access_requests');
       const snapshot = await getDocs(colRef);
-      if (!snapshot.empty) {
-        setOnboardingRequests((prev) => {
-          const updated = [...prev];
-          snapshot.docs.forEach((d) => {
-            const data = d.data();
-            if (!data || !data.email) return;
-            const existingIdx = updated.findIndex(
-              (r) =>
-                r.id === d.id ||
-                (r.email && r.email.toLowerCase() === data.email.toLowerCase())
-            );
-            const rawStatus = (data.status || 'pending').toLowerCase();
-            const mappedStatus =
-              rawStatus === 'approved'
-                ? 'APPROVED'
-                : rawStatus === 'rejected'
-                ? 'REJECTED'
-                : 'pending';
-
-            const reqObj: OnboardingRequest = {
-              id: d.id,
-              googleId: data.uid || d.id,
-              email: data.email,
-              name: data.name || data.email.split('@')[0],
-              avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                data.name || d.id
-              )}`,
-              role: data.role || 'Editor',
-              requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
-              requestedAt: data.requestedAt || data.timestamp || new Date().toISOString(),
-              requestTimestamp: data.requestedAt || data.timestamp || new Date().toISOString(),
-              status: rawStatus === 'pending' ? 'pending' : (mappedStatus as any),
-              organization: data.organization || 'External Applicant (Landing Page)',
-              accessReason: data.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
-              notes: 'Landing page access request. Awaiting Super Admin review in Admin Nexus.',
-            };
-
-            if (existingIdx >= 0) {
-              updated[existingIdx] = {
-                ...updated[existingIdx],
-                ...reqObj,
-              };
-            } else {
-              updated.unshift(reqObj);
-            }
-          });
-          return updated;
-        });
-      }
+      const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+      setOnboardingRequests(list);
     } catch (err) {
       console.warn('Admin Nexus pending fetch notice:', err);
     }
-
-    // 2. Cross-tab sync with localStorage
-    try {
-      const savedRaw = localStorage.getItem('bim_tracker_onboarding_v5');
-      if (savedRaw) {
-        const parsed: OnboardingRequest[] = JSON.parse(savedRaw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setOnboardingRequests((prev) => {
-            const merged = [...prev];
-            parsed.forEach((p) => {
-              const idx = merged.findIndex(
-                (m) => m.id === p.id || m.email.toLowerCase() === p.email.toLowerCase()
-              );
-              if (idx >= 0) {
-                merged[idx] = { ...merged[idx], ...p };
-              } else {
-                merged.unshift(p);
-              }
-            });
-            return merged;
-          });
-        }
-      }
-    } catch {
-      // ignore
-    }
-
     setIsSyncing(false);
     setLastSyncTime(new Date().toLocaleTimeString());
   };
 
-  // Real-time Firestore listener & event sync in Admin Nexus
+  // Real-time Firestore listener in Admin Nexus
   useEffect(() => {
     // Initial fetch on mount
     fetchPendingRequests();
 
-    // Attach Firestore onSnapshot listener
+    // Attach Firestore onSnapshot listener for instant updates in Pending Queue
     let unsubscribe: (() => void) | undefined;
     try {
       const colRef = collection(db, 'access_requests');
       unsubscribe = onSnapshot(
         colRef,
         (snapshot) => {
-          if (!snapshot.empty) {
-            setOnboardingRequests((prev) => {
-              const updated = [...prev];
-              snapshot.docs.forEach((d) => {
-                const data = d.data();
-                if (!data || !data.email) return;
-                const existingIdx = updated.findIndex(
-                  (r) =>
-                    r.id === d.id ||
-                    (r.email && r.email.toLowerCase() === data.email.toLowerCase())
-                );
-                const rawStatus = (data.status || 'pending').toLowerCase();
-                const mappedStatus =
-                  rawStatus === 'approved'
-                    ? 'APPROVED'
-                    : rawStatus === 'rejected'
-                    ? 'REJECTED'
-                    : 'pending';
-
-                const reqObj: OnboardingRequest = {
-                  id: d.id,
-                  googleId: data.uid || d.id,
-                  email: data.email,
-                  name: data.name || data.email.split('@')[0],
-                  avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                    data.name || d.id
-                  )}`,
-                  role: data.role || 'Editor',
-                  requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
-                  requestedAt: data.requestedAt || data.timestamp || new Date().toISOString(),
-                  requestTimestamp: data.requestedAt || data.timestamp || new Date().toISOString(),
-                  status: rawStatus === 'pending' ? 'pending' : (mappedStatus as any),
-                  organization: data.organization || 'External Applicant (Landing Page)',
-                  accessReason: data.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
-                  notes: 'Landing page access request. Awaiting Super Admin review in Admin Nexus.',
-                };
-
-                if (existingIdx >= 0) {
-                  updated[existingIdx] = {
-                    ...updated[existingIdx],
-                    ...reqObj,
-                  };
-                } else {
-                  updated.unshift(reqObj);
-                }
-              });
-              return updated;
-            });
-            setLastSyncTime(new Date().toLocaleTimeString());
-          }
+          const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+          setOnboardingRequests(list);
+          setLastSyncTime(new Date().toLocaleTimeString());
         },
         (err) => {
           console.warn('Admin Nexus onSnapshot notice:', err);
@@ -264,17 +181,8 @@ export const AdminNexus: React.FC = () => {
       console.warn('Failed to attach onSnapshot listener in Admin Nexus:', err);
     }
 
-    // Cross-tab broadcast listener
-    const handleSyncEvent = () => {
-      fetchPendingRequests();
-    };
-    window.addEventListener('bim_onboarding_updated', handleSyncEvent);
-    window.addEventListener('storage', handleSyncEvent);
-
     return () => {
       if (unsubscribe) unsubscribe();
-      window.removeEventListener('bim_onboarding_updated', handleSyncEvent);
-      window.removeEventListener('storage', handleSyncEvent);
     };
   }, []);
 
@@ -1207,7 +1115,7 @@ export const AdminNexus: React.FC = () => {
                       return (
                         <tr key={req.id} className="hover:bg-slate-800/40 transition">
                           <td className="py-3.5 px-4">
-                            <div className="font-bold text-white text-[13px]">{req.name}</div>
+                            <div className="font-bold text-white text-[13px]">{req.fullName || req.name}</div>
                             <div className="font-mono text-slate-400 text-[11px] mt-0.5 flex items-center gap-1">
                               <Mail className="w-3 h-3 text-slate-500" />
                               <span>{req.email}</span>
@@ -1219,19 +1127,19 @@ export const AdminNexus: React.FC = () => {
 
                           <td className="py-3 px-3">
                             <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-medium block w-fit">
-                              {req.primaryDiscipline || 'BIM - ACS'}
+                              {req.discipline || req.primaryDiscipline || 'BIM - ACS'}
                             </span>
                             <span className="text-[10px] text-slate-400 block mt-1">
-                              {req.organization || 'Partner Division'}
+                              {req.organization || req.discipline || 'Partner Division'}
                             </span>
                           </td>
 
                           <td className="py-3 px-3">
                             <p className="text-slate-300 text-xs italic line-clamp-2 max-w-xs">
-                              "{req.accessReason || req.notes || 'BIM Model review & capacity allocation'}"
+                              "{req.reasonForAccess || req.accessReason || req.notes || 'Sign-in Access Request'}"
                             </p>
                             <span className="text-[10px] text-slate-500 block mt-1 font-mono">
-                              Submitted: {req.requestTimestamp}
+                              Submitted: {req.createdAt || req.requestTimestamp || req.requestedAt}
                             </span>
                           </td>
 

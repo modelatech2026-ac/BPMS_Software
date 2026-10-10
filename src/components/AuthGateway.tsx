@@ -169,37 +169,43 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     const isoTimestamp = new Date().toISOString();
 
     try {
-      // Direct Firestore write ensuring standardized schema with status: "pending", requestedAt: timestamp, email, name, role
-      try {
-        const reqDoc = doc(db, 'access_requests', generatedUid);
-        await setDoc(
-          reqDoc,
-          {
-            id: generatedUid,
-            uid: generatedUid,
-            name: cleanName,
-            email: cleanEmail,
-            role: 'Editor',
-            status: 'pending',
-            requestedAt: isoTimestamp,
-            timestamp: isoTimestamp,
-            requestedRole: 'BIM Modeler / Editor',
-            organization: 'External Applicant (Landing Page)',
-            accessReason: 'ProductionPulse BPMS Access Request submitted via Landing Page',
-          },
-          { merge: true }
-        );
-      } catch (fsErr) {
-        console.warn('Firestore write warning:', fsErr);
-      }
+      // Direct database persistence to Firestore collection access_requests (No LocalStorage)
+      // Standardized Admin Nexus schema: fullName, email, discipline, reasonForAccess, status: "pending", createdAt
+      const requestPayload = {
+        fullName: cleanName,
+        email: cleanEmail,
+        discipline: 'BIM - ACS',
+        reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+        status: 'pending',
+        createdAt: isoTimestamp,
+        // Compatibility & indexing attributes:
+        name: cleanName,
+        id: generatedUid,
+        uid: generatedUid,
+        role: 'Editor',
+        requestedRole: 'BIM Modeler / Editor',
+        primaryDiscipline: 'BIM - ACS',
+        organization: 'BIM - ACS',
+        accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+        requestedAt: isoTimestamp,
+        timestamp: isoTimestamp,
+        requestTimestamp: isoTimestamp,
+        notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+      };
 
-      // 1. Immediately register in onboarding queue / Firestore state
+      const reqDoc = doc(db, 'access_requests', generatedUid);
+      await setDoc(reqDoc, requestPayload, { merge: true });
+
+      // 1. Register in memory and notify listeners (No LocalStorage fallback)
       await registerAccessRequest({
         name: cleanName,
+        fullName: cleanName,
         email: cleanEmail,
+        discipline: 'BIM - ACS',
+        reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
         uid: generatedUid,
-        organization: 'Landing Page Applicant',
-        accessReason: 'ProductionPulse BPMS Access Request submitted via Landing Page',
+        organization: 'BIM - ACS',
+        accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
       });
 
       // 2. Submit through AuthContext

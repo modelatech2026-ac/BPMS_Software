@@ -348,6 +348,10 @@ export interface OnboardingRequest {
   googleId?: string;
   email: string;
   name: string;
+  fullName?: string;
+  discipline?: string;
+  reasonForAccess?: string;
+  createdAt?: string;
   avatar?: string;
   role?: string;
   requestedRole: string;

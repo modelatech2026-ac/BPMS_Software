@@ -181,36 +181,7 @@ const DEFAULT_CURRENT_USER: AuthUser = {
   avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
 };
 
-const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [
-  {
-    id: 'req-1',
-    googleId: 'google_user_sarah_jenkins',
-    email: 'sarah.jenkins.bim@gmail.com',
-    name: 'Sarah Jenkins',
-    avatar: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&q=80&w=250',
-    requestedRole: 'Senior BIM Project Manager',
-    primaryDiscipline: 'BIM - ACS',
-    requestTimestamp: '2026-08-23 08:30 AM',
-    status: 'PENDING',
-    organization: 'Apex Engineering Group',
-    accessReason: 'Lead architectural coordination and milestone sign-off for London Wall Gym.',
-    notes: 'Authenticated via Google OAuth (Gmail). Awaiting Super Admin review.',
-  },
-  {
-    id: 'req-2',
-    googleId: 'google_user_david_kim',
-    email: 'david.kim.mep@gmail.com',
-    name: 'David Kim',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=250',
-    requestedRole: 'MEP Coordination Modeler',
-    primaryDiscipline: 'MEP - HVAC',
-    requestTimestamp: '2026-08-23 09:15 AM',
-    status: 'PENDING',
-    organization: 'Metropolitan MEP Consult',
-    accessReason: 'HVAC clash routing and LOD 350 spool drawing extraction.',
-    notes: 'Authenticated via Google OAuth (Gmail). Awaiting Super Admin review.',
-  },
-];
+const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [];
 
 const DEFAULT_AUDIT_LOGS: AdminAuditLog[] = [
   {
@@ -318,18 +289,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  const [onboardingRequests, setOnboardingRequests] = useState<OnboardingRequest[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ONBOARDING);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-      return DEFAULT_ONBOARDING_REQUESTS;
-    } catch {
-      return DEFAULT_ONBOARDING_REQUESTS;
-    }
-  });
+  const [onboardingRequests, setOnboardingRequests] = useState<OnboardingRequest[]>([]);
 
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>(() => {
     try {
@@ -404,76 +364,58 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [currentUser]);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ONBOARDING, JSON.stringify(onboardingRequests));
-  }, [onboardingRequests]);
-
   // Synchronize Firestore access_requests collection into onboardingRequests in real-time
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
+
+    const mapDocToRequest = (d: any): OnboardingRequest | null => {
+      const data = d.data();
+      if (!data || !data.email) return null;
+      const rawStatus = (data.status || 'pending').toLowerCase();
+      const mappedStatus: UserApprovalStatus =
+        rawStatus === 'approved'
+          ? 'APPROVED'
+          : rawStatus === 'rejected'
+          ? 'REJECTED'
+          : 'pending';
+      const fullName = data.fullName || data.name || data.email.split('@')[0];
+      const discipline = data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS';
+      const reasonForAccess = data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
+      const createdAt = data.createdAt || data.requestedAt || data.timestamp || new Date().toISOString();
+
+      return {
+        id: d.id,
+        googleId: data.uid || d.id,
+        email: data.email,
+        name: fullName,
+        fullName: fullName,
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
+        role: data.role || 'Editor',
+        requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
+        primaryDiscipline: discipline,
+        discipline: discipline,
+        organization: discipline,
+        reasonForAccess: reasonForAccess,
+        accessReason: reasonForAccess,
+        createdAt: createdAt,
+        requestedAt: createdAt,
+        requestTimestamp: createdAt,
+        timestamp: createdAt,
+        status: rawStatus === 'pending' ? 'pending' : mappedStatus,
+        reviewedBy: data.reviewedBy,
+        reviewedAt: data.reviewedAt,
+        notes: data.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+      };
+    };
+
     try {
       const colRef = collection(db, 'access_requests');
 
       // Initial active fetch from Firestore
       getDocs(colRef)
         .then((snapshot) => {
-          if (!snapshot.empty) {
-            setOnboardingRequests((prev) => {
-              const updated = [...prev];
-              snapshot.docs.forEach((d) => {
-                const data = d.data();
-                if (!data || !data.email) return;
-                const existingIdx = updated.findIndex(
-                  (r) =>
-                    r.id === d.id ||
-                    (r.email && r.email.toLowerCase() === data.email.toLowerCase())
-                );
-                const rawStatus = (data.status || 'pending').toLowerCase();
-                const mappedStatus: UserApprovalStatus =
-                  rawStatus === 'approved'
-                    ? 'APPROVED'
-                    : rawStatus === 'rejected'
-                    ? 'REJECTED'
-                    : 'pending';
-
-                const reqObj: OnboardingRequest = {
-                  id: d.id,
-                  googleId: data.uid || d.id,
-                  email: data.email,
-                  name: data.name || data.email.split('@')[0],
-                  avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                    data.name || d.id
-                  )}`,
-                  role: data.role || 'Editor',
-                  requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
-                  requestedAt: data.requestedAt || data.timestamp || new Date().toISOString(),
-                  requestTimestamp: data.requestedAt || data.timestamp || new Date().toISOString(),
-                  status: rawStatus === 'pending' ? 'pending' : mappedStatus,
-                  reviewedBy: data.reviewedBy,
-                  reviewedAt: data.reviewedAt,
-                  organization: data.organization || 'External Applicant (Landing Page)',
-                  accessReason: data.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
-                  notes: 'Landing page access request. Awaiting Super Admin review in Admin Nexus.',
-                };
-
-                if (existingIdx >= 0) {
-                  updated[existingIdx] = {
-                    ...updated[existingIdx],
-                    ...reqObj,
-                    status: mappedStatus,
-                  };
-                } else {
-                  updated.unshift(reqObj);
-                }
-              });
-              try {
-                localStorage.setItem(STORAGE_KEYS.ONBOARDING, JSON.stringify(updated));
-              } catch {
-                // ignore
-              }
-              return updated;
-            });
-          }
+          const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+          setOnboardingRequests(list);
         })
         .catch((err) => {
           console.warn('Initial access_requests fetch notice:', err);
@@ -483,63 +425,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       unsubscribe = onSnapshot(
         colRef,
         (snapshot) => {
-          if (!snapshot.empty) {
-            setOnboardingRequests((prev) => {
-              const updated = [...prev];
-              snapshot.docs.forEach((d) => {
-                const data = d.data();
-                if (!data || !data.email) return;
-                const existingIdx = updated.findIndex(
-                  (r) =>
-                    r.id === d.id ||
-                    (r.email && r.email.toLowerCase() === data.email.toLowerCase())
-                );
-                const rawStatus = (data.status || 'pending').toLowerCase();
-                const mappedStatus: UserApprovalStatus =
-                  rawStatus === 'approved'
-                    ? 'APPROVED'
-                    : rawStatus === 'rejected'
-                    ? 'REJECTED'
-                    : 'pending';
-
-                const reqObj: OnboardingRequest = {
-                  id: d.id,
-                  googleId: data.uid || d.id,
-                  email: data.email,
-                  name: data.name || data.email.split('@')[0],
-                  avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                    data.name || d.id
-                  )}`,
-                  role: data.role || 'Editor',
-                  requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
-                  requestedAt: data.requestedAt || data.timestamp || new Date().toISOString(),
-                  requestTimestamp: data.requestedAt || data.timestamp || new Date().toISOString(),
-                  status: rawStatus === 'pending' ? 'pending' : mappedStatus,
-                  reviewedBy: data.reviewedBy,
-                  reviewedAt: data.reviewedAt,
-                  organization: data.organization || 'External Applicant (Landing Page)',
-                  accessReason: data.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
-                  notes: 'Landing page access request. Awaiting Super Admin review in Admin Nexus.',
-                };
-
-                if (existingIdx >= 0) {
-                  updated[existingIdx] = {
-                    ...updated[existingIdx],
-                    ...reqObj,
-                    status: mappedStatus,
-                  };
-                } else {
-                  updated.unshift(reqObj);
-                }
-              });
-              try {
-                localStorage.setItem(STORAGE_KEYS.ONBOARDING, JSON.stringify(updated));
-              } catch {
-                // ignore
-              }
-              return updated;
-            });
-          }
+          const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+          setOnboardingRequests(list);
         },
         (err) => {
           console.warn('Firestore access_requests listener notice:', err);
@@ -549,27 +436,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Firestore onSnapshot listener error:', e);
     }
 
-    // Cross-tab and local storage sync listener
-    const handleStorageSync = (e?: StorageEvent | Event) => {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEYS.ONBOARDING);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setOnboardingRequests(parsed);
-          }
-        }
-      } catch {
-        // ignore
-      }
-    };
-    window.addEventListener('storage', handleStorageSync);
-    window.addEventListener('bim_onboarding_updated', handleStorageSync);
-
     return () => {
       if (unsubscribe) unsubscribe();
-      window.removeEventListener('storage', handleStorageSync);
-      window.removeEventListener('bim_onboarding_updated', handleStorageSync);
     };
   }, []);
 
@@ -722,40 +590,31 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     setOnboardingRequests((prev) => [newRequest, ...prev.filter((r) => r.email.toLowerCase() !== trimmedEmail)]);
 
-    // Save to Firestore access_requests collection
+    // Save to Firestore access_requests collection (No LocalStorage fallback)
     try {
       const reqDoc = doc(db, 'access_requests', newRequest.id);
       setDoc(
         reqDoc,
         {
+          fullName: formattedName,
+          email: trimmedEmail,
+          discipline: (profile.discipline as Discipline) || 'BIM - ACS',
+          reasonForAccess: profile.accessReason || 'BIM Model review & coordination',
+          status: 'pending',
+          createdAt: isoTimestamp,
           id: newRequest.id,
           uid: newRequest.id,
           name: formattedName,
-          email: trimmedEmail,
           role: 'Editor',
-          status: 'pending',
           requestedAt: isoTimestamp,
           timestamp: isoTimestamp,
           requestedRole: 'BIM Modeler / Specialist',
+          primaryDiscipline: (profile.discipline as Discipline) || 'BIM - ACS',
           organization: profile.organization || 'Google Workspace Partner',
           accessReason: profile.accessReason || 'BIM Model review & coordination',
         },
         { merge: true }
       ).catch(() => {});
-    } catch {
-      // ignore
-    }
-
-    // Save to localStorage and notify tabs
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.ONBOARDING);
-      const currentList: OnboardingRequest[] = raw ? JSON.parse(raw) : [];
-      localStorage.setItem(
-        STORAGE_KEYS.ONBOARDING,
-        JSON.stringify([newRequest, ...currentList.filter((r) => r.email.toLowerCase() !== trimmedEmail)])
-      );
-      window.dispatchEvent(new Event('bim_onboarding_updated'));
-      window.dispatchEvent(new Event('storage'));
     } catch {
       // ignore
     }
@@ -915,12 +774,15 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const registerAccessRequest = async (params: {
     name: string;
     email: string;
+    fullName?: string;
+    discipline?: string;
+    reasonForAccess?: string;
     uid?: string;
     organization?: string;
     accessReason?: string;
   }): Promise<OnboardingRequest> => {
     const trimmedEmail = params.email.trim().toLowerCase();
-    const formattedName = params.name.trim() || trimmedEmail.split('@')[0];
+    const formattedName = (params.fullName || params.name || '').trim() || trimmedEmail.split('@')[0];
     const requestId = params.uid || `req_${trimmedEmail.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}`;
     const timestamp = new Date().toLocaleString([], {
       year: 'numeric',
@@ -932,23 +794,29 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const isoTimestamp = new Date().toISOString();
     const assignedRole = 'Editor';
+    const discipline = params.discipline || params.organization || 'BIM - ACS';
+    const reasonForAccess = params.reasonForAccess || params.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
 
     const newRequest: OnboardingRequest = {
       id: requestId,
       googleId: requestId,
       email: trimmedEmail,
       name: formattedName,
+      fullName: formattedName,
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(formattedName)}`,
       role: assignedRole,
       requestedRole: 'BIM Modeler / Editor',
-      primaryDiscipline: 'BIM - ACS',
+      primaryDiscipline: discipline,
+      discipline: discipline,
+      createdAt: isoTimestamp,
       requestedAt: isoTimestamp,
       requestTimestamp: timestamp,
       timestamp: isoTimestamp,
       status: 'pending',
-      organization: params.organization || 'External Applicant (Landing Page)',
-      accessReason: params.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
-      notes: 'Submitted via landing page access gateway. Awaiting Super Admin review in Admin Nexus.',
+      organization: discipline,
+      reasonForAccess: reasonForAccess,
+      accessReason: reasonForAccess,
+      notes: 'Submitted via sign-in access gateway. Awaiting Super Admin review in Admin Nexus.',
     };
 
     // 1. Immediately update in-memory React state
@@ -957,55 +825,46 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       ...prev.filter((r) => r.email.toLowerCase() !== trimmedEmail && r.id !== requestId),
     ]);
 
-    // 2. Immediately save to localStorage for instant cross-tab & reload availability
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.ONBOARDING);
-      const currentList: OnboardingRequest[] = raw ? JSON.parse(raw) : [];
-      const updatedList = [
-        newRequest,
-        ...currentList.filter((r) => r.email.toLowerCase() !== trimmedEmail && r.id !== requestId),
-      ];
-      localStorage.setItem(STORAGE_KEYS.ONBOARDING, JSON.stringify(updatedList));
-      window.dispatchEvent(new Event('bim_onboarding_updated'));
-      window.dispatchEvent(new Event('storage'));
-    } catch (e) {
-      console.warn('LocalStorage error saving onboarding request:', e);
-    }
-
-    // 3. Immediately log to Admin Audit Trail
+    // 2. Immediately log to Admin Audit Trail
     const newAudit: AdminAuditLog = {
       id: `audit-${Date.now()}`,
       action: 'joined',
       targetUserEmail: trimmedEmail,
       targetUserName: formattedName,
-      performedBy: 'Landing Page Access Gateway',
+      performedBy: 'Sign-in Access Gateway',
       timestamp,
-      details: `New access request submitted from landing page: ${formattedName} (${trimmedEmail}). Registered in Admin Nexus awaiting Super Admin approval.`,
+      details: `New access request submitted from sign-in: ${formattedName} (${trimmedEmail}). Registered in Admin Nexus awaiting Super Admin approval.`,
     };
     setAuditLogs((prev) => [newAudit, ...prev]);
 
-    // 4. Save to Firestore collection access_requests with standardized schema
+    // 3. Save to central database collection Firestore access_requests (No LocalStorage)
     try {
       const reqDoc = doc(db, 'access_requests', requestId);
       await setDoc(
         reqDoc,
         {
+          fullName: formattedName,
+          email: trimmedEmail,
+          discipline,
+          reasonForAccess,
+          status: 'pending',
+          createdAt: isoTimestamp,
           id: requestId,
           uid: requestId,
           name: formattedName,
-          email: trimmedEmail,
           role: assignedRole,
-          status: 'pending',
+          requestedRole: 'BIM Modeler / Editor',
+          primaryDiscipline: discipline,
+          organization: discipline,
+          accessReason: reasonForAccess,
           requestedAt: isoTimestamp,
           timestamp: isoTimestamp,
-          requestedRole: 'BIM Modeler / Editor',
-          organization: params.organization || 'External Applicant (Landing Page)',
-          accessReason: params.accessReason || 'ProductionPulse BPMS Access Request submitted via Landing Page',
+          requestTimestamp: timestamp,
         },
         { merge: true }
       );
     } catch (fsErr) {
-      console.warn('Firestore setDoc notice for landing request:', fsErr);
+      console.warn('Firestore setDoc notice for sign-in request:', fsErr);
     }
 
     return newRequest;

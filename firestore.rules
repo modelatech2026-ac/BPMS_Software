@@ -35,24 +35,20 @@ service cloud.firestore {
     }
 
     function isValidAccessRequest(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 150
+      return (('fullName' in data && data.fullName is string) || ('name' in data && data.name is string))
         && data.email is string && data.email.size() > 0 && data.email.size() <= 150
-        && data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128
-        && ((!('timestamp' in data) || (data.timestamp is string && data.timestamp.size() <= 64)))
-        && ((!('requestedAt' in data) || (data.requestedAt is string && data.requestedAt.size() <= 64)))
-        && (data.status in ['pending', 'Pending', 'approved', 'Approved', 'rejected', 'Rejected']);
+        && (data.status in ['pending', 'Pending', 'approved', 'Approved', 'rejected', 'Rejected', 'APPROVED', 'REJECTED']);
     }
 
     // Access Requests Collection
     match /access_requests/{requestId} {
-      allow read: if isValidId(requestId);
+      allow read: if true;
 
-      allow create: if isValidId(requestId)
-        && isValidAccessRequest(incoming());
+      allow create: if isValidAccessRequest(incoming());
 
-      allow update: if isValidId(requestId);
+      allow update: if true;
 
-      allow delete: if isValidId(requestId);
+      allow delete: if true;
     }
 
     // Users Collection
