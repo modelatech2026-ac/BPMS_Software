@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Clock,
   Layers,
@@ -55,6 +55,7 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     employeeId: 'emp-2',
     employeeName: 'Sushovan Das',
     employeeRole: 'BIM Coordinator',
+    memberEmail: 'sushovan.das@bimworkspace.com',
     discipline: 'Coordination & QA',
     lod: 'LOD 350',
     projectPhase: 'Design Development',
@@ -75,6 +76,7 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     employeeId: 'emp-aditi',
     employeeName: 'Aditi',
     employeeRole: 'BIM Modeler',
+    memberEmail: 'aditi@bimworkspace.com',
     discipline: 'BIM - ACS',
     lod: 'LOD 300',
     projectPhase: 'Design Development',
@@ -95,6 +97,7 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     employeeId: 'emp-2',
     employeeName: 'Sushovan Das',
     employeeRole: 'BIM Coordinator',
+    memberEmail: 'sushovan.das@bimworkspace.com',
     discipline: 'Coordination & QA',
     lod: 'LOD 350',
     projectPhase: 'Construction Documentation',
@@ -115,6 +118,7 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     employeeId: 'emp-2',
     employeeName: 'Sushovan Das',
     employeeRole: 'BIM Coordinator',
+    memberEmail: 'sushovan.das@bimworkspace.com',
     discipline: 'Coordination & QA',
     lod: 'LOD 400',
     projectPhase: 'Fabrication / As-Built',
@@ -135,6 +139,7 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     employeeId: 'emp-aditi',
     employeeName: 'Aditi',
     employeeRole: 'BIM Modeler',
+    memberEmail: 'aditi@bimworkspace.com',
     discipline: 'BIM - ACS',
     lod: 'LOD 350',
     projectPhase: 'Construction Documentation',
@@ -153,15 +158,21 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
 export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectProject }) => {
   const { projects, employees, workLogs, theme } = useBimData();
   const isLight = theme === 'light';
+  const activeMembers = employees;
 
-  // Helper to test if allocation belongs to a retained or active member
-  const isRetainedAllocation = (item: ResourceAllocationItem) => {
-    const name = (item.employeeName || '').toLowerCase();
-    const id = item.employeeId || '';
-    if (name.includes('sushovan') || name.includes('sushoovan') || id === 'emp-2') return true;
-    if (name.includes('aditi') || id === 'emp-aditi') return true;
-    // Allow dynamically added team members
-    return employees.some(e => e.id === id || e.name.toLowerCase() === name);
+  // Helper to test if allocation belongs to a live active team member
+  const isLiveActiveMember = (item: ResourceAllocationItem) => {
+    if (item.memberEmail) {
+      const matchByEmail = activeMembers.some(
+        (m) => m.email.toLowerCase().trim() === item.memberEmail?.toLowerCase().trim()
+      );
+      if (!matchByEmail) return false;
+    }
+    return activeMembers.some(
+      (m) =>
+        m.id === item.employeeId ||
+        (item.employeeName && m.name.toLowerCase().trim() === item.employeeName.toLowerCase().trim())
+    );
   };
 
   // State
@@ -175,7 +186,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             .filter((item: ResourceAllocationItem) => {
               const name = (item.employeeName || '').toLowerCase();
               const id = item.employeeId || '';
-              return name.includes('sushovan') || name.includes('sushoovan') || name.includes('aditi') || id === 'emp-2' || id === 'emp-aditi';
+              const email = (item.memberEmail || '').toLowerCase();
+              return (
+                name.includes('sushovan') ||
+                name.includes('sushoovan') ||
+                name.includes('aditi') ||
+                id === 'emp-2' ||
+                id === 'emp-aditi' ||
+                email.includes('sushovan') ||
+                email.includes('aditi')
+              );
             })
             .map((item: ResourceAllocationItem) => ({
               ...item,
@@ -189,6 +209,27 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
     return INITIAL_ALLOCATIONS;
   });
+
+  // Sync allocations with activeMembers collection
+  useEffect(() => {
+    setAllocations((prev) => {
+      const filtered = prev.filter(isLiveActiveMember);
+      if (filtered.length !== prev.length) {
+        localStorage.setItem('bim_resource_allocations_v1', JSON.stringify(filtered));
+      }
+      return filtered;
+    });
+
+    const handleAllocUpdate = (e: any) => {
+      if (e.detail && Array.isArray(e.detail)) {
+        setAllocations(e.detail.filter(isLiveActiveMember));
+      }
+    };
+    window.addEventListener('bim_resource_allocations_updated', handleAllocUpdate);
+    return () => {
+      window.removeEventListener('bim_resource_allocations_updated', handleAllocUpdate);
+    };
+  }, [activeMembers]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
@@ -223,16 +264,30 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     localStorage.setItem('bim_resource_allocations_v1', JSON.stringify(newAllocations));
   };
 
+  // Helper to get live active allocations strictly filtered against activeMembers
+  const liveActiveAllocations = useMemo(() => {
+    return allocations.filter((a) => {
+      if (a.memberEmail && !activeMembers.some((m) => m.email.toLowerCase().trim() === a.memberEmail?.toLowerCase().trim())) {
+        return false;
+      }
+      return activeMembers.some(
+        (m) =>
+          m.id === a.employeeId ||
+          (a.employeeName && m.name.toLowerCase().trim() === a.employeeName.toLowerCase().trim())
+      );
+    });
+  }, [allocations, activeMembers]);
+
   // Helper to get total weekly hours assigned to an employee
   const getEmployeeWeeklyHours = useMemo(() => {
     const map: Record<string, number> = {};
-    allocations.forEach((alloc) => {
+    liveActiveAllocations.forEach((alloc) => {
       if (alloc.status !== 'Completed') {
         map[alloc.employeeId] = (map[alloc.employeeId] || 0) + Number(alloc.assignedHours || 0);
       }
     });
     return map;
-  }, [allocations]);
+  }, [liveActiveAllocations]);
 
   // Overall Workspace Metrics & Efficiency Dashboard based on table parameters
   const workspaceMetrics = useMemo(() => {
@@ -250,8 +305,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
 
     const relevantAllocations = selectedProjectId === 'all'
-      ? allocations
-      : allocations.filter((a) => matchProjectId(a.projectId, selectedProjectId));
+      ? liveActiveAllocations
+      : liveActiveAllocations.filter((a) => matchProjectId(a.projectId, selectedProjectId));
 
     const filteredByEmployee = selectedEmployeeId === 'all'
       ? relevantAllocations
@@ -324,11 +379,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       completionRate,
       priorityBreakdown
     };
-  }, [projects, employees, allocations, workLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours]);
+  }, [projects, employees, liveActiveAllocations, workLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours]);
 
   // Filtered Allocations based on 2 Dropdowns (Project + Team Member) and Search
   const filteredAllocations = useMemo(() => {
-    return allocations.filter((a) => {
+    return liveActiveAllocations.filter((a) => {
       const matchesProj = selectedProjectId === 'all' || matchProjectId(a.projectId, selectedProjectId);
       const matchesEmp = selectedEmployeeId === 'all' || a.employeeId === selectedEmployeeId;
       const matchesDisc = filterDiscipline === 'all' || a.discipline === filterDiscipline;
@@ -345,7 +400,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
       return matchesProj && matchesEmp && matchesDisc && matchesStatus && matchesPriority && matchesSearch;
     });
-  }, [allocations, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery]);
+  }, [liveActiveAllocations, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery]);
 
   // Handle Form Submission
   const handleAddAllocation = (e: React.FormEvent) => {
@@ -376,6 +431,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       employeeId: emp.id,
       employeeName: emp.name,
       employeeRole: emp.role,
+      memberEmail: emp.email,
       discipline: formDiscipline,
       lod: formLOD,
       projectPhase: formPhase,
@@ -680,6 +736,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                 </tr>
               ) : (
                 filteredAllocations.map((alloc) => {
+                  if (alloc.memberEmail && !activeMembers.some((m) => m.email === alloc.memberEmail)) return null;
+                  if (!activeMembers.some((m) => m.id === alloc.employeeId || (alloc.employeeName && m.name.toLowerCase().trim() === alloc.employeeName.toLowerCase().trim()))) return null;
+
                   const loggedHours = workLogs
                     .filter((w) => w.employeeId === alloc.employeeId && matchProjectId(w.projectId, alloc.projectId))
                     .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);

@@ -53,8 +53,19 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     { date: '2026-08-18', label: 'Tue (Today)', dayNum: '18' },
   ];
 
+  const activeMembers = employees;
+
   // Filtered log list
   const filteredLogs = (workLogs || []).filter((log) => {
+    // Live active team member filtering
+    const isActive = activeMembers.some(
+      (m) =>
+        m.id === log.employeeId ||
+        (log.employeeName && m.name.toLowerCase().trim() === log.employeeName.toLowerCase().trim()) ||
+        ((log as any).memberEmail && m.email.toLowerCase().trim() === ((log as any).memberEmail || '').toLowerCase().trim())
+    );
+    if (!isActive) return false;
+
     const matchesSearch =
       (log.notes || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (log.taskName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -189,7 +200,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}
           >
-            Detailed Log Records ({workLogs.length})
+            Detailed Log Records ({filteredLogs.length})
           </button>
         </div>
       </div>
@@ -374,8 +385,17 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {filteredLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-800/40 transition">
+                  {filteredLogs.map((log) => {
+                    const isActive = activeMembers.some(
+                      (m) =>
+                        m.id === log.employeeId ||
+                        (log.employeeName && m.name.toLowerCase().trim() === log.employeeName.toLowerCase().trim()) ||
+                        ((log as any).memberEmail && m.email.toLowerCase().trim() === ((log as any).memberEmail || '').toLowerCase().trim())
+                    );
+                    if (!isActive) return null;
+
+                    return (
+                      <tr key={log.id} className="hover:bg-slate-800/40 transition">
                       <td className="p-3.5 font-mono text-slate-400 whitespace-nowrap">
                         {log.date}
                       </td>
@@ -417,8 +437,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                         </button>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
+                  );
+                })}
+              </tbody>
               </table>
             </div>
           </div>

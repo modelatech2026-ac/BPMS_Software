@@ -70,9 +70,15 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
   const [evaluationRating, setEvaluationRating] = useState('High');
   const [evaluationFeedbackSaved, setEvaluationFeedbackSaved] = useState<Record<string, { rating: string; notes: string; date: string }>>({});
 
+  const activeMembers = employees;
+
   // Filtered employees
   const filteredEmployees = useMemo(() => {
-    return (employees || []).filter((emp) => {
+    return (activeMembers || []).filter((emp) => {
+      if (!activeMembers.some((m) => m.id === emp.id || m.email.toLowerCase() === emp.email.toLowerCase())) {
+        return false;
+      }
+
       const matchesSearch =
         (emp.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (emp.role || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -91,15 +97,23 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
 
       return matchesSearch && matchesProject && matchesDiscipline && matchesStatus;
     });
-  }, [employees, searchQuery, selectedProjectId, selectedDiscipline, selectedStatus]);
+  }, [activeMembers, searchQuery, selectedProjectId, selectedDiscipline, selectedStatus]);
 
-  // Aggregate metrics
-  const totalLoggedHours = (workLogs || []).reduce((sum, log) => sum + (log.hoursLogged || 0), 0);
-  const totalWeeklyCapacity = (employees || []).reduce((sum, emp) => sum + (emp.weeklyCapacityHours || 40), 0);
+  // Aggregate metrics strictly for active members
+  const activeEmpIds = useMemo(() => new Set(activeMembers.map((e) => e.id)), [activeMembers]);
+  const activeEmpNames = useMemo(() => new Set(activeMembers.map((e) => (e.name || '').toLowerCase().trim())), [activeMembers]);
+
+  const totalLoggedHours = (workLogs || [])
+    .filter((log) => activeEmpIds.has(log.employeeId) || activeEmpNames.has((log.employeeName || '').toLowerCase().trim()))
+    .reduce((sum, log) => sum + (log.hoursLogged || 0), 0);
+  const totalWeeklyCapacity = (activeMembers || []).reduce((sum, emp) => sum + (emp.weeklyCapacityHours || 40), 0);
   
-  // Hours logged in past 7 days across all members
+  // Hours logged in past 7 days across active members
   const recent7DaysHours = (workLogs || [])
     .filter((w) => {
+      if (!activeEmpIds.has(w.employeeId) && !activeEmpNames.has((w.employeeName || '').toLowerCase().trim())) {
+        return false;
+      }
       const d = new Date(w.date + 'T00:00:00');
       const now = new Date('2026-08-18T00:00:00');
       const diff = (now.getTime() - d.getTime()) / (1000 * 3600 * 24);
@@ -444,6 +458,8 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
             </div>
           ) : (
             filteredEmployees.map((emp) => {
+              if (!activeMembers.some((m) => m.id === emp.id || m.email.toLowerCase() === emp.email.toLowerCase())) return null;
+
               const weeklyHours = getEmployeeLoggedHours(emp.id, 'this-week');
               const totalHours = getEmployeeLoggedHours(emp.id, 'all');
               const capacityPct = Math.round((weeklyHours / (emp.weeklyCapacityHours || 40)) * 100);
@@ -727,6 +743,8 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-800">
                   {filteredEmployees.map((emp) => {
+                    if (!activeMembers.some((m) => m.id === emp.id || m.email.toLowerCase() === emp.email.toLowerCase())) return null;
+
                     const loggedHours = getEmployeeLoggedHours(emp.id);
                     const baseEfficiency = Math.min(100, Math.round(82 + (emp.rating ? emp.rating * 3.5 : 12) + (emp.experienceYears > 5 ? 3 : 1)));
                     const velocity = (0.95 + (emp.experienceYears * 0.03)).toFixed(2);

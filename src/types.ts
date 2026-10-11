@@ -285,6 +285,7 @@ export interface ResourceAllocationItem {
   employeeId: string;
   employeeName: string;
   employeeRole: string;
+  memberEmail?: string;
   discipline: 'BIM - ACS' | 'Architectural' | 'Structural' | 'MEP' | 'Infrastructure' | 'Coordination & QA';
   lod: 'LOD 200' | 'LOD 300' | 'LOD 350' | 'LOD 400';
   projectPhase: 'Schematic Design' | 'Design Development' | 'Construction Documentation' | 'Fabrication / As-Built';

@@ -1341,15 +1341,23 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const getEmployeeById = (id: string) => employees.find((e) => e.id === id);
 
   const getProjectCompletedHours = (projectId: string): number => {
-    // Sum hours from workLogs for this project
+    const activeEmpIds = new Set(employees.map((e) => e.id));
+    const activeEmpNames = new Set(employees.map((e) => (e.name || '').toLowerCase().trim()));
+    // Sum hours from workLogs for this project exclusively for active team members
     const logged = workLogs
-      .filter((w) => w.projectId === projectId)
+      .filter(
+        (w) =>
+          w.projectId === projectId &&
+          (activeEmpIds.has(w.employeeId) || activeEmpNames.has((w.employeeName || '').toLowerCase().trim()))
+      )
       .reduce((sum, w) => sum + w.hoursLogged, 0);
 
-    // Also include task completion if logged directly
+    // Also include task completion if logged directly for active members
     const project = getProjectById(projectId);
     const taskHours = project
-      ? project.tasks.reduce((sum, t) => sum + t.completedHours, 0)
+      ? project.tasks
+          .filter((t) => activeEmpIds.has(t.assignedEmployeeId))
+          .reduce((sum, t) => sum + t.completedHours, 0)
       : 0;
 
     const baseHours = project?.totalCompletedHours ?? 0;
@@ -1360,6 +1368,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     employeeId: string,
     filterRange: string = 'this-week'
   ): number => {
+    // If member is no longer present in the active members collection/state, return 0
+    if (!employees.some((e) => e.id === employeeId)) return 0;
+
     const today = new Date('2026-08-18');
     const logs = workLogs.filter((w) => {
       if (w.employeeId !== employeeId) return false;
@@ -1477,7 +1488,76 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const deleteEmployee = (id: string) => {
-    setEmployees((prev) => prev.filter((e) => e.id !== id));
+    const targetEmp = employees.find((e) => e.id === id);
+    const targetName = targetEmp ? targetEmp.name.toLowerCase().trim() : '';
+    const targetEmail = targetEmp ? targetEmp.email.toLowerCase().trim() : '';
+
+    // 1. Remove from active employees state
+    setEmployees((prev) =>
+      prev.filter((e) => e.id !== id && (!targetEmail || e.email.toLowerCase() !== targetEmail))
+    );
+
+    // 2. Cascade cleanup on projects: unlink member from project assignments and active task allocations
+    setProjects((prev) =>
+      prev.map((p) => ({
+        ...p,
+        assignedEmployeeIds: p.assignedEmployeeIds.filter((empId) => empId !== id),
+        tasks: p.tasks.filter((t) => t.assignedEmployeeId !== id),
+        clashes: p.clashes.map((c) =>
+          c.assignedToEmployeeId === id ? { ...c, assignedToEmployeeId: '' } : c
+        ),
+      }))
+    );
+
+    // 3. Cascade cleanup on workLogs: remove timesheet logs for deleted member
+    setWorkLogs((prev) =>
+      prev.filter(
+        (log) =>
+          log.employeeId !== id &&
+          (!targetName || log.employeeName.toLowerCase().trim() !== targetName) &&
+          (!targetEmail || ((log as any).memberEmail || '').toLowerCase().trim() !== targetEmail)
+      )
+    );
+
+    // 4. Cascade cleanup on resource allocations in localStorage
+    try {
+      const savedAlloc = localStorage.getItem('bim_resource_allocations_v1');
+      if (savedAlloc) {
+        const parsed = JSON.parse(savedAlloc);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter(
+            (a) =>
+              a.employeeId !== id &&
+              (!targetName || (a.employeeName || '').toLowerCase().trim() !== targetName) &&
+              (!targetEmail || ((a as any).memberEmail || '').toLowerCase().trim() !== targetEmail)
+          );
+          localStorage.setItem('bim_resource_allocations_v1', JSON.stringify(filtered));
+          window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: filtered }));
+        }
+      }
+    } catch (e) {
+      console.warn('Cascade allocation cleanup notice:', e);
+    }
+
+    // 5. Add audit log
+    if (targetEmp) {
+      const newAudit: AdminAuditLog = {
+        id: `audit-${Date.now()}`,
+        action: 'user_deleted',
+        targetUserEmail: targetEmp.email,
+        targetUserName: targetEmp.name,
+        performedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
+        timestamp: new Date().toLocaleString([], {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        details: `Deleted team member ${targetEmp.name} (${targetEmp.email}). Cascaded cleanup across task allocations, timesheets, and project teams.`,
+      };
+      setAuditLogs((prev) => [newAudit, ...prev]);
+    }
   };
 
   const addMilestone = (projectId: string, milestone: Omit<Milestone, 'id'>) => {
