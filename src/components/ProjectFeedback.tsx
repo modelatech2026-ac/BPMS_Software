@@ -70,7 +70,7 @@ const INITIAL_FEEDBACKS: ProjectFeedbackItem[] = [
     projectName: 'New Bugesera International Airport',
     clientName: 'Aviation Infrastructure Authority',
     rating: 4.9,
-    feedbackText: 'Concourse steel truss parameters and COBie asset schemas are in pristine order. Lead BIM Coordinator Subhasish Das maintained stellar synchronization across 8 timezones.',
+    feedbackText: 'Concourse steel truss parameters and COBie asset schemas are in pristine order. Lead BIM Coordinator Sushovan Das maintained stellar synchronization across 8 timezones.',
     category: 'Quality of BIM Deliverables',
     authorName: 'Dr. Arthur Kingsley',
     authorRole: 'Client Stakeholder',

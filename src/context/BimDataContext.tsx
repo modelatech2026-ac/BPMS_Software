@@ -89,7 +89,8 @@ interface BimDataContextType {
   approveOnboardingRequest: (
     requestId: string,
     assignedRole?: UserRole | string,
-    assignedAccessLevel?: AccessLevel
+    assignedAccessLevel?: AccessLevel,
+    assignedDiscipline?: Discipline | string
   ) => void;
   rejectOnboardingRequest: (requestId: string, notes?: string) => void;
   reopenOnboardingRequest: (requestId: string) => void;
@@ -211,12 +212,52 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   });
 
+  // Helper to strictly retain Sushovan and Aditi (plus dynamically approved access requests)
+  const isRetainedMember = (emp: { id?: string; name?: string; email?: string }): boolean => {
+    if (!emp) return false;
+    const email = (emp.email || '').toLowerCase().trim();
+    const name = (emp.name || '').toLowerCase().trim();
+    const id = emp.id || '';
+
+    // Retain Sushovan Das (sushovan.das@bimworkspace.com)
+    if (
+      email === 'sushovan.das@bimworkspace.com' ||
+      name.includes('sushovan') ||
+      name.includes('sushoovan') ||
+      id === 'emp-2'
+    ) {
+      return true;
+    }
+
+    // Retain Aditi
+    if (
+      email.includes('aditi') ||
+      name.includes('aditi') ||
+      id === 'emp-aditi'
+    ) {
+      return true;
+    }
+
+    return false;
+  };
+
   const [employees, setEmployees] = useState<Employee[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.EMPLOYEES);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Filter to strictly retain Sushovan and Aditi (plus any dynamically approved requests)
+          const filtered = parsed.filter(isRetainedMember);
+          const hasSushovan = filtered.some(e => (e.email || '').toLowerCase() === 'sushovan.das@bimworkspace.com' || (e.name || '').toLowerCase().includes('sushovan'));
+          const hasAditi = filtered.some(e => (e.name || '').toLowerCase().includes('aditi') || (e.email || '').toLowerCase().includes('aditi'));
+          const initialSushovan = INITIAL_EMPLOYEES.find(e => (e.email || '').toLowerCase() === 'sushovan.das@bimworkspace.com') || INITIAL_EMPLOYEES[0];
+          const initialAditi = INITIAL_EMPLOYEES.find(e => (e.name || '').toLowerCase().includes('aditi')) || INITIAL_EMPLOYEES[1];
+          const result = [...filtered];
+          if (!hasSushovan && initialSushovan) result.unshift(initialSushovan);
+          if (!hasAditi && initialAditi) result.push(initialAditi);
+          return result;
+        }
       }
       return INITIAL_EMPLOYEES;
     } catch {
@@ -229,7 +270,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const saved = localStorage.getItem(STORAGE_KEYS.WORK_LOGS);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const filtered = parsed.filter((log: DailyWorkLog) => {
+            const name = (log.employeeName || '').toLowerCase();
+            const id = log.employeeId || '';
+            return name.includes('sushovan') || name.includes('sushoovan') || name.includes('aditi') || id === 'emp-2' || id === 'emp-aditi';
+          });
+          if (filtered.length > 0) return filtered;
+        }
       }
       return generateInitialWorkLogs();
     } catch {
@@ -411,11 +459,56 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const colRef = collection(db, 'access_requests');
 
+      // Helper to synchronize approved access requests into active employees list
+      const syncApprovedToEmployees = (reqList: OnboardingRequest[]) => {
+        const approvedFromFirestore = reqList.filter(
+          (r) => (r.status || '').toUpperCase() === 'APPROVED' || (r.status || '').toLowerCase() === 'approved'
+        );
+        if (approvedFromFirestore.length > 0) {
+          setEmployees((currentEmployees) => {
+            let changed = false;
+            const updated = [...currentEmployees];
+            approvedFromFirestore.forEach((req) => {
+              const email = (req.email || '').toLowerCase().trim();
+              if (!email) return;
+              const idx = updated.findIndex((e) => (e.email || '').toLowerCase().trim() === email);
+              const name = (req.fullName || req.name || email.split('@')[0]).trim();
+              const disc = ((req.discipline || req.primaryDiscipline || 'BIM - ACS') as Discipline);
+              const role =
+                req.role && req.role !== 'Editor' && req.role !== 'editor'
+                  ? req.role
+                  : mapAppRoleToDisplayRole((req.assignedRole as UserRole) || 'EDITOR');
+
+              if (idx === -1) {
+                changed = true;
+                updated.push({
+                  id: `emp-${req.id || Date.now()}`,
+                  name,
+                  email: req.email,
+                  role,
+                  primaryDiscipline: disc,
+                  discipline: disc,
+                  avatar: req.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+                  weeklyCapacityHours: 40,
+                  experienceYears: 4,
+                  status: 'Active',
+                  activeProjectIds: [projects[0]?.id || 'proj-1'],
+                  skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+                  phone: '+1 (555) 019-2834',
+                });
+              }
+            });
+            return changed ? updated : currentEmployees;
+          });
+        }
+      };
+
       // Initial active fetch from Firestore
       getDocs(colRef)
         .then((snapshot) => {
           const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
           setOnboardingRequests(list);
+          syncApprovedToEmployees(list);
         })
         .catch((err) => {
           console.warn('Initial access_requests fetch notice:', err);
@@ -427,6 +520,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (snapshot) => {
           const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
           setOnboardingRequests(list);
+          syncApprovedToEmployees(list);
         },
         (err) => {
           console.warn('Firestore access_requests listener notice:', err);
@@ -873,7 +967,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const approveOnboardingRequest = (
     requestId: string,
     assignedRole: UserRole | string = 'EDITOR',
-    assignedAccessLevel?: AccessLevel
+    assignedAccessLevel?: AccessLevel,
+    assignedDiscipline?: Discipline | string
   ) => {
     let approvedReq: OnboardingRequest | undefined;
 
@@ -895,6 +990,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const displayRole = mapAppRoleToDisplayRole(validatedRole);
 
+    const reqTarget = onboardingRequests.find((r) => r.id === requestId);
+    const targetDiscipline: Discipline =
+      (assignedDiscipline as Discipline) ||
+      (reqTarget?.discipline as Discipline) ||
+      (reqTarget?.primaryDiscipline as Discipline) ||
+      'BIM - ACS';
+
     setOnboardingRequests((prev) =>
       prev.map((r) => {
         if (r.id === requestId) {
@@ -906,6 +1008,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             assignedRole: validatedRole,
             assignedAccessLevel: calculatedAccessLevel,
             requestedRole: displayRole,
+            discipline: targetDiscipline,
+            primaryDiscipline: targetDiscipline,
           };
           return approvedReq;
         }
@@ -913,50 +1017,66 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       })
     );
 
-    if (approvedReq) {
-      // 1. Add / Update in Employees
-      const existingEmp = employees.find(
-        (e) => e.email.toLowerCase() === approvedReq!.email.toLowerCase()
-      );
-      if (!existingEmp) {
-        const newEmp: Employee = {
-          id: `emp-${Date.now()}`,
-          name: approvedReq.name,
-          role: displayRole,
-          email: approvedReq.email,
-          avatar: approvedReq.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-          primaryDiscipline: (approvedReq.primaryDiscipline as Discipline) || 'BIM - ACS',
-          discipline: (approvedReq.primaryDiscipline as Discipline) || 'BIM - ACS',
-          weeklyCapacityHours: 40,
-          status: 'Active',
-          activeProjectIds: [projects[0]?.id || 'proj-1'],
-          skills: ['Revit 2026', 'Navisworks Manage', 'BIM 360', 'Solibri'],
-        };
-        setEmployees((prev) => [...prev, newEmp]);
-      } else {
-        setEmployees((prev) =>
-          prev.map((emp) =>
-            emp.email.toLowerCase() === approvedReq!.email.toLowerCase()
-              ? { ...emp, status: 'Active', role: displayRole }
-              : emp
-          )
+    const effectiveReq = approvedReq || reqTarget;
+
+    if (effectiveReq) {
+      // Identity Sync: strict field mapping between access request and member profile
+      const applicantFullName = (effectiveReq.fullName || effectiveReq.name || effectiveReq.email.split('@')[0]).trim();
+      const applicantEmail = effectiveReq.email.trim();
+
+      // 1. Dynamic Onboarding: Populate directly into active Team Member List (Team Efficiency)
+      setEmployees((prev) => {
+        const existingIdx = prev.findIndex(
+          (e) => (e.email || '').toLowerCase() === applicantEmail.toLowerCase()
         );
-      }
+        if (existingIdx >= 0) {
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            name: applicantFullName,
+            email: applicantEmail,
+            role: displayRole,
+            discipline: targetDiscipline,
+            primaryDiscipline: targetDiscipline,
+            status: 'Active',
+          };
+          return updated;
+        } else {
+          const newEmp: Employee = {
+            id: `emp-${Date.now()}`,
+            name: applicantFullName,
+            role: displayRole,
+            email: applicantEmail,
+            avatar:
+              effectiveReq.avatar ||
+              `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(applicantFullName)}`,
+            primaryDiscipline: targetDiscipline,
+            discipline: targetDiscipline,
+            weeklyCapacityHours: 40,
+            experienceYears: 4,
+            status: 'Active',
+            activeProjectIds: [projects[0]?.id || 'proj-1'],
+            skills: [targetDiscipline, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+            phone: '+1 (555) 019-2834',
+          };
+          return [...prev, newEmp];
+        }
+      });
 
       // 2. Add Audit Log
       const newAudit: AdminAuditLog = {
         id: `audit-${Date.now()}`,
         action: 'approved',
-        targetUserEmail: approvedReq.email,
-        targetUserName: approvedReq.name,
+        targetUserEmail: applicantEmail,
+        targetUserName: applicantFullName,
         performedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
         timestamp: actionTimestamp,
-        details: `Approved Google account as ${displayRole} with [${calculatedAccessLevel}] permissions.`,
+        details: `Approved access request as ${displayRole} [${targetDiscipline}] with [${calculatedAccessLevel}] permissions. Added directly to active Team Member List.`,
       };
       setAuditLogs((prev) => [newAudit, ...prev]);
 
       // 3. Update current active user session if matching
-      if (currentUser && currentUser.email.toLowerCase() === approvedReq.email.toLowerCase()) {
+      if (currentUser && currentUser.email.toLowerCase() === applicantEmail.toLowerCase()) {
         setCurrentUser((prev) =>
           prev
             ? {
@@ -972,10 +1092,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
       // 4. Update status in Firestore access_requests collection
       try {
-        const reqDoc = doc(db, 'access_requests', approvedReq.id);
+        const reqDoc = doc(db, 'access_requests', effectiveReq.id);
         updateDoc(reqDoc, {
-          status: 'Approved',
+          status: 'approved',
           role: validatedRole,
+          discipline: targetDiscipline,
           reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
           reviewedAt: new Date().toISOString(),
         }).catch((err) => {

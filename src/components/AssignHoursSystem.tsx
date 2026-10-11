@@ -52,13 +52,13 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     id: 'alloc-1',
     projectId: 'proj-1',
     projectName: 'London Wall Gym',
-    employeeId: 'emp-1',
-    employeeName: 'Subhasish Das',
-    employeeRole: 'BIM Specialist',
-    discipline: 'BIM - ACS',
+    employeeId: 'emp-2',
+    employeeName: 'Sushovan Das',
+    employeeRole: 'BIM Coordinator',
+    discipline: 'Coordination & QA',
     lod: 'LOD 350',
     projectPhase: 'Design Development',
-    taskType: '3D Modeling',
+    taskType: 'QC/QA Audit',
     targetElementOrZone: 'AR-LVL01-GYM-ZONE-A',
     assignedHours: 16,
     viewFrequency: 'Weekly',
@@ -66,21 +66,41 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     dueDate: '2026-08-21',
     priority: 'High',
     status: 'In Progress',
-    notes: 'Detailed partition and interior glazed wall modeling'
+    notes: 'Multi-discipline clash verification and coordination audit'
   },
   {
     id: 'alloc-2',
+    projectId: 'proj-1',
+    projectName: 'London Wall Gym',
+    employeeId: 'emp-aditi',
+    employeeName: 'Aditi',
+    employeeRole: 'BIM Modeler',
+    discipline: 'BIM - ACS',
+    lod: 'LOD 300',
+    projectPhase: 'Design Development',
+    taskType: '3D Modeling',
+    targetElementOrZone: 'AR-LVL01-GYM-ZONE-A',
+    assignedHours: 18,
+    viewFrequency: 'Weekly',
+    startDate: '2026-08-17',
+    dueDate: '2026-08-22',
+    priority: 'High',
+    status: 'In Progress',
+    notes: 'Acoustic wall paneling and mezzanine framing modeling'
+  },
+  {
+    id: 'alloc-3',
     projectId: 'proj-2',
     projectName: 'Watermark Podium Garage',
-    employeeId: 'emp-4',
-    employeeName: 'Suvam Mandal',
-    employeeRole: 'BIM Modeler',
-    discipline: 'MEP',
+    employeeId: 'emp-2',
+    employeeName: 'Sushovan Das',
+    employeeRole: 'BIM Coordinator',
+    discipline: 'Coordination & QA',
     lod: 'LOD 350',
     projectPhase: 'Construction Documentation',
     taskType: 'Clash Detection',
     targetElementOrZone: 'MEP-LVL02-PODIUM-B',
-    assignedHours: 24,
+    assignedHours: 18,
     viewFrequency: 'Weekly',
     startDate: '2026-08-17',
     dueDate: '2026-08-22',
@@ -89,7 +109,7 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     notes: 'HVAC duct vs plumbing riser clash mitigation'
   },
   {
-    id: 'alloc-3',
+    id: 'alloc-4',
     projectId: 'proj-3',
     projectName: 'New Bugesera International Airport',
     employeeId: 'emp-2',
@@ -109,110 +129,40 @@ const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
     notes: 'LOD 400 fabrication check and COBie schema review'
   },
   {
-    id: 'alloc-4',
+    id: 'alloc-5',
     projectId: 'proj-3',
     projectName: 'New Bugesera International Airport',
-    employeeId: 'emp-5',
-    employeeName: 'Byasdev Roy',
+    employeeId: 'emp-aditi',
+    employeeName: 'Aditi',
     employeeRole: 'BIM Modeler',
-    discipline: 'Structural',
+    discipline: 'BIM - ACS',
     lod: 'LOD 350',
     projectPhase: 'Construction Documentation',
-    taskType: 'Parameter Population',
+    taskType: '3D Modeling',
     targetElementOrZone: 'ST-CONCOURSE-TRUSS-04',
-    assignedHours: 20,
+    assignedHours: 24,
     viewFrequency: 'Weekly',
     startDate: '2026-08-18',
     dueDate: '2026-08-24',
     priority: 'Medium',
     status: 'In Progress',
-    notes: 'IFC parameter mapping and structural steel tagging'
-  },
-  {
-    id: 'alloc-5',
-    projectId: 'proj-4',
-    projectName: 'Evanston Water Plant',
-    employeeId: 'emp-4',
-    employeeName: 'Suvam Mandal',
-    employeeRole: 'BIM Modeler',
-    discipline: 'MEP',
-    lod: 'LOD 300',
-    projectPhase: 'Design Development',
-    taskType: '3D Modeling',
-    targetElementOrZone: 'MEP-PUMP-ROOM-SOUTH',
-    assignedHours: 20,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-17',
-    dueDate: '2026-08-21',
-    priority: 'Critical',
-    status: 'Allocated',
-    notes: 'Large diameter process pipe routing'
-  },
-  {
-    id: 'alloc-6',
-    projectId: 'proj-5',
-    projectName: '6-8 E 82nd',
-    employeeId: 'emp-3',
-    employeeName: 'Mosaraf Hosen',
-    employeeRole: 'Structural Specialist',
-    discipline: 'Structural',
-    lod: 'LOD 300',
-    projectPhase: 'Schematic Design',
-    taskType: '3D Modeling',
-    targetElementOrZone: 'PC-HISTORIC-FAÇADE-LEVEL3',
-    assignedHours: 28,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-17',
-    dueDate: '2026-08-24',
-    priority: 'High',
-    status: 'In Progress',
-    notes: 'Point cloud deviation extraction & historic masonry'
-  },
-  {
-    id: 'alloc-7',
-    projectId: 'proj-6',
-    projectName: '90 Furman',
-    employeeId: 'emp-6',
-    employeeName: 'Shibotosh Karmakar',
-    employeeRole: 'BIM Engineer',
-    discipline: 'Infrastructure',
-    lod: 'LOD 350',
-    projectPhase: 'Construction Documentation',
-    taskType: '2D Sheet Generation',
-    targetElementOrZone: 'INFRA-UTILITY-TIE-IN',
-    assignedHours: 18,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-17',
-    dueDate: '2026-08-20',
-    priority: 'Medium',
-    status: 'Completed',
-    notes: 'Automated spool sheet generation using Dynamo script'
-  },
-  {
-    id: 'alloc-8',
-    projectId: 'proj-7',
-    projectName: '90 Furman',
-    employeeId: 'emp-1',
-    employeeName: 'Subhasish Das',
-    employeeRole: 'BIM Specialist',
-    discipline: 'BIM - ACS',
-    lod: 'LOD 300',
-    projectPhase: 'Design Development',
-    taskType: 'COBie Data Entry',
-    targetElementOrZone: 'COBIE-SPACE-TYPE-ASSETS',
-    assignedHours: 12,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-19',
-    dueDate: '2026-08-22',
-    priority: 'Low',
-    status: 'In Progress',
-    notes: 'Room naming and OmniClass attribute validation'
+    notes: 'Curved roof trusses and perimeter glazing anchors'
   }
 ];
 
 export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectProject }) => {
   const { projects, employees, workLogs, theme } = useBimData();
   const isLight = theme === 'light';
+
+  // Helper to test if allocation belongs to a retained or active member
+  const isRetainedAllocation = (item: ResourceAllocationItem) => {
+    const name = (item.employeeName || '').toLowerCase();
+    const id = item.employeeId || '';
+    if (name.includes('sushovan') || name.includes('sushoovan') || id === 'emp-2') return true;
+    if (name.includes('aditi') || id === 'emp-aditi') return true;
+    // Allow dynamically added team members
+    return employees.some(e => e.id === id || e.name.toLowerCase() === name);
+  };
 
   // State
   const [allocations, setAllocations] = useState<ResourceAllocationItem[]>(() => {
@@ -221,10 +171,17 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((item: ResourceAllocationItem) => ({
-            ...item,
-            projectId: item.projectId.startsWith('proj-') ? item.projectId : item.projectId.replace(/^p(\d+)$/, 'proj-$1')
-          }));
+          const filtered = parsed
+            .filter((item: ResourceAllocationItem) => {
+              const name = (item.employeeName || '').toLowerCase();
+              const id = item.employeeId || '';
+              return name.includes('sushovan') || name.includes('sushoovan') || name.includes('aditi') || id === 'emp-2' || id === 'emp-aditi';
+            })
+            .map((item: ResourceAllocationItem) => ({
+              ...item,
+              projectId: item.projectId.startsWith('proj-') ? item.projectId : item.projectId.replace(/^p(\d+)$/, 'proj-$1')
+            }));
+          if (filtered.length > 0) return filtered;
         }
       } catch (e) {
         return INITIAL_ALLOCATIONS;
@@ -247,7 +204,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   // Form Inputs
   const [formProject, setFormProject] = useState(projects[0]?.id || 'p1');
-  const [formEmployee, setFormEmployee] = useState(employees[0]?.id || 'emp-1');
+  const [formEmployee, setFormEmployee] = useState(employees[0]?.id || 'emp-2');
   const [formDiscipline, setFormDiscipline] = useState<ResourceAllocationItem['discipline']>('BIM - ACS');
   const [formLOD, setFormLOD] = useState<ResourceAllocationItem['lod']>('LOD 350');
   const [formPhase, setFormPhase] = useState<ResourceAllocationItem['projectPhase']>('Design Development');

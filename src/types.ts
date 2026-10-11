@@ -9,7 +9,20 @@ export type Discipline =
   | 'Fire Protection'
   | 'Façade / Envelope'
   | 'Coordination & QA'
-  | 'Infrastructure';
+  | 'Infrastructure'
+  | 'AI & Automation';
+
+export const PRIMARY_DISCIPLINES = [
+  "BIM - ACS",
+  "Structure",
+  "MEP - HVAC",
+  "MEP - Electrical",
+  "MEP - Plumbing",
+  "Fire Protection",
+  "Façade / Envelope",
+  "Coordination & QA",
+  "AI & Automation" // Added option
+];
 
 export type LODLevel =
   | 'LOD 100'

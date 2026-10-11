@@ -16,7 +16,7 @@ import {
   UserCheck
 } from 'lucide-react';
 import { useBimData } from '../context/BimDataContext';
-import { Employee, Discipline } from '../types';
+import { Employee, Discipline, PRIMARY_DISCIPLINES } from '../types';
 import { EditEmployeeModal } from './EditEmployeeModal';
 
 interface EmployeeDirectoryProps {
@@ -106,14 +106,11 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
             }`}
           >
             <option value="all">All Primary Disciplines</option>
-            <option value="BIM - ACS">BIM - ACS</option>
-            <option value="Structure">Structure</option>
-            <option value="MEP - HVAC">MEP - HVAC</option>
-            <option value="MEP - Electrical">MEP - Electrical</option>
-            <option value="MEP - Plumbing">MEP - Plumbing</option>
-            <option value="Fire Protection">Fire Protection</option>
-            <option value="Façade / Envelope">Façade / Envelope</option>
-            <option value="Coordination & QA">Coordination & QA</option>
+            {PRIMARY_DISCIPLINES.map((discipline) => (
+              <option key={discipline} value={discipline}>
+                {discipline}
+              </option>
+            ))}
           </select>
         </div>
       </div>

@@ -241,6 +241,7 @@ export const EditEmployeeModal: React.FC<EditEmployeeModalProps> = ({
                 <option value="Fire Protection">Fire Protection</option>
                 <option value="Façade / Envelope">Façade / Envelope</option>
                 <option value="Coordination & QA">Coordination & QA</option>
+                <option value="AI & Automation">AI & Automation</option>
               </select>
             </div>
 

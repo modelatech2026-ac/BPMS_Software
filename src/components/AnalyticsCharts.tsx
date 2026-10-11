@@ -137,7 +137,8 @@ export const DisciplineDistributionChart: React.FC<{
     'MEP - Plumbing',
     'Fire Protection',
     'Façade / Envelope',
-    'Coordination & QA'
+    'Coordination & QA',
+    'AI & Automation',
   ];
 
   const colors: Record<Discipline, string> = {
@@ -152,6 +153,7 @@ export const DisciplineDistributionChart: React.FC<{
     'Façade / Envelope': 'bg-purple-500 text-purple-400',
     'Coordination & QA': 'bg-orange-500 text-orange-400',
     'Infrastructure': 'bg-teal-500 text-teal-400',
+    'AI & Automation': 'bg-violet-500 text-violet-400',
   };
 
   const totals = disciplines.map(disc => {

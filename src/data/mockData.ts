@@ -2,21 +2,6 @@ import { Employee, BimProject, DailyWorkLog } from '../types';
 
 export const INITIAL_EMPLOYEES: Employee[] = [
   {
-    id: 'emp-1',
-    name: 'Subhasish Das',
-    role: 'BIM Specialist',
-    primaryDiscipline: 'BIM - ACS',
-    discipline: 'BIM - ACS',
-    email: 'subhasish.das@bimworkspace.com',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
-    experienceYears: 8,
-    weeklyCapacityHours: 40.0,
-    activeProjectIds: ['proj-1', 'proj-3', 'proj-7'],
-    skills: ['BIM Execution Planning', 'Navisworks Manage', 'ISO 19650', 'Multi-Trade Coordination', 'Revit Architecture & MEP'],
-    status: 'Active',
-    phone: '+1 (555) 234-5678'
-  },
-  {
     id: 'emp-2',
     name: 'Sushovan Das',
     role: 'BIM Coordinator',
@@ -26,70 +11,25 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=250',
     experienceYears: 10,
     weeklyCapacityHours: 40.0,
-    activeProjectIds: ['proj-1', 'proj-2', 'proj-3', 'proj-4'],
-    skills: ['Clash Detection', 'Navisworks', 'Revit MEP', 'Solibri QA'],
+    activeProjectIds: ['proj-1', 'proj-2', 'proj-3', 'proj-4', 'proj-6', 'proj-11'],
+    skills: ['Clash Detection', 'Navisworks', 'Revit MEP', 'Solibri QA', 'Coordination & QA'],
     status: 'Active',
     phone: '+1 (555) 345-6789'
   },
   {
-    id: 'emp-3',
-    name: 'Mosaraf Hosen',
-    role: 'Structural Specialist',
-    primaryDiscipline: 'Structure',
-    discipline: 'Structure',
-    email: 'mosaraf.hosen@bimworkspace.com',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=250',
-    experienceYears: 7,
-    weeklyCapacityHours: 40.0,
-    activeProjectIds: ['proj-3', 'proj-5', 'proj-9'],
-    skills: ['Tekla Structures', 'Revit Structure', 'Steel Detailing', 'Point Cloud Extraction'],
-    status: 'Active',
-    phone: '+1 (555) 456-7890'
-  },
-  {
-    id: 'emp-4',
-    name: 'Suvam Mandal',
+    id: 'emp-aditi',
+    name: 'Aditi',
     role: 'BIM Modeler',
-    primaryDiscipline: 'MEP',
-    discipline: 'MEP',
-    email: 'suvam.mandal@bimworkspace.com',
-    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&q=80&w=250',
-    experienceYears: 5,
-    weeklyCapacityHours: 40.0,
-    activeProjectIds: ['proj-1', 'proj-2', 'proj-4'],
-    skills: ['Revit MEP', 'HVAC Routing', 'Plumbing Detailing', 'AutoCAD MEP'],
-    status: 'Active',
-    phone: '+1 (555) 567-8901'
-  },
-  {
-    id: 'emp-5',
-    name: 'Byasdev Roy',
-    role: 'BIM Modeler',
-    primaryDiscipline: 'Structural',
-    discipline: 'Structural',
-    email: 'byasdev.roy@bimworkspace.com',
-    avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=250',
-    experienceYears: 4,
-    weeklyCapacityHours: 40.0,
-    activeProjectIds: ['proj-2', 'proj-3', 'proj-4', 'proj-9'],
-    skills: ['Revit Architecture', 'Parameter Population', 'COBie', 'Dynamo'],
-    status: 'Active',
-    phone: '+1 (555) 678-9012'
-  },
-  {
-    id: 'emp-6',
-    name: 'Shibotosh Karmakar',
-    role: 'BIM Engineer',
-    primaryDiscipline: 'Infrastructure',
-    discipline: 'Infrastructure',
-    email: 'shibotosh.karmakar@bimworkspace.com',
-    avatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&q=80&w=250',
+    primaryDiscipline: 'BIM - ACS',
+    discipline: 'BIM - ACS',
+    email: 'aditi@bimworkspace.com',
+    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=250',
     experienceYears: 6,
     weeklyCapacityHours: 40.0,
-    activeProjectIds: ['proj-1', 'proj-2', 'proj-3', 'proj-6'],
-    skills: ['Civil 3D', 'InfraWorks', '2D Sheet Generation', 'Dynamo Automation'],
+    activeProjectIds: ['proj-1', 'proj-2', 'proj-3', 'proj-5', 'proj-8', 'proj-10'],
+    skills: ['Revit Architecture', 'Navisworks Manage', 'COBie', 'Dynamo Automation'],
     status: 'Active',
-    phone: '+1 (555) 789-0123'
+    phone: '+1 (555) 456-7890'
   }
 ];
 
@@ -114,7 +54,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 115000,
     description: 'Bespoke fitness mezzanine, high-velocity acoustic HVAC routing, and structural exposed truss coordination.',
     disciplines: ['BIM - ACS', 'Structure', 'MEP - HVAC', 'MEP - Electrical', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-1', 'emp-2', 'emp-4', 'emp-6'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-101',
@@ -164,7 +104,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 8,
         completedHours: 10,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-4',
+        assignedEmployeeId: 'emp-aditi',
         dueDate: '2026-09-18'
       },
       {
@@ -176,7 +116,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 6,
         completedHours: 6,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-6',
+        assignedEmployeeId: 'emp-2',
         dueDate: '2026-09-25'
       }
     ],
@@ -214,7 +154,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 168000,
     description: 'Underground sump pumps, EV charging distribution networks, drainage sloped headers, and ventilation jet fans.',
     disciplines: ['MEP - HVAC', 'MEP - Electrical', 'MEP - Plumbing', 'Fire Protection', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-2', 'emp-5', 'emp-6'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-201',
@@ -295,7 +235,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 460000,
     description: 'Curved long-span terminal roof, passenger boarding bridges, baggage handling conveyors, and large-scale central utility plant.',
     disciplines: ['BIM - ACS', 'Structure', 'MEP - HVAC', 'MEP - Electrical', 'Façade / Envelope', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-1', 'emp-3', 'emp-5', 'emp-6'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-301',
@@ -325,7 +265,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 200,
         completedHours: 160,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-3',
+        assignedEmployeeId: 'emp-2',
         dueDate: '2026-10-15'
       },
       {
@@ -337,7 +277,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 150,
         completedHours: 108,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-6',
+        assignedEmployeeId: 'emp-aditi',
         dueDate: '2026-10-30'
       }
     ],
@@ -350,7 +290,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         status: 'Active',
         elementRef: 'Main Departure Hall 1400mm Supply Air Duct vs Diagonal Roof Brace TB-12',
         locationDescription: 'Departure Level Grid J-14',
-        assignedToEmployeeId: 'emp-3',
+        assignedToEmployeeId: 'emp-2',
         identifiedDate: '2026-08-12'
       }
     ]
@@ -375,7 +315,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 138000,
     description: 'High-pressure chemical feed lines, ozone contactor piping, heavy pump manifolds, and electrical MCC rooms.',
     disciplines: ['MEP - HVAC', 'MEP - Electrical', 'MEP - Plumbing', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-2', 'emp-5', 'emp-6'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-401',
@@ -405,7 +345,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 180,
         completedHours: 99,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-5',
+        assignedEmployeeId: 'emp-2',
         dueDate: '2026-09-30'
       }
     ],
@@ -431,7 +371,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 94000,
     description: 'Terrestrial LiDAR point cloud registration, historical decorative limestone facade modeling, and timber floor deflection analysis.',
     disciplines: ['BIM - ACS', 'Structure', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-4', 'emp-6'],
+    assignedEmployeeIds: ['emp-aditi', 'emp-2'],
     milestones: [
       {
         id: 'ms-501',
@@ -461,7 +401,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 120,
         completedHours: 32,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-4',
+        assignedEmployeeId: 'emp-aditi',
         dueDate: '2026-08-30'
       }
     ],
@@ -487,7 +427,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 185000,
     description: 'Acoustically isolated VRF mechanical heat pump risers, generator busducts, and sprinkler coordination.',
     disciplines: ['MEP - HVAC', 'MEP - Electrical', 'MEP - Plumbing', 'Fire Protection'],
-    assignedEmployeeIds: ['emp-1', 'emp-2', 'emp-5'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-601',
@@ -509,7 +449,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 4,
         completedHours: 3,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-5',
+        assignedEmployeeId: 'emp-2',
         dueDate: '2026-09-15'
       }
     ],
@@ -535,7 +475,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 120000,
     description: 'Glazed floor-to-ceiling curtain wall panels, custom acoustic party wall assemblies, and penthouse structural terraces.',
     disciplines: ['BIM - ACS', 'Structure', 'Façade / Envelope'],
-    assignedEmployeeIds: ['emp-4', 'emp-5'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-701',
@@ -556,7 +496,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 31,
         completedHours: 0,
         status: 'Not Started',
-        assignedEmployeeId: 'emp-5',
+        assignedEmployeeId: 'emp-aditi',
         dueDate: '2026-10-30'
       }
     ],
@@ -582,7 +522,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 95000,
     description: 'Heavy reinforced concrete retaining tanks, gantry crane steel supports, and industrial precast wall envelope.',
     disciplines: ['BIM - ACS', 'Structure', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-3', 'emp-6'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-801',
@@ -604,7 +544,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 20,
         completedHours: 8,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-3',
+        assignedEmployeeId: 'emp-2',
         dueDate: '2026-10-15'
       }
     ],
@@ -630,7 +570,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 110000,
     description: 'Exterior perforated architectural metal facades, vehicular ramp speed ramps, and elevator cores.',
     disciplines: ['BIM - ACS', 'Structure', 'Façade / Envelope'],
-    assignedEmployeeIds: ['emp-3', 'emp-5'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-901',
@@ -651,7 +591,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 40,
         completedHours: 6,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-5',
+        assignedEmployeeId: 'emp-aditi',
         dueDate: '2026-11-10'
       }
     ],
@@ -677,7 +617,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 48000,
     description: 'Conversion of 2D legacy AutoCAD floor plans and sections into multi-trade coordinated Revit models for tenant fitout.',
     disciplines: ['BIM - ACS', 'Structure'],
-    assignedEmployeeIds: ['emp-4'],
+    assignedEmployeeIds: ['emp-aditi', 'emp-2'],
     milestones: [
       {
         id: 'ms-1001',
@@ -698,7 +638,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 12,
         completedHours: 9,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-4',
+        assignedEmployeeId: 'emp-aditi',
         dueDate: '2026-08-25'
       }
     ],
@@ -724,7 +664,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 78000,
     description: 'Routing compact hydronic radiant floor heating and VRF condensate drains within existing historic floor joist pockets.',
     disciplines: ['MEP - HVAC', 'MEP - Electrical', 'MEP - Plumbing', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-2', 'emp-5', 'emp-6'],
+    assignedEmployeeIds: ['emp-2', 'emp-aditi'],
     milestones: [
       {
         id: 'ms-1101',
@@ -785,7 +725,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
     budgetAmount: 220000,
     description: 'High-voltage GIS switchgear, 138kV oil-filled transformers, underground concrete duct banks, and lightning protection masts.',
     disciplines: ['MEP - Electrical', 'Coordination & QA'],
-    assignedEmployeeIds: ['emp-5'],
+    assignedEmployeeIds: ['emp-2'],
     milestones: [
       {
         id: 'ms-1201',
@@ -806,7 +746,7 @@ export const INITIAL_PROJECTS: BimProject[] = [
         estimatedHours: 400,
         completedHours: 4,
         status: 'In Progress',
-        assignedEmployeeId: 'emp-5',
+        assignedEmployeeId: 'emp-2',
         dueDate: '2026-12-15'
       }
     ],
@@ -819,8 +759,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // London Wall Gym (Total: 30h)
     {
       id: 'log-101',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-1',
       projectName: 'London Wall Gym',
       date: '2026-08-18',
@@ -835,8 +775,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     },
     {
       id: 'log-102',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-aditi',
+      employeeName: 'Aditi',
       projectId: 'proj-1',
       projectName: 'London Wall Gym',
       date: '2026-08-17',
@@ -851,8 +791,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     },
     {
       id: 'log-103',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-1',
       projectName: 'London Wall Gym',
       date: '2026-08-16',
@@ -869,8 +809,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // Watermark Podium Garage (Total: 18h)
     {
       id: 'log-201',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-2',
       projectName: 'Watermark Podium Garage',
       date: '2026-08-18',
@@ -885,8 +825,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     },
     {
       id: 'log-202',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-2',
       projectName: 'Watermark Podium Garage',
       date: '2026-08-17',
@@ -903,8 +843,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // New Bugesera International Airport (Total: 268h)
     {
       id: 'log-301',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-3',
       projectName: 'New Bugesera International Airport',
       date: '2026-08-18',
@@ -919,8 +859,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     },
     {
       id: 'log-302',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-aditi',
+      employeeName: 'Aditi',
       projectId: 'proj-3',
       projectName: 'New Bugesera International Airport',
       date: '2026-08-18',
@@ -937,8 +877,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // Evanston Water Plant (Total: 99h)
     {
       id: 'log-401',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-4',
       projectName: 'Evanston Water Plant',
       date: '2026-08-18',
@@ -955,8 +895,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // 6-8 E 82nd (Total: 32h)
     {
       id: 'log-501',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-aditi',
+      employeeName: 'Aditi',
       projectId: 'proj-5',
       projectName: '6-8 E 82nd',
       date: '2026-08-18',
@@ -973,8 +913,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // 90 Furman (Total: 3h)
     {
       id: 'log-601',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-6',
       projectName: '90 Furman',
       date: '2026-08-18',
@@ -991,8 +931,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // Evanston Water Plant Facility (Total: 8h)
     {
       id: 'log-801',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-8',
       projectName: 'Evanston Water Plant Facility',
       date: '2026-08-18',
@@ -1009,8 +949,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // Watermark Podium Structure (Total: 6h)
     {
       id: 'log-901',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-aditi',
+      employeeName: 'Aditi',
       projectId: 'proj-9',
       projectName: 'Watermark Podium Structure',
       date: '2026-08-18',
@@ -1027,8 +967,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // Buxton (Total: 9h)
     {
       id: 'log-1001',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-aditi',
+      employeeName: 'Aditi',
       projectId: 'proj-10',
       projectName: 'Buxton',
       date: '2026-08-18',
@@ -1045,8 +985,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // 6-8 E 82nd Townhouse (Total: 19h)
     {
       id: 'log-1101',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-11',
       projectName: '6-8 E 82nd Townhouse',
       date: '2026-08-18',
@@ -1063,8 +1003,8 @@ export const generateInitialWorkLogs = (): DailyWorkLog[] => {
     // TPN Electrical (Total: 4h)
     {
       id: 'log-1201',
-      employeeId: 'emp-1',
-      employeeName: 'sushoovan Das',
+      employeeId: 'emp-2',
+      employeeName: 'Sushovan Das',
       projectId: 'proj-12',
       projectName: 'TPN Electrical',
       date: '2026-08-18',

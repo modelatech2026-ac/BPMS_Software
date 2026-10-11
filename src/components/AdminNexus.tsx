@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useBimData } from '../context/BimDataContext';
-import { UserAccessRecord, AccessLevel, OnboardingRequest, UserRole } from '../types';
+import { UserAccessRecord, AccessLevel, OnboardingRequest, UserRole, PRIMARY_DISCIPLINES, Discipline } from '../types';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -64,6 +64,8 @@ export const AdminNexus: React.FC = () => {
 
   // Selected role for each pending request
   const [pendingRoleMap, setPendingRoleMap] = useState<Record<string, UserRole>>({});
+  // Selected discipline for each pending request
+  const [pendingDisciplineMap, setPendingDisciplineMap] = useState<Record<string, Discipline>>({});
 
   // Audit search & filter state
   const [auditSearchQuery, setAuditSearchQuery] = useState('');
@@ -85,12 +87,20 @@ export const AdminNexus: React.FC = () => {
       // ignore
     }
     return {
-      'emp-1': {
+      'emp-2': {
         accessLevel: 'Super Admin',
         canEditProjects: true,
         canEditHours: true,
         canManageTeam: true,
         canDeleteRecords: true,
+        canExportReports: true,
+      },
+      'emp-aditi': {
+        accessLevel: 'Editor',
+        canEditProjects: true,
+        canEditHours: true,
+        canManageTeam: false,
+        canDeleteRecords: false,
         canExportReports: true,
       },
     };
@@ -530,8 +540,15 @@ export const AdminNexus: React.FC = () => {
     if (decision === 'accept') {
       const selectedRole = pendingRoleMap[requestId] || 'EDITOR';
       const accessLevel = mapAppRoleToAccessLevel(selectedRole);
-      approveOnboardingRequest(requestId, selectedRole, accessLevel);
-      showNotification(`Access granted for ${applicantName} (${selectedRole})`);
+      const req = onboardingRequests.find((r) => r.id === requestId);
+      const selectedDiscipline =
+        pendingDisciplineMap[requestId] ||
+        (req?.discipline as Discipline) ||
+        (req?.primaryDiscipline as Discipline) ||
+        'BIM - ACS';
+
+      approveOnboardingRequest(requestId, selectedRole, accessLevel, selectedDiscipline);
+      showNotification(`Access granted for ${applicantName} (${selectedRole} - ${selectedDiscipline})`);
     } else {
       rejectOnboardingRequest(requestId, 'Declined by administrator via interactive toggle.');
       showNotification(`Access declined for ${applicantName} — moved to Rejected Logs`);
@@ -541,8 +558,15 @@ export const AdminNexus: React.FC = () => {
   const handleApproveWithRole = (requestId: string, applicantName: string) => {
     const selectedRole = pendingRoleMap[requestId] || 'EDITOR';
     const accessLevel = mapAppRoleToAccessLevel(selectedRole);
-    approveOnboardingRequest(requestId, selectedRole, accessLevel);
-    showNotification(`Approved ${applicantName} as ${selectedRole} (${accessLevel})`);
+    const req = onboardingRequests.find((r) => r.id === requestId);
+    const selectedDiscipline =
+      pendingDisciplineMap[requestId] ||
+      (req?.discipline as Discipline) ||
+      (req?.primaryDiscipline as Discipline) ||
+      'BIM - ACS';
+
+    approveOnboardingRequest(requestId, selectedRole, accessLevel, selectedDiscipline);
+    showNotification(`Approved ${applicantName} as ${selectedRole} [${selectedDiscipline}] (${accessLevel})`);
   };
 
   const filteredUsers = users.filter((u) => {
@@ -1181,7 +1205,12 @@ export const AdminNexus: React.FC = () => {
                                   }));
                                   if (isApproved) {
                                     const accessLevel = mapAppRoleToAccessLevel(newRole);
-                                    approveOnboardingRequest(req.id, newRole, accessLevel);
+                                    const currentDiscipline =
+                                      pendingDisciplineMap[req.id] ||
+                                      (req.discipline as Discipline) ||
+                                      (req.primaryDiscipline as Discipline) ||
+                                      'BIM - ACS';
+                                    approveOnboardingRequest(req.id, newRole, accessLevel, currentDiscipline);
                                     showNotification(`Updated ${req.name}'s role to ${newRole}`);
                                   }
                                 }}
@@ -1197,6 +1226,42 @@ export const AdminNexus: React.FC = () => {
                                 <option value="PROJECT_MANAGER">Role: Project Manager</option>
                                 <option value="EDITOR">Role: Editor</option>
                                 <option value="VIEWER">Role: Viewer (Read-only)</option>
+                              </select>
+
+                              {/* Discipline selector dropdown */}
+                              <select
+                                value={
+                                  pendingDisciplineMap[req.id] ||
+                                  (req.discipline as Discipline) ||
+                                  (req.primaryDiscipline as Discipline) ||
+                                  'BIM - ACS'
+                                }
+                                onChange={(e) => {
+                                  const newDiscipline = e.target.value as Discipline;
+                                  setPendingDisciplineMap((prev) => ({
+                                    ...prev,
+                                    [req.id]: newDiscipline,
+                                  }));
+                                  if (isApproved) {
+                                    const currentRole = pendingRoleMap[req.id] || (req.assignedRole as UserRole) || 'EDITOR';
+                                    const accessLevel = mapAppRoleToAccessLevel(currentRole);
+                                    approveOnboardingRequest(req.id, currentRole, accessLevel, newDiscipline);
+                                    showNotification(`Updated ${req.name}'s discipline to ${newDiscipline}`);
+                                  }
+                                }}
+                                disabled={isRejected}
+                                className={`text-[11px] font-semibold px-2 py-1.5 rounded-xl border transition cursor-pointer ${
+                                  isRejected
+                                    ? 'bg-slate-800/40 border-slate-800 text-slate-500 cursor-not-allowed'
+                                    : 'bg-slate-800 border-slate-700 text-slate-200 focus:outline-none focus:border-blue-500'
+                                }`}
+                                title={isApproved ? 'Change assigned discipline' : 'Discipline to assign upon acceptance'}
+                              >
+                                {PRIMARY_DISCIPLINES.map((d) => (
+                                  <option key={d} value={d}>
+                                    Discipline: {d}
+                                  </option>
+                                ))}
                               </select>
 
                               {/* Decision Actions: ONLY shown for Pending requests, NOT in approved history */}
@@ -1720,6 +1785,7 @@ export const AdminNexus: React.FC = () => {
                     <option value="Fire Protection">Fire Protection</option>
                     <option value="Civil / Site">Civil / Site</option>
                     <option value="Coordination">Coordination</option>
+                    <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
 

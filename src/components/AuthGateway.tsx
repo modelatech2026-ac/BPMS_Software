@@ -50,7 +50,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
   // View state: 'form' | 'pending'
   const [viewStep, setViewStep] = useState<'form' | 'pending'>('form');
 
-  // Blank Form Fields matching exact visual design
+  // Form Fields matching exact visual design in image.png
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [inputErrors, setInputErrors] = useState<{ name?: string; email?: string }>({});
@@ -168,14 +168,17 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     const generatedUid = `req_${safePrefix}_${hash}`;
     const isoTimestamp = new Date().toISOString();
 
+    const userDiscipline = 'BIM - ACS';
+    const userReason = 'Sign-in Access Request for ProductionPulse BPMS';
+
     try {
       // Direct database persistence to Firestore collection access_requests (No LocalStorage)
       // Standardized Admin Nexus schema: fullName, email, discipline, reasonForAccess, status: "pending", createdAt
       const requestPayload = {
         fullName: cleanName,
         email: cleanEmail,
-        discipline: 'BIM - ACS',
-        reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+        discipline: userDiscipline,
+        reasonForAccess: userReason,
         status: 'pending',
         createdAt: isoTimestamp,
         // Compatibility & indexing attributes:
@@ -184,13 +187,13 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         uid: generatedUid,
         role: 'Editor',
         requestedRole: 'BIM Modeler / Editor',
-        primaryDiscipline: 'BIM - ACS',
-        organization: 'BIM - ACS',
-        accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+        primaryDiscipline: userDiscipline,
+        organization: userDiscipline,
+        accessReason: userReason,
         requestedAt: isoTimestamp,
         timestamp: isoTimestamp,
         requestTimestamp: isoTimestamp,
-        notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+        notes: userReason,
       };
 
       const reqDoc = doc(db, 'access_requests', generatedUid);
@@ -201,11 +204,11 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         name: cleanName,
         fullName: cleanName,
         email: cleanEmail,
-        discipline: 'BIM - ACS',
-        reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+        discipline: userDiscipline,
+        reasonForAccess: userReason,
         uid: generatedUid,
-        organization: 'BIM - ACS',
-        accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+        organization: userDiscipline,
+        accessReason: userReason,
       });
 
       // 2. Submit through AuthContext
@@ -333,7 +336,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
                 setInputErrors((prev) => ({ ...prev, email: undefined }));
               }
             }}
-            className={`w-full pl-10 pr-4 py-3 rounded-xl bg-[#090f1d] border text-sm text-slate-100 placeholder-slate-500 font-mono focus:outline-none transition ${
+            className={`w-full pl-10 pr-4 py-3 rounded-xl bg-[#090f1d] border text-sm text-slate-100 placeholder-slate-500 font-normal focus:outline-none transition ${
               inputErrors.email
                 ? 'border-rose-500/80 focus:border-rose-500 focus:ring-1 focus:ring-rose-500/40'
                 : 'border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/40'

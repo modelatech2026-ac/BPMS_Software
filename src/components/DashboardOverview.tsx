@@ -256,8 +256,8 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
       const matchingEmps = employees.filter(e => mapEmpToPrimaryDisc(e.role, e.discipline) === d.id);
       const count = matchingEmps.length;
       const pct = Math.round((count / totalEmps) * 100);
-      const totalWeeklyCap = matchingEmps.reduce((sum, e) => sum + e.capacityHoursPerWeek, 0);
-      const avgEfficiency = Math.round(92 + (matchingEmps.length > 0 ? (matchingEmps.reduce((s, e) => s + (e.rating || 4.5), 0) / matchingEmps.length) * 1.5 : 3));
+      const totalWeeklyCap = matchingEmps.reduce((sum, e) => sum + (e.weeklyCapacityHours || (e as any).capacityHoursPerWeek || 40), 0);
+      const avgEfficiency = Math.round(92 + (matchingEmps.length > 0 ? (matchingEmps.reduce((s, e) => s + ((e as any).rating || 4.5), 0) / matchingEmps.length) * 1.5 : 3));
 
       return {
         ...d,
@@ -275,7 +275,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   const totalLoggedHours = overallMetrics.totalCompletedHours;
   const totalPortfolioValue = totalBudgetHours * HOURLY_BILLING_RATE;
   const totalRecognizedRevenue = totalLoggedHours * HOURLY_BILLING_RATE;
-  const totalTeamCapacity = employees.reduce((sum, e) => sum + e.capacityHoursPerWeek, 0);
+  const totalTeamCapacity = employees.reduce((sum, e) => sum + (e.weeklyCapacityHours || (e as any).capacityHoursPerWeek || 40), 0);
   const fleetUtilizationRate = Math.min(100, Math.round((totalLoggedHours / Math.max(1, totalBudgetHours)) * 100) || 88);
 
   // SVG Donut calculation
@@ -588,7 +588,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                   <span>Headcount by Primary Discipline</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  {employees.length} BIM specialists mapped across 6 trade specializations
+                  {employees.length} active BIM specialists mapped across trade specializations
                 </p>
               </div>
             </div>
