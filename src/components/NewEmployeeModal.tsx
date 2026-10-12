@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { X, User, CheckCircle2, Shield, Briefcase } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useBimData } from '../context/BimDataContext';
-import { Discipline, ROLE_OPTIONS, EmployeeRole } from '../types';
+import { Discipline, ROLE_TITLES, ROLE_OPTIONS, EmployeeRole } from '../types';
 
 interface NewEmployeeModalProps {
   isOpen: boolean;
@@ -83,7 +83,7 @@ export const NewEmployeeModal: React.FC<NewEmployeeModalProps> = ({
             </div>
             <div>
               <h3 className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>
-                Add Project Member
+                Add Member
               </h3>
               <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
                 Register team member capacity, designated role, and project allocations
@@ -135,7 +135,7 @@ export const NewEmployeeModal: React.FC<NewEmployeeModalProps> = ({
                 }`}
                 required
               >
-                {ROLE_OPTIONS.map((r) => (
+                {ROLE_TITLES.map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>

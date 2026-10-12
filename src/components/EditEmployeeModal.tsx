@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useBimData } from '../context/BimDataContext';
-import { Employee, Discipline, ROLE_OPTIONS, EmployeeRole } from '../types';
+import { Employee, Discipline, ROLE_TITLES, ROLE_OPTIONS, EmployeeRole } from '../types';
 
 interface EditEmployeeModalProps {
   isOpen: boolean;
@@ -174,7 +174,7 @@ export const EditEmployeeModal: React.FC<EditEmployeeModalProps> = ({
                 }`}
                 required
               >
-                {ROLE_OPTIONS.map((r) => (
+                {ROLE_TITLES.map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>

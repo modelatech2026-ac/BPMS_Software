@@ -54,7 +54,8 @@ export type ProjectStatus =
   | 'Pending Kickoff'
   | string;
 
-export const ROLE_OPTIONS = [
+export const ROLE_TITLES = [
+  'Super Admin',
   'BIM Director',
   'Lead BIM Coordinator',
   'Senior Structural Specialist',
@@ -73,8 +74,10 @@ export const ROLE_OPTIONS = [
   'CTO',
 ] as const;
 
+export const ROLE_OPTIONS = ROLE_TITLES;
+
 export type EmployeeRole =
-  | typeof ROLE_OPTIONS[number]
+  | typeof ROLE_TITLES[number]
   | 'BIM Project Manager'
   | string;
 
