@@ -32,101 +32,7 @@ interface ProjectFeedbackProps {
   onSelectProject?: (project: BimProject) => void;
 }
 
-const INITIAL_FEEDBACKS: ProjectFeedbackItem[] = [
-  {
-    id: 'fb-1',
-    projectId: 'p1',
-    projectName: 'London Wall Gym',
-    clientName: 'Equinox Global Holdings',
-    rating: 4.8,
-    feedbackText: 'Exceptional 3D interior architecture modeling and clean spatial coordination. Partition layouts aligned perfectly with site laser scans.',
-    category: 'Quality of BIM Deliverables',
-    authorName: 'Julian Thorne',
-    authorRole: 'Principal Architect',
-    date: '2026-08-18',
-    sentiment: 'positive',
-    status: 'Published',
-    tags: ['LOD 350', 'Interior Gym', 'Laser Scan Aligned'],
-    actionItem: 'Continue standard LOD 350 detailing for next floor expansion.'
-  },
-  {
-    id: 'fb-2',
-    projectId: 'p2',
-    projectName: 'Watermark Podium Garage (MEP)',
-    clientName: 'Watermark Properties LLC',
-    rating: 4.6,
-    feedbackText: 'MEP coordination in the podium garage solved 42 high-priority clash conflicts between heavy HVAC ducts and gravity drainage lines before concrete pour.',
-    category: 'Clash Resolution & Coordination',
-    authorName: 'Carlos Mendonza',
-    authorRole: 'General Contractor',
-    date: '2026-08-16',
-    sentiment: 'positive',
-    status: 'Published',
-    tags: ['MEP Clash', 'Navisworks Review', 'Zero Concrete Core Drills']
-  },
-  {
-    id: 'fb-3',
-    projectId: 'p3',
-    projectName: 'New Bugesera International Airport',
-    clientName: 'Aviation Infrastructure Authority',
-    rating: 4.9,
-    feedbackText: 'Concourse steel truss parameters and COBie asset schemas are in pristine order. Lead BIM Coordinator Sushovan Das maintained stellar synchronization across 8 timezones.',
-    category: 'Quality of BIM Deliverables',
-    authorName: 'Dr. Arthur Kingsley',
-    authorRole: 'Client Stakeholder',
-    date: '2026-08-15',
-    sentiment: 'positive',
-    status: 'Published',
-    tags: ['Airport Terminal', 'COBie Data', 'LOD 400 Fabrication'],
-    actionItem: 'Proceed with Phase 2 concourse canopy fabrication sign-off.'
-  },
-  {
-    id: 'fb-4',
-    projectId: 'p4',
-    projectName: 'Evanston Water Plant (MEP)',
-    clientName: 'City of Evanston Water Works',
-    rating: 3.8,
-    feedbackText: 'Process piping models are accurate, but turn-around time on pump room revision R3 took 3 extra days. Need slightly faster revision velocity during active pump skid install.',
-    category: 'Delivery Speed & Milestones',
-    authorName: 'Hannah Vance',
-    authorRole: 'QA/QC Auditor',
-    date: '2026-08-12',
-    sentiment: 'constructive',
-    status: 'Action Item Created',
-    tags: ['Process Piping', 'Turnaround Velocity', 'Pump Room'],
-    actionItem: 'Allocate 1 auxiliary MEP specialist for expedited R4 turnarounds.'
-  },
-  {
-    id: 'fb-5',
-    projectId: 'p5',
-    projectName: '6-8 E 82nd(Scan to BIM ACS)',
-    clientName: 'Heritage Preservation Trust',
-    rating: 5.0,
-    feedbackText: 'Historic facade point cloud registration was immaculate. Masonry deviation analysis identified 15mm settlement early, saving weeks of structural retrofit engineering.',
-    category: 'Quality of BIM Deliverables',
-    authorName: 'Beatrice Dupont',
-    authorRole: 'BIM Lead Reviewer',
-    date: '2026-08-10',
-    sentiment: 'positive',
-    status: 'Published',
-    tags: ['Scan to BIM', 'Heritage Masonry', 'Point Cloud']
-  },
-  {
-    id: 'fb-6',
-    projectId: 'p6',
-    projectName: '90 Furman (MEP)',
-    clientName: 'Brooklyn Bridge Park Dev',
-    rating: 4.5,
-    feedbackText: 'Dynamo-automated spool sheet generations significantly accelerated mechanical fabrication. Very responsive communication via weekly BIM sync calls.',
-    category: 'Communication & Responsiveness',
-    authorName: 'Derek O’Connor',
-    authorRole: 'General Contractor',
-    date: '2026-08-08',
-    sentiment: 'positive',
-    status: 'Published',
-    tags: ['Dynamo Scripts', 'Spool Drawings', 'Weekly Sync']
-  }
-];
+const INITIAL_FEEDBACKS: ProjectFeedbackItem[] = [];
 
 export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProject }) => {
   const { projects, theme } = useBimData();
@@ -134,15 +40,27 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
 
   // Feedbacks State with localStorage persistence
   const [feedbacks, setFeedbacks] = useState<ProjectFeedbackItem[]>(() => {
-    const saved = localStorage.getItem('bim_project_feedbacks_v1');
+    try {
+      localStorage.removeItem('bim_project_feedbacks_v1');
+    } catch {}
+
+    const saved = localStorage.getItem('bim_project_feedbacks_v2');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (fb: ProjectFeedbackItem) =>
+              fb.projectName !== 'London Wall Gym' &&
+              fb.projectName !== 'Watermark Podium Garage (MEP)' &&
+              fb.projectName !== 'New Bugesera International Airport'
+          );
+        }
       } catch (e) {
-        return INITIAL_FEEDBACKS;
+        return [];
       }
     }
-    return INITIAL_FEEDBACKS;
+    return [];
   });
 
   // Filter States (Two Dropdowns + Search + Rating Filter)
@@ -222,7 +140,7 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
   // Save to localStorage
   const saveFeedbacks = (items: ProjectFeedbackItem[]) => {
     setFeedbacks(items);
-    localStorage.setItem('bim_project_feedbacks_v1', JSON.stringify(items));
+    localStorage.setItem('bim_project_feedbacks_v2', JSON.stringify(items));
     window.dispatchEvent(new Event('bim_feedback_updated'));
     window.dispatchEvent(new Event('storage'));
   };

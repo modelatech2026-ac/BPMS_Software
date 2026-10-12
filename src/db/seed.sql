@@ -1,6 +1,6 @@
 -- ============================================================================
 -- ProductionPulse BPMS - Database Seed Script
--- Target: Clean Slate with Single Pre-Seeded Super Admin
+-- Target: Clean Slate with Whitelisted Super Admins
 -- ============================================================================
 
 -- Clean purge of all existing records
@@ -12,9 +12,9 @@ TRUNCATE TABLE tasks CASCADE;
 TRUNCATE TABLE project_memberships CASCADE;
 TRUNCATE TABLE projects CASCADE;
 TRUNCATE TABLE access_requests CASCADE;
-DELETE FROM users WHERE email != 'modelatech2026@gmail.com';
+DELETE FROM users WHERE email NOT IN ('modelatech2026@gmail.com', 'sushoovandas@gmail.com');
 
--- Pre-seed Super Admin
+-- Pre-seed Whitelisted Super Admins
 INSERT INTO users (
     id,
     full_name,
@@ -23,12 +23,22 @@ INSERT INTO users (
     primary_discipline,
     weekly_capacity_hrs,
     availability_status
-) VALUES (
+) VALUES 
+(
     'a0000000-0000-0000-0000-000000000001'::uuid,
-    'Modelatech Super Admin',
+    'Aditi Chakraborty',
     'modelatech2026@gmail.com',
     'SUPER_ADMIN',
     'AI & Automation',
+    40,
+    'ACTIVE'
+),
+(
+    'a0000000-0000-0000-0000-000000000002'::uuid,
+    'Sushoovan Das',
+    'sushoovandas@gmail.com',
+    'SUPER_ADMIN',
+    'Coordination & QA',
     40,
     'ACTIVE'
 ) ON CONFLICT (email) DO UPDATE SET

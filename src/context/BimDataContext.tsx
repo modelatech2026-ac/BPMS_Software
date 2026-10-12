@@ -155,20 +155,34 @@ interface BimDataContextType {
 const BimDataContext = createContext<BimDataContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  PROJECTS: 'bim_tracker_projects_v5',
-  EMPLOYEES: 'bim_tracker_employees_v5',
-  WORK_LOGS: 'bim_tracker_worklogs_v5',
-  REPORTS: 'bim_tracker_reports_v5',
-  USER_ACCESS: 'bim_tracker_user_access_v5',
-  THEME: 'bim_tracker_theme_v5',
-  CURRENT_USER: 'bim_tracker_current_user_v5',
-  ONBOARDING: 'bim_tracker_onboarding_v5',
-  AUDIT_LOGS: 'bim_tracker_audit_logs_v5',
+  PROJECTS: 'bim_tracker_projects_v6',
+  EMPLOYEES: 'bim_tracker_employees_v6',
+  WORK_LOGS: 'bim_tracker_worklogs_v6',
+  REPORTS: 'bim_tracker_reports_v6',
+  USER_ACCESS: 'bim_tracker_user_access_v6',
+  THEME: 'bim_tracker_theme_v6',
+  CURRENT_USER: 'bim_tracker_current_user_v6',
+  ONBOARDING: 'bim_tracker_onboarding_v6',
+  AUDIT_LOGS: 'bim_tracker_audit_logs_v6',
 };
 
+// Purge legacy storage caches on boot
+if (typeof window !== 'undefined') {
+  try {
+    const legacyKeys = [
+      'bim_tracker_projects_v1', 'bim_tracker_projects_v2', 'bim_tracker_projects_v3', 'bim_tracker_projects_v4', 'bim_tracker_projects_v5',
+      'bim_tracker_employees_v1', 'bim_tracker_employees_v2', 'bim_tracker_employees_v3', 'bim_tracker_employees_v4', 'bim_tracker_employees_v5',
+      'bim_tracker_worklogs_v1', 'bim_tracker_worklogs_v2', 'bim_tracker_worklogs_v3', 'bim_tracker_worklogs_v4', 'bim_tracker_worklogs_v5',
+      'bim_projects_v2', 'bim_employees_v2', 'bim_work_logs_v2',
+      'bim_resource_allocations_v1', 'bim_project_feedbacks_v1'
+    ];
+    legacyKeys.forEach((k) => localStorage.removeItem(k));
+  } catch {}
+}
+
 const DEFAULT_CURRENT_USER: AuthUser = {
-  id: 'usr_super_admin_sushoovan',
-  googleId: 'google_super_admin_sushoovan',
+  id: 'usr_super_admin_modelatech',
+  googleId: 'google_super_admin_modelatech',
   email: SUPER_ADMIN_EMAIL,
   name: SUPER_ADMIN_NAME,
   role: 'Super Administrator & Lead Architect',
@@ -204,65 +218,40 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const saved = localStorage.getItem(STORAGE_KEYS.PROJECTS);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          const sampleProjectNames = [
+            'London Wall Gym',
+            'St. Jude Medical Research Hub',
+            'Canary Wharf Tower 34',
+            'King\'s Cross Rail Interchange',
+            'Oxford Drug Target Genomics Wing',
+            'Watermark Podium Garage',
+            'New Bugesera International Airport',
+            'Evanston Water Plant (MEP)',
+            '6-8 E 82nd',
+            '90 Furman (MEP)',
+          ];
+          return parsed.filter(p => !sampleProjectNames.some(sample => (p.name || '').includes(sample)));
+        }
       }
-      return INITIAL_PROJECTS;
-    } catch {
-      return INITIAL_PROJECTS;
-    }
+    } catch {}
+    return [];
   });
-
-  // Helper to strictly retain Sushovan and Aditi (plus dynamically approved access requests)
-  const isRetainedMember = (emp: { id?: string; name?: string; email?: string }): boolean => {
-    if (!emp) return false;
-    const email = (emp.email || '').toLowerCase().trim();
-    const name = (emp.name || '').toLowerCase().trim();
-    const id = emp.id || '';
-
-    // Retain Sushovan Das (sushovan.das@bimworkspace.com)
-    if (
-      email === 'sushovan.das@bimworkspace.com' ||
-      name.includes('sushovan') ||
-      name.includes('sushoovan') ||
-      id === 'emp-2'
-    ) {
-      return true;
-    }
-
-    // Retain Aditi
-    if (
-      email.includes('aditi') ||
-      name.includes('aditi') ||
-      id === 'emp-aditi'
-    ) {
-      return true;
-    }
-
-    return false;
-  };
 
   const [employees, setEmployees] = useState<Employee[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.EMPLOYEES);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Filter to strictly retain Sushovan and Aditi (plus any dynamically approved requests)
-          const filtered = parsed.filter(isRetainedMember);
-          const hasSushovan = filtered.some(e => (e.email || '').toLowerCase() === 'sushovan.das@bimworkspace.com' || (e.name || '').toLowerCase().includes('sushovan'));
-          const hasAditi = filtered.some(e => (e.name || '').toLowerCase().includes('aditi') || (e.email || '').toLowerCase().includes('aditi'));
-          const initialSushovan = INITIAL_EMPLOYEES.find(e => (e.email || '').toLowerCase() === 'sushovan.das@bimworkspace.com') || INITIAL_EMPLOYEES[0];
-          const initialAditi = INITIAL_EMPLOYEES.find(e => (e.name || '').toLowerCase().includes('aditi')) || INITIAL_EMPLOYEES[1];
-          const result = [...filtered];
-          if (!hasSushovan && initialSushovan) result.unshift(initialSushovan);
-          if (!hasAditi && initialAditi) result.push(initialAditi);
-          return result;
+        if (Array.isArray(parsed)) {
+          return parsed.filter(e => {
+            const email = (e.email || '').toLowerCase();
+            return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
+          });
         }
       }
-      return INITIAL_EMPLOYEES;
-    } catch {
-      return INITIAL_EMPLOYEES;
-    }
+    } catch {}
+    return [];
   });
 
   const [workLogs, setWorkLogs] = useState<DailyWorkLog[]>(() => {
@@ -270,19 +259,15 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const saved = localStorage.getItem(STORAGE_KEYS.WORK_LOGS);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const filtered = parsed.filter((log: DailyWorkLog) => {
-            const name = (log.employeeName || '').toLowerCase();
-            const id = log.employeeId || '';
-            return name.includes('sushovan') || name.includes('sushoovan') || name.includes('aditi') || id === 'emp-2' || id === 'emp-aditi';
+        if (Array.isArray(parsed)) {
+          return parsed.filter(l => {
+            const name = (l.projectName || '');
+            return !name.includes('London Wall') && !name.includes('Watermark') && !name.includes('Bugesera');
           });
-          if (filtered.length > 0) return filtered;
         }
       }
-      return generateInitialWorkLogs();
-    } catch {
-      return generateInitialWorkLogs();
-    }
+    } catch {}
+    return [];
   });
 
   const [generatedReports, setGeneratedReports] = useState<
@@ -1669,14 +1654,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const resetToMockData = () => {
-    setProjects(INITIAL_PROJECTS);
-    setEmployees(INITIAL_EMPLOYEES);
-    setWorkLogs(generateInitialWorkLogs());
+    setProjects([]);
+    setEmployees([]);
+    setWorkLogs([]);
     setGeneratedReports([]);
     localStorage.removeItem(STORAGE_KEYS.PROJECTS);
     localStorage.removeItem(STORAGE_KEYS.EMPLOYEES);
     localStorage.removeItem(STORAGE_KEYS.WORK_LOGS);
     localStorage.removeItem(STORAGE_KEYS.REPORTS);
+    localStorage.removeItem('bim_resource_allocations_v2');
+    localStorage.removeItem('bim_project_feedbacks_v2');
+    window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: [] }));
+    window.dispatchEvent(new Event('bim_feedback_updated'));
   };
 
   // Overall Computed Metrics

@@ -567,8 +567,9 @@ export const ProjectGanttTimeline: React.FC<ProjectGanttTimelineProps> = ({
             </div>
 
             {filteredProjects.length === 0 ? (
-              <div className="p-12 text-center text-slate-400 text-xs">
-                No projects or milestones match the active filters.
+              <div className="p-16 text-center text-slate-400">
+                <p className="text-sm font-semibold text-slate-300">No projects or milestones found.</p>
+                <p className="text-xs text-slate-500 mt-1">Click "Add Project" to get started.</p>
               </div>
             ) : (
               filteredProjects.map((project) => {

@@ -385,7 +385,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {filteredLogs.map((log) => {
+                  {filteredLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-500">
+                        <p className="text-sm font-semibold text-slate-400">No daily hour logs recorded.</p>
+                        <p className="text-xs text-slate-500 mt-1">Click "Log Daily Hours" above to record hours for projects.</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredLogs.map((log) => {
                     const isActive = activeMembers.some(
                       (m) =>
                         m.id === log.employeeId ||
@@ -438,7 +446,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                       </td>
                     </tr>
                   );
-                })}
+                }))}
               </tbody>
               </table>
             </div>

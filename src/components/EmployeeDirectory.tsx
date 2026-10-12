@@ -117,7 +117,14 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
 
       {/* Employee Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {filteredEmployees.map((emp) => {
+        {filteredEmployees.length === 0 ? (
+          <div className="col-span-full py-16 text-center bg-slate-900/50 border border-slate-800 rounded-2xl">
+            <Users className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-slate-400">No team members found.</p>
+            <p className="text-xs text-slate-500 mt-1">Click "Add Team Member" above to register new specialists.</p>
+          </div>
+        ) : (
+          filteredEmployees.map((emp) => {
           const loggedThisWeek = getEmployeeLoggedHours(emp.id, 'this-week');
           const totalAllTime = workLogs
             .filter((w) => w.employeeId === emp.id)
@@ -283,7 +290,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
               </div>
             </div>
           );
-        })}
+        }))}
       </div>
 
       {/* Edit Employee Modal */}

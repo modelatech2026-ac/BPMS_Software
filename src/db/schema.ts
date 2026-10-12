@@ -150,19 +150,37 @@ export interface SqlAuditLog {
 }
 
 /**
- * Default pre-seeded Super Admin account constant
+ * Default pre-seeded Super Admin accounts
  */
-export const PRE_SEEDED_SUPER_ADMIN: Readonly<SqlUser> = {
-  id: 'a0000000-0000-0000-0000-000000000001',
-  full_name: 'Modelatech Super Admin',
-  email: 'modelatech2026@gmail.com',
-  phone_number: null,
-  avatar_url: null,
-  role: 'SUPER_ADMIN',
-  primary_discipline: 'AI & Automation',
-  weekly_capacity_hrs: 40,
-  availability_status: 'ACTIVE',
-  last_login_at: null,
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString(),
-};
+export const PRE_SEEDED_SUPER_ADMINS: Readonly<SqlUser[]> = [
+  {
+    id: 'a0000000-0000-0000-0000-000000000001',
+    full_name: 'Aditi Chakraborty',
+    email: 'modelatech2026@gmail.com',
+    phone_number: null,
+    avatar_url: null,
+    role: 'SUPER_ADMIN',
+    primary_discipline: 'AI & Automation',
+    weekly_capacity_hrs: 40,
+    availability_status: 'ACTIVE',
+    last_login_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: 'a0000000-0000-0000-0000-000000000002',
+    full_name: 'Sushoovan Das',
+    email: 'sushoovandas@gmail.com',
+    phone_number: null,
+    avatar_url: null,
+    role: 'SUPER_ADMIN',
+    primary_discipline: 'Coordination & QA',
+    weekly_capacity_hrs: 40,
+    availability_status: 'ACTIVE',
+    last_login_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+];
+
+export const PRE_SEEDED_SUPER_ADMIN = PRE_SEEDED_SUPER_ADMINS[0];

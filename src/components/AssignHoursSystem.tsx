@@ -47,113 +47,7 @@ const matchProjectId = (idA?: string, idB?: string): boolean => {
   return normA === normB;
 };
 
-const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [
-  {
-    id: 'alloc-1',
-    projectId: 'proj-1',
-    projectName: 'London Wall Gym',
-    employeeId: 'emp-2',
-    employeeName: 'Sushovan Das',
-    employeeRole: 'BIM Coordinator',
-    memberEmail: 'sushovan.das@bimworkspace.com',
-    discipline: 'Coordination & QA',
-    lod: 'LOD 350',
-    projectPhase: 'Design Development',
-    taskType: 'QC/QA Audit',
-    targetElementOrZone: 'AR-LVL01-GYM-ZONE-A',
-    assignedHours: 16,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-17',
-    dueDate: '2026-08-21',
-    priority: 'High',
-    status: 'In Progress',
-    notes: 'Multi-discipline clash verification and coordination audit'
-  },
-  {
-    id: 'alloc-2',
-    projectId: 'proj-1',
-    projectName: 'London Wall Gym',
-    employeeId: 'emp-aditi',
-    employeeName: 'Aditi',
-    employeeRole: 'BIM Modeler',
-    memberEmail: 'aditi@bimworkspace.com',
-    discipline: 'BIM - ACS',
-    lod: 'LOD 300',
-    projectPhase: 'Design Development',
-    taskType: '3D Modeling',
-    targetElementOrZone: 'AR-LVL01-GYM-ZONE-A',
-    assignedHours: 18,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-17',
-    dueDate: '2026-08-22',
-    priority: 'High',
-    status: 'In Progress',
-    notes: 'Acoustic wall paneling and mezzanine framing modeling'
-  },
-  {
-    id: 'alloc-3',
-    projectId: 'proj-2',
-    projectName: 'Watermark Podium Garage',
-    employeeId: 'emp-2',
-    employeeName: 'Sushovan Das',
-    employeeRole: 'BIM Coordinator',
-    memberEmail: 'sushovan.das@bimworkspace.com',
-    discipline: 'Coordination & QA',
-    lod: 'LOD 350',
-    projectPhase: 'Construction Documentation',
-    taskType: 'Clash Detection',
-    targetElementOrZone: 'MEP-LVL02-PODIUM-B',
-    assignedHours: 18,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-17',
-    dueDate: '2026-08-22',
-    priority: 'Critical',
-    status: 'In Progress',
-    notes: 'HVAC duct vs plumbing riser clash mitigation'
-  },
-  {
-    id: 'alloc-4',
-    projectId: 'proj-3',
-    projectName: 'New Bugesera International Airport',
-    employeeId: 'emp-2',
-    employeeName: 'Sushovan Das',
-    employeeRole: 'BIM Coordinator',
-    memberEmail: 'sushovan.das@bimworkspace.com',
-    discipline: 'Coordination & QA',
-    lod: 'LOD 400',
-    projectPhase: 'Fabrication / As-Built',
-    taskType: 'QC/QA Audit',
-    targetElementOrZone: 'QA-TERMINAL-ZONE-NORTH',
-    assignedHours: 32,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-17',
-    dueDate: '2026-08-25',
-    priority: 'High',
-    status: 'In Progress',
-    notes: 'LOD 400 fabrication check and COBie schema review'
-  },
-  {
-    id: 'alloc-5',
-    projectId: 'proj-3',
-    projectName: 'New Bugesera International Airport',
-    employeeId: 'emp-aditi',
-    employeeName: 'Aditi',
-    employeeRole: 'BIM Modeler',
-    memberEmail: 'aditi@bimworkspace.com',
-    discipline: 'BIM - ACS',
-    lod: 'LOD 350',
-    projectPhase: 'Construction Documentation',
-    taskType: '3D Modeling',
-    targetElementOrZone: 'ST-CONCOURSE-TRUSS-04',
-    assignedHours: 24,
-    viewFrequency: 'Weekly',
-    startDate: '2026-08-18',
-    dueDate: '2026-08-24',
-    priority: 'Medium',
-    status: 'In Progress',
-    notes: 'Curved roof trusses and perimeter glazing anchors'
-  }
-];
+const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [];
 
 export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectProject }) => {
   const { projects, employees, workLogs, theme } = useBimData();
@@ -177,37 +71,28 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   // State
   const [allocations, setAllocations] = useState<ResourceAllocationItem[]>(() => {
-    const saved = localStorage.getItem('bim_resource_allocations_v1');
+    // Purge legacy allocations key if present
+    try {
+      localStorage.removeItem('bim_resource_allocations_v1');
+    } catch {}
+
+    const saved = localStorage.getItem('bim_resource_allocations_v2');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const filtered = parsed
-            .filter((item: ResourceAllocationItem) => {
-              const name = (item.employeeName || '').toLowerCase();
-              const id = item.employeeId || '';
-              const email = (item.memberEmail || '').toLowerCase();
-              return (
-                name.includes('sushovan') ||
-                name.includes('sushoovan') ||
-                name.includes('aditi') ||
-                id === 'emp-2' ||
-                id === 'emp-aditi' ||
-                email.includes('sushovan') ||
-                email.includes('aditi')
-              );
-            })
-            .map((item: ResourceAllocationItem) => ({
-              ...item,
-              projectId: item.projectId.startsWith('proj-') ? item.projectId : item.projectId.replace(/^p(\d+)$/, 'proj-$1')
-            }));
-          if (filtered.length > 0) return filtered;
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (item: ResourceAllocationItem) =>
+              item.projectName !== 'London Wall Gym' &&
+              item.projectName !== 'Watermark Podium Garage' &&
+              item.projectName !== 'New Bugesera International Airport'
+          );
         }
       } catch (e) {
-        return INITIAL_ALLOCATIONS;
+        return [];
       }
     }
-    return INITIAL_ALLOCATIONS;
+    return [];
   });
 
   // Sync allocations with activeMembers collection
@@ -215,7 +100,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     setAllocations((prev) => {
       const filtered = prev.filter(isLiveActiveMember);
       if (filtered.length !== prev.length) {
-        localStorage.setItem('bim_resource_allocations_v1', JSON.stringify(filtered));
+        localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(filtered));
       }
       return filtered;
     });
@@ -230,6 +115,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       window.removeEventListener('bim_resource_allocations_updated', handleAllocUpdate);
     };
   }, [activeMembers]);
+
+  // Persist to localStorage
+  useEffect(() => {
+    localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(allocations));
+  }, [allocations]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
@@ -731,7 +621,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                 <tr>
                   <td colSpan={4} className="py-12 text-center text-slate-500">
                     <p className="text-sm font-semibold text-slate-400">No resource hour allocations found.</p>
-                    <p className="text-xs text-slate-500 mt-1">Try resetting the Project or Team Member filters.</p>
+                    <p className="text-xs text-slate-500 mt-1">Click "Assign Hours" above to allocate hours to project members.</p>
                   </td>
                 </tr>
               ) : (

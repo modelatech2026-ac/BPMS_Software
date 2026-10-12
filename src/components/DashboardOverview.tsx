@@ -84,29 +84,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     title: string;
     description: string;
     action: string;
-  }>>([
-    {
-      category: 'Hours Variance',
-      type: 'warning',
-      title: 'London Wall Gym Overrun Warning',
-      description: '30.0h logged against 24.0h estimate (+6.0h variance, 125% burn) due to architectural layout revisions.',
-      action: 'Conduct quick scope reconciliation with client team.'
-    },
-    {
-      category: 'Milestone Tracking',
-      type: 'info',
-      title: 'New Bugesera International Airport Progress',
-      description: '268.0h logged against 350.0h budget (77% burn). LOD 350 MEP coordination on target for Oct 2026 delivery.',
-      action: 'Finalize fabrication clash resolution check this week.'
-    },
-    {
-      category: 'Quality & Delivery',
-      type: 'success',
-      title: 'Watermark Podium Garage (MEP) Ahead of Schedule',
-      description: 'Plumbing & HVAC routing 45% complete (18.0h logged vs 40.0h estimate) with zero critical clashes.',
-      action: 'Prepare advance submittal for client review.'
-    }
-  ]);
+  }>>([]);
 
   const fetchLiveAiInsights = async () => {
     setAiInsightsLoading(true);
@@ -726,34 +704,42 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {aiInsights.map((ins, idx) => (
-            <div
-              key={idx}
-              className={`p-4 rounded-xl border space-y-2 ${
-                ins.type === 'warning'
-                  ? 'bg-amber-950/20 border-amber-500/30 text-amber-200'
-                  : ins.type === 'success'
-                  ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
-                  : 'bg-blue-950/20 border-blue-500/30 text-blue-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-900/60 border border-slate-700/50">
-                  {ins.category}
-                </span>
-                {ins.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-400" />}
-                {ins.type === 'success' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
-                {ins.type === 'info' && <Clock className="w-4 h-4 text-blue-400" />}
+        {aiInsights.length === 0 ? (
+          <div className="py-8 text-center text-slate-500 bg-slate-900/40 border border-slate-800/80 rounded-xl">
+            <Sparkles className="w-6 h-6 text-purple-400/60 mx-auto mb-1.5" />
+            <p className="text-xs font-semibold text-slate-400">Ready for Strategic Analysis</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Click "AI Audit" above to analyze portfolio hours, trade capacity, and clash patterns.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {aiInsights.map((ins, idx) => (
+              <div
+                key={idx}
+                className={`p-4 rounded-xl border space-y-2 ${
+                  ins.type === 'warning'
+                    ? 'bg-amber-950/20 border-amber-500/30 text-amber-200'
+                    : ins.type === 'success'
+                    ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
+                    : 'bg-blue-950/20 border-blue-500/30 text-blue-200'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-900/60 border border-slate-700/50">
+                    {ins.category}
+                  </span>
+                  {ins.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-400" />}
+                  {ins.type === 'success' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
+                  {ins.type === 'info' && <Clock className="w-4 h-4 text-blue-400" />}
+                </div>
+                <h4 className="text-xs font-bold text-white">{ins.title}</h4>
+                <p className="text-xs text-slate-300 leading-relaxed">{ins.description}</p>
+                <div className="pt-2 border-t border-slate-800/50 text-[11px] font-medium text-slate-400">
+                  Action: <span className="text-slate-200">{ins.action}</span>
+                </div>
               </div>
-              <h4 className="text-xs font-bold text-white">{ins.title}</h4>
-              <p className="text-xs text-slate-300 leading-relaxed">{ins.description}</p>
-              <div className="pt-2 border-t border-slate-800/50 text-[11px] font-medium text-slate-400">
-                Action: <span className="text-slate-200">{ins.action}</span>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

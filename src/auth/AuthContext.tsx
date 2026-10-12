@@ -239,7 +239,7 @@ const INITIAL_SUPER_ADMIN: AuthUser = {
   id: 'usr_super_admin_modelatech',
   googleId: 'google_super_admin_modelatech',
   email: 'modelatech2026@gmail.com',
-  name: 'Modela Tech',
+  name: 'Aditi Chakraborty',
   role: 'Super Administrator & Lead Architect',
   appRole: 'SUPER_ADMIN',
   status: 'APPROVED',
@@ -249,7 +249,7 @@ const INITIAL_SUPER_ADMIN: AuthUser = {
   organization: 'BPMS Core Systems & Architecture',
   accessReason: 'Executive Super Administrator with master editing and governance access',
   requestTimestamp: '2026-08-23 09:00 AM',
-  avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=ModelaTech',
+  avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=AditiChakraborty',
   twoFactor: {
     isEnabled: false,
     backupCodes: [],
@@ -279,7 +279,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ...INITIAL_SUPER_ADMIN,
         id: 'usr_super_admin_sushoovan',
         email: 'sushoovandas@gmail.com',
-        name: 'sushoovan Das',
+        name: 'Sushoovan Das',
       },
     };
   });

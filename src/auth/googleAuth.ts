@@ -5,8 +5,9 @@
 import { UserDatabaseModel, UserRole, UserApprovalStatus, AuthUser } from '../types';
 
 export const SUPER_ADMIN_EMAIL = 'modelatech2026@gmail.com';
-export const SUPER_ADMIN_NAME = 'Modela Tech';
+export const SUPER_ADMIN_NAME = 'Aditi Chakraborty';
 export const SECONDARY_ADMIN_EMAIL = 'sushoovandas@gmail.com';
+export const SECONDARY_ADMIN_NAME = 'Sushoovan Das';
 
 export const SUPER_ADMIN_EMAILS = [
   'modelatech2026@gmail.com',
@@ -54,11 +55,15 @@ export function handleGoogleAuthCallback(
   const now = new Date().toISOString();
 
   if (isSuperAdminUser) {
+    const isSecondary = normalizedEmail === SECONDARY_ADMIN_EMAIL.toLowerCase();
+    const adminEmail = isSecondary ? SECONDARY_ADMIN_EMAIL : SUPER_ADMIN_EMAIL;
+    const adminName = isSecondary ? SECONDARY_ADMIN_NAME : SUPER_ADMIN_NAME;
+
     const adminUser: UserDatabaseModel = {
-      id: existing?.id || 'usr_super_admin_sushoovan',
-      googleId: profile.googleId || 'google_super_admin_sushoovan',
-      email: SUPER_ADMIN_EMAIL,
-      name: SUPER_ADMIN_NAME,
+      id: existing?.id || (isSecondary ? 'usr_super_admin_sushoovan' : 'usr_super_admin_modelatech'),
+      googleId: profile.googleId || (isSecondary ? 'google_super_admin_sushoovan' : 'google_super_admin_modelatech'),
+      email: adminEmail,
+      name: profile.name || adminName,
       avatar: profile.picture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
       status: 'APPROVED',
       role: 'SUPER_ADMIN',
