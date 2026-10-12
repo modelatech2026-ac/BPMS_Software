@@ -130,8 +130,17 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       </div>
 
       {/* Filter toolbar */}
-      <div className="flex flex-col lg:flex-row items-center justify-between gap-3 bg-slate-900/80 border border-slate-800 p-3.5 rounded-xl">
-        <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full lg:w-auto">
+      <div
+        className="bg-slate-900/80 border border-slate-800 p-3.5 rounded-xl"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: '12px',
+          justifyContent: 'space-between'
+        }}
+      >
+        <div className="flex flex-wrap items-center gap-3">
           {/* Search Input */}
           <div className="flex items-center gap-2 w-full sm:w-72 relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -145,7 +154,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           </div>
 
           {/* BIM Disciplines Filter Dropdown */}
-          <div className="flex items-center gap-1.5 w-full sm:w-auto bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs">
+          <div className="flex items-center gap-1.5 w-full sm:w-auto bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs shrink-0">
             <Layers className="w-3.5 h-3.5 text-blue-400 shrink-0" />
             <span className="text-slate-400 font-semibold whitespace-nowrap">BIM Discipline:</span>
             <select
@@ -168,8 +177,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         </div>
 
         {/* Status Filter buttons */}
-        <div className="flex items-center gap-2 w-full lg:w-auto justify-end overflow-x-auto">
-          <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 text-xs">
+        <div
+          className="flex items-center gap-2 overflow-x-auto max-w-full"
+          style={{ minWidth: 'fit-content', flexShrink: 0 }}
+        >
+          <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 text-xs shrink-0">
             {filterOptions.map((opt) => {
               const count = opt.id === 'all'
                 ? projects.length
@@ -178,7 +190,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 <button
                   key={opt.id}
                   onClick={() => setStatusFilter(opt.id)}
-                  className={`px-2.5 py-1 rounded font-medium transition whitespace-nowrap text-xs ${
+                  className={`px-2.5 py-1 rounded font-medium transition whitespace-nowrap text-xs shrink-0 ${
                     statusFilter === opt.id
                       ? 'bg-blue-600 text-white shadow-xs'
                       : 'text-slate-400 hover:text-slate-200'
@@ -194,8 +206,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
       {/* Table View */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-300">
+        <div className="overflow-x-auto p-1 pb-3">
+          <table className="w-full text-left text-xs text-slate-300">
               <thead className="bg-slate-800/90 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-700 text-[11px]">
                 <tr>
                   <th className="py-3 px-4 min-w-[220px]">Project Name</th>
