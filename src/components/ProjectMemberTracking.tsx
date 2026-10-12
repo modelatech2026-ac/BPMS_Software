@@ -128,7 +128,7 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
   // Export CSV of member-project hours
   const exportMemberMatrixCSV = () => {
     const headers = ['Member Name', 'Role', 'Discipline', 'Status', 'Hourly Rate ($)', 'Assigned Projects', 'Weekly Logged Hours', 'Total Project Hours'];
-    const rows = (employees || []).map((emp) => {
+    const rows = (activeMembers || []).map((emp) => {
       const weeklyHours = getEmployeeLoggedHours(emp.id, 'this-week') || 0;
       const totalHours = getEmployeeLoggedHours(emp.id, 'all') || 0;
       const assignedProjCodes = (emp.activeProjectIds || [])
