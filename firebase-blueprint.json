@@ -107,6 +107,83 @@
         }
       },
       "required": ["uid", "name", "email", "status"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "BIM Project record with estimated hours and status",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "clientName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "totalEstimatedHours": {
+          "type": "number"
+        },
+        "totalCompletedHours": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["name", "totalEstimatedHours"]
+    },
+    "ProjectAssignment": {
+      "title": "ProjectAssignment",
+      "description": "Assignment of team members and hours to projects",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "projectId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "projectName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "employeeId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "allocatedHours": {
+          "type": "number"
+        }
+      },
+      "required": ["projectId", "employeeId"]
+    },
+    "Discipline": {
+      "title": "Discipline",
+      "description": "BIM and Engineering Discipline category",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        }
+      },
+      "required": ["name"]
     }
   },
   "firestore": {
@@ -117,6 +194,18 @@
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "Collection of registered application users"
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Collection of official BIM projects and estimated hours"
+    },
+    "/project_assignments/{assignmentId}": {
+      "schema": "ProjectAssignment",
+      "description": "Collection of project resource and hour assignments"
+    },
+    "/disciplines/{disciplineId}": {
+      "schema": "Discipline",
+      "description": "Collection of active BIM disciplines"
     }
   }
 }

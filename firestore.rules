@@ -62,5 +62,29 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
     }
+
+    // Projects Collection
+    match /projects/{projectId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
+
+    // Project Assignments Collection
+    match /project_assignments/{assignmentId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
+
+    // Disciplines Collection
+    match /disciplines/{disciplineId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
+
+    // Project Feedbacks Collection
+    match /project_feedbacks/{feedbackId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
   }
 }

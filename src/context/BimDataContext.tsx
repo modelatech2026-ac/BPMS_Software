@@ -31,7 +31,7 @@ import {
 } from '../auth/googleAuth';
 import { useOptionalAuth } from '../auth/AuthContext';
 import { db } from '../firebase/config';
-import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs } from 'firebase/firestore';
+import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
 
 interface BimDataContextType {
   projects: BimProject[];
@@ -155,24 +155,24 @@ interface BimDataContextType {
 const BimDataContext = createContext<BimDataContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  PROJECTS: 'bim_tracker_projects_v6',
-  EMPLOYEES: 'bim_tracker_employees_v6',
-  WORK_LOGS: 'bim_tracker_worklogs_v6',
-  REPORTS: 'bim_tracker_reports_v6',
-  USER_ACCESS: 'bim_tracker_user_access_v6',
-  THEME: 'bim_tracker_theme_v6',
-  CURRENT_USER: 'bim_tracker_current_user_v6',
-  ONBOARDING: 'bim_tracker_onboarding_v6',
-  AUDIT_LOGS: 'bim_tracker_audit_logs_v6',
+  PROJECTS: 'bim_tracker_projects_v7',
+  EMPLOYEES: 'bim_tracker_employees_v7',
+  WORK_LOGS: 'bim_tracker_worklogs_v7',
+  REPORTS: 'bim_tracker_reports_v7',
+  USER_ACCESS: 'bim_tracker_user_access_v7',
+  THEME: 'bim_tracker_theme_v7',
+  CURRENT_USER: 'bim_tracker_current_user_v7',
+  ONBOARDING: 'bim_tracker_onboarding_v7',
+  AUDIT_LOGS: 'bim_tracker_audit_logs_v7',
 };
 
 // Purge legacy storage caches on boot
 if (typeof window !== 'undefined') {
   try {
     const legacyKeys = [
-      'bim_tracker_projects_v1', 'bim_tracker_projects_v2', 'bim_tracker_projects_v3', 'bim_tracker_projects_v4', 'bim_tracker_projects_v5',
-      'bim_tracker_employees_v1', 'bim_tracker_employees_v2', 'bim_tracker_employees_v3', 'bim_tracker_employees_v4', 'bim_tracker_employees_v5',
-      'bim_tracker_worklogs_v1', 'bim_tracker_worklogs_v2', 'bim_tracker_worklogs_v3', 'bim_tracker_worklogs_v4', 'bim_tracker_worklogs_v5',
+      'bim_tracker_projects_v1', 'bim_tracker_projects_v2', 'bim_tracker_projects_v3', 'bim_tracker_projects_v4', 'bim_tracker_projects_v5', 'bim_tracker_projects_v6',
+      'bim_tracker_employees_v1', 'bim_tracker_employees_v2', 'bim_tracker_employees_v3', 'bim_tracker_employees_v4', 'bim_tracker_employees_v5', 'bim_tracker_employees_v6',
+      'bim_tracker_worklogs_v1', 'bim_tracker_worklogs_v2', 'bim_tracker_worklogs_v3', 'bim_tracker_worklogs_v4', 'bim_tracker_worklogs_v5', 'bim_tracker_worklogs_v6',
       'bim_projects_v2', 'bim_employees_v2', 'bim_work_logs_v2',
       'bim_resource_allocations_v1', 'bim_project_feedbacks_v1'
     ];
@@ -218,24 +218,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const saved = localStorage.getItem(STORAGE_KEYS.PROJECTS);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const sampleProjectNames = [
-            'London Wall Gym',
-            'St. Jude Medical Research Hub',
-            'Canary Wharf Tower 34',
-            'King\'s Cross Rail Interchange',
-            'Oxford Drug Target Genomics Wing',
-            'Watermark Podium Garage',
-            'New Bugesera International Airport',
-            'Evanston Water Plant (MEP)',
-            '6-8 E 82nd',
-            '90 Furman (MEP)',
-          ];
-          return parsed.filter(p => !sampleProjectNames.some(sample => (p.name || '').includes(sample)));
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
         }
       }
     } catch {}
-    return [];
+    return INITIAL_PROJECTS;
   });
 
   const [employees, setEmployees] = useState<Employee[]>(() => {
@@ -260,10 +248,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.filter(l => {
-            const name = (l.projectName || '');
-            return !name.includes('London Wall') && !name.includes('Watermark') && !name.includes('Bugesera');
-          });
+          return parsed;
         }
       }
     } catch {}
@@ -513,6 +498,61 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       );
     } catch (e) {
       console.warn('Firestore onSnapshot listener error:', e);
+    }
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // Synchronize Firestore projects collection into state in real-time
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const colRef = collection(db, 'projects');
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          if (!snapshot.empty) {
+            const list: BimProject[] = snapshot.docs.map((docSnap) => {
+              const data = docSnap.data();
+              return {
+                id: docSnap.id,
+                code: data.code || 'BIM-PRJ',
+                name: data.name || 'BIM Project',
+                clientName: data.clientName || 'Client',
+                buildingType: data.buildingType || 'Commercial',
+                location: data.location || 'Global',
+                grossFloorAreaSqm: data.grossFloorAreaSqm || 1000,
+                startDate: data.startDate || '2026-08-01',
+                targetCompletionDate: data.targetCompletionDate || '2026-11-30',
+                plannedDeliveryDate: data.plannedDeliveryDate || data.targetCompletionDate || '2026-11-30',
+                actualDeliveredDate: data.actualDeliveredDate,
+                status: data.status || 'WIP',
+                totalEstimatedHours: Number(data.totalEstimatedHours) || 0,
+                totalCompletedHours: Number(data.totalCompletedHours) || 0,
+                currentLOD: data.currentLOD || 'LOD 300',
+                targetLOD: data.targetLOD || 'LOD 350',
+                budgetAmount: Number(data.budgetAmount) || 0,
+                disciplines: data.disciplines || ['BIM - ACS'],
+                milestones: data.milestones || [],
+                tasks: data.tasks || [],
+                clashes: data.clashes || [],
+                assignedEmployeeIds: data.assignedEmployeeIds || [],
+                description: data.description || '',
+              };
+            });
+            if (list.length > 0) {
+              setProjects(list);
+            }
+          }
+        },
+        (err) => {
+          console.warn('Firestore projects listener notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Firestore projects setup error:', e);
     }
 
     return () => {
@@ -1389,6 +1429,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       id: `proj-${Date.now()}`,
     };
     setProjects((prev) => [newProj, ...prev]);
+    try {
+      setDoc(doc(db, 'projects', newProj.id), newProj).catch((err) =>
+        console.warn('Firestore addProject sync notice:', err)
+      );
+    } catch (e) {
+      console.warn('Firestore addProject notice:', e);
+    }
     return newProj;
   };
 
@@ -1396,12 +1443,26 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     setProjects((prev) =>
       prev.map((p) => (p.id === id ? { ...p, ...updates } : p))
     );
+    try {
+      updateDoc(doc(db, 'projects', id), updates).catch((err) =>
+        console.warn('Firestore updateProject sync notice:', err)
+      );
+    } catch (e) {
+      console.warn('Firestore updateProject notice:', e);
+    }
   };
 
   const updateProjectStatus = (id: string, status: BimProject['status']) => {
     setProjects((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status } : p))
     );
+    try {
+      updateDoc(doc(db, 'projects', id), { status }).catch((err) =>
+        console.warn('Firestore updateProjectStatus sync notice:', err)
+      );
+    } catch (e) {
+      console.warn('Firestore updateProjectStatus notice:', e);
+    }
   };
 
   const deleteProject = (id: string) => {
@@ -1409,6 +1470,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     setWorkLogs((prev) => prev.filter((w) => w.projectId !== id));
     if (selectedProjectId === id) {
       setSelectedProjectId('all');
+    }
+    try {
+      deleteDoc(doc(db, 'projects', id)).catch((err) =>
+        console.warn('Firestore deleteProject sync notice:', err)
+      );
+    } catch (e) {
+      console.warn('Firestore deleteProject notice:', e);
     }
   };
 
@@ -1654,11 +1722,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const resetToMockData = () => {
-    setProjects([]);
+    setProjects(INITIAL_PROJECTS);
     setEmployees([]);
     setWorkLogs([]);
     setGeneratedReports([]);
-    localStorage.removeItem(STORAGE_KEYS.PROJECTS);
+    localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(INITIAL_PROJECTS));
     localStorage.removeItem(STORAGE_KEYS.EMPLOYEES);
     localStorage.removeItem(STORAGE_KEYS.WORK_LOGS);
     localStorage.removeItem(STORAGE_KEYS.REPORTS);

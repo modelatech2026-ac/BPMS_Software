@@ -81,12 +81,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.filter(
-            (item: ResourceAllocationItem) =>
-              item.projectName !== 'London Wall Gym' &&
-              item.projectName !== 'Watermark Podium Garage' &&
-              item.projectName !== 'New Bugesera International Airport'
-          );
+          return parsed;
         }
       } catch (e) {
         return [];

@@ -49,12 +49,7 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.filter(
-            (fb: ProjectFeedbackItem) =>
-              fb.projectName !== 'London Wall Gym' &&
-              fb.projectName !== 'Watermark Podium Garage (MEP)' &&
-              fb.projectName !== 'New Bugesera International Airport'
-          );
+          return parsed;
         }
       } catch (e) {
         return [];
