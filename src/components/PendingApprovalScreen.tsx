@@ -3,6 +3,12 @@ import { useAuth } from '../auth/AuthContext';
 import { useBimData } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import { doc, onSnapshot } from 'firebase/firestore';
+import {
+  normalizeUserRole,
+  mapAppRoleToAccessLevel,
+  mapAppRoleToDisplayRole,
+} from '../auth/googleAuth';
+import { AccessLevel } from '../types';
 
 export const PendingApprovalScreen: React.FC = () => {
   const { user, updateCurrentUser, logout } = useAuth();
@@ -26,12 +32,18 @@ export const PendingApprovalScreen: React.FC = () => {
             const firestoreStatus = (data?.status || '').toLowerCase();
 
             if (firestoreStatus === 'approved') {
+              const assignedAppRole = normalizeUserRole(data?.assignedRole || data?.role || data?.appRole);
+              const calculatedAccessLevel = (data?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(assignedAppRole);
+              const displayRole = mapAppRoleToDisplayRole(assignedAppRole);
+
               setTimeout(() => {
                 updateCurrentUser({
                   status: 'APPROVED',
-                  accessLevel: 'Editor',
-                  role: data?.role || 'BIM Modeler / Editor',
-                  name: data?.name || activeUser?.name,
+                  appRole: assignedAppRole,
+                  accessLevel: calculatedAccessLevel,
+                  role: displayRole,
+                  isAdmin: assignedAppRole === 'SUPER_ADMIN' || assignedAppRole === 'PROJECT_MANAGER',
+                  name: data?.fullName || data?.name || activeUser?.name,
                 });
               }, 400);
             } else if (firestoreStatus === 'rejected') {

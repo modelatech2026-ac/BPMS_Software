@@ -30,7 +30,14 @@ import {
   User,
   SlidersHorizontal,
 } from 'lucide-react';
-import { SUPER_ADMIN_EMAIL, SUPER_ADMIN_NAME, mapAppRoleToAccessLevel } from '../auth/googleAuth';
+import {
+  SUPER_ADMIN_EMAIL,
+  SUPER_ADMIN_NAME,
+  mapAppRoleToAccessLevel,
+  mapAppRoleToDisplayRole,
+  normalizeUserRole,
+} from '../auth/googleAuth';
+import { persistUserRoleToDatabase } from '../auth/roleSync';
 import { SecuritySettingsModal } from './SecuritySettingsModal';
 import { db } from '../firebase/config';
 import { collection, getDocs, onSnapshot } from 'firebase/firestore';
@@ -128,6 +135,12 @@ export const AdminNexus: React.FC = () => {
     const reasonForAccess = data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
     const createdAt = data.createdAt || data.requestedAt || data.timestamp || new Date().toISOString();
 
+    const normalizedRole = normalizeUserRole(
+      data.assignedRole || data.role || data.appRole,
+      data.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
+    );
+    const calculatedAccessLevel = (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
+
     return {
       id: d.id,
       googleId: data.uid || d.id,
@@ -135,8 +148,10 @@ export const AdminNexus: React.FC = () => {
       name: fullName,
       fullName: fullName,
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
-      role: data.role || 'Editor',
-      requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
+      role: data.role || mapAppRoleToDisplayRole(normalizedRole),
+      requestedRole: data.requestedRole || data.role || mapAppRoleToDisplayRole(normalizedRole),
+      assignedRole: normalizedRole,
+      assignedAccessLevel: calculatedAccessLevel,
       primaryDiscipline: discipline,
       discipline: discipline,
       organization: data.organization || discipline,
@@ -395,17 +410,28 @@ export const AdminNexus: React.FC = () => {
       });
 
       // 5. Update session if active
+      const roleToSet: UserRole = isSuper
+        ? 'SUPER_ADMIN'
+        : isPM
+        ? 'PROJECT_MANAGER'
+        : isViewer
+        ? 'VIEWER'
+        : 'EDITOR';
+
+      persistUserRoleToDatabase({
+        email: targetEmail,
+        role: roleToSet,
+        status: 'APPROVED',
+        accessLevel: newLevel,
+        name: targetName,
+        uid: userId,
+      }).catch((e) => console.warn('persistUserRoleToDatabase in handleUpdateAccessLevel notice:', e));
+
       if (currentUser && currentUser.email.toLowerCase() === targetEmail.toLowerCase()) {
         setCurrentUser({
           ...currentUser,
           accessLevel: newLevel,
-          appRole: isSuper
-            ? 'SUPER_ADMIN'
-            : isPM
-            ? 'PROJECT_MANAGER'
-            : isViewer
-            ? 'VIEWER'
-            : 'EDITOR',
+          appRole: roleToSet,
           isAdmin: isSuper,
           status: 'APPROVED',
         });
@@ -538,9 +564,13 @@ export const AdminNexus: React.FC = () => {
     decision: 'accept' | 'reject'
   ) => {
     if (decision === 'accept') {
-      const selectedRole = pendingRoleMap[requestId] || 'EDITOR';
-      const accessLevel = mapAppRoleToAccessLevel(selectedRole);
       const req = onboardingRequests.find((r) => r.id === requestId);
+      const selectedRole =
+        pendingRoleMap[requestId] ||
+        req?.assignedRole ||
+        normalizeUserRole(req?.role) ||
+        'EDITOR';
+      const accessLevel = mapAppRoleToAccessLevel(selectedRole);
       const selectedDiscipline =
         pendingDisciplineMap[requestId] ||
         (req?.discipline as Discipline) ||
@@ -556,9 +586,13 @@ export const AdminNexus: React.FC = () => {
   };
 
   const handleApproveWithRole = (requestId: string, applicantName: string) => {
-    const selectedRole = pendingRoleMap[requestId] || 'EDITOR';
-    const accessLevel = mapAppRoleToAccessLevel(selectedRole);
     const req = onboardingRequests.find((r) => r.id === requestId);
+    const selectedRole =
+      pendingRoleMap[requestId] ||
+      req?.assignedRole ||
+      normalizeUserRole(req?.role) ||
+      'EDITOR';
+    const accessLevel = mapAppRoleToAccessLevel(selectedRole);
     const selectedDiscipline =
       pendingDisciplineMap[requestId] ||
       (req?.discipline as Discipline) ||
@@ -1194,25 +1228,37 @@ export const AdminNexus: React.FC = () => {
                               <select
                                 value={
                                   pendingRoleMap[req.id] ||
-                                  (req.assignedRole as UserRole) ||
-                                  'EDITOR'
+                                  req.assignedRole ||
+                                  normalizeUserRole(req.role)
                                 }
-                                onChange={(e) => {
+                                onChange={async (e) => {
                                   const newRole = e.target.value as UserRole;
                                   setPendingRoleMap((prev) => ({
                                     ...prev,
                                     [req.id]: newRole,
                                   }));
+
+                                  const accessLevel = mapAppRoleToAccessLevel(newRole);
+                                  const currentDiscipline =
+                                    pendingDisciplineMap[req.id] ||
+                                    (req.discipline as Discipline) ||
+                                    (req.primaryDiscipline as Discipline) ||
+                                    'BIM - ACS';
+
+                                  persistUserRoleToDatabase({
+                                    email: req.email,
+                                    role: newRole,
+                                    status: isApproved ? 'APPROVED' : 'pending',
+                                    accessLevel,
+                                    name: req.fullName || req.name,
+                                    discipline: currentDiscipline,
+                                    uid: req.googleId || req.id,
+                                  }).catch((err) => console.warn('Role update persistence notice:', err));
+
                                   if (isApproved) {
-                                    const accessLevel = mapAppRoleToAccessLevel(newRole);
-                                    const currentDiscipline =
-                                      pendingDisciplineMap[req.id] ||
-                                      (req.discipline as Discipline) ||
-                                      (req.primaryDiscipline as Discipline) ||
-                                      'BIM - ACS';
                                     approveOnboardingRequest(req.id, newRole, accessLevel, currentDiscipline);
-                                    showNotification(`Updated ${req.name}'s role to ${newRole}`);
                                   }
+                                  showNotification(`Updated ${req.name}'s role to ${newRole}`);
                                 }}
                                 disabled={isRejected}
                                 className={`text-[11px] font-semibold px-2 py-1.5 rounded-xl border transition cursor-pointer ${
@@ -1243,7 +1289,7 @@ export const AdminNexus: React.FC = () => {
                                     [req.id]: newDiscipline,
                                   }));
                                   if (isApproved) {
-                                    const currentRole = pendingRoleMap[req.id] || (req.assignedRole as UserRole) || 'EDITOR';
+                                    const currentRole = pendingRoleMap[req.id] || req.assignedRole || normalizeUserRole(req.role) || 'EDITOR';
                                     const accessLevel = mapAppRoleToAccessLevel(currentRole);
                                     approveOnboardingRequest(req.id, currentRole, accessLevel, newDiscipline);
                                     showNotification(`Updated ${req.name}'s discipline to ${newDiscipline}`);

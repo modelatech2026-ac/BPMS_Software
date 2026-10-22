@@ -13,6 +13,13 @@ import {
 import { TwoFactorChallengeModal } from './TwoFactorChallengeModal';
 import { db } from '../firebase/config';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import {
+  normalizeUserRole,
+  mapAppRoleToAccessLevel,
+  mapAppRoleToDisplayRole,
+} from '../auth/googleAuth';
+import { fetchUserRoleFromDatabase } from '../auth/roleSync';
+import { AccessLevel } from '../types';
 
 interface AuthGatewayProps {
   isModal?: boolean;
@@ -80,12 +87,18 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
             const data = snapshot.data();
             const firestoreStatus = (data?.status || '').toLowerCase();
             if (firestoreStatus === 'approved') {
+              const assignedAppRole = normalizeUserRole(data?.assignedRole || data?.role || data?.appRole);
+              const calculatedAccessLevel = (data?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(assignedAppRole);
+              const displayRole = mapAppRoleToDisplayRole(assignedAppRole);
+
               setTimeout(() => {
                 updateCurrentUser({
                   status: 'APPROVED',
-                  accessLevel: 'Editor',
-                  role: data?.role || 'BIM Specialist / Editor',
-                  name: data?.name || activeUser.name,
+                  appRole: assignedAppRole,
+                  accessLevel: calculatedAccessLevel,
+                  role: displayRole,
+                  isAdmin: assignedAppRole === 'SUPER_ADMIN' || assignedAppRole === 'PROJECT_MANAGER',
+                  name: data?.fullName || data?.name || activeUser.name,
                 });
                 if (onLoginSuccess) {
                   onLoginSuccess(attemptedRoute || '/dashboard');
@@ -172,34 +185,55 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     const userReason = 'Sign-in Access Request for ProductionPulse BPMS';
 
     try {
-      // Direct database persistence to Firestore collection access_requests (No LocalStorage)
-      // Standardized Admin Nexus schema: fullName, email, discipline, reasonForAccess, status: "pending", createdAt
-      const requestPayload = {
-        fullName: cleanName,
-        email: cleanEmail,
-        discipline: userDiscipline,
-        reasonForAccess: userReason,
-        status: 'pending',
-        createdAt: isoTimestamp,
-        // Compatibility & indexing attributes:
-        name: cleanName,
-        id: generatedUid,
-        uid: generatedUid,
-        role: 'Editor',
-        requestedRole: 'BIM Modeler / Editor',
-        primaryDiscipline: userDiscipline,
-        organization: userDiscipline,
-        accessReason: userReason,
-        requestedAt: isoTimestamp,
-        timestamp: isoTimestamp,
-        requestTimestamp: isoTimestamp,
-        notes: userReason,
-      };
+      // Direct database lookup from Firestore collection access_requests & users
+      // Never overwrite an existing assigned role with default 'Editor' or reset an approved user
+      const existingRecord = await fetchUserRoleFromDatabase(cleanEmail, generatedUid);
+      const isExistingUser = existingRecord && existingRecord.source !== 'default';
 
       const reqDoc = doc(db, 'access_requests', generatedUid);
-      await setDoc(reqDoc, requestPayload, { merge: true });
 
-      // 1. Register in memory and notify listeners (No LocalStorage fallback)
+      if (isExistingUser) {
+        // User already exists in database with an assigned role
+        // Update only login timestamps and activity without overwriting role or approval status
+        await setDoc(
+          reqDoc,
+          {
+            lastLoginAt: isoTimestamp,
+            lastActive: isoTimestamp,
+            updatedAt: isoTimestamp,
+            name: cleanName,
+            fullName: cleanName,
+            email: cleanEmail,
+          },
+          { merge: true }
+        );
+      } else {
+        // Standardized Admin Nexus schema for first-time onboarding requests
+        const requestPayload = {
+          fullName: cleanName,
+          email: cleanEmail,
+          discipline: userDiscipline,
+          reasonForAccess: userReason,
+          status: 'pending',
+          createdAt: isoTimestamp,
+          name: cleanName,
+          id: generatedUid,
+          uid: generatedUid,
+          role: 'Editor',
+          assignedRole: 'EDITOR',
+          requestedRole: 'BIM Modeler / Editor',
+          primaryDiscipline: userDiscipline,
+          organization: userDiscipline,
+          accessReason: userReason,
+          requestedAt: isoTimestamp,
+          timestamp: isoTimestamp,
+          requestTimestamp: isoTimestamp,
+          notes: userReason,
+        };
+        await setDoc(reqDoc, requestPayload, { merge: true });
+      }
+
+      // 1. Register in memory and notify listeners
       await registerAccessRequest({
         name: cleanName,
         fullName: cleanName,

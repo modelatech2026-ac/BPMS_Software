@@ -53,14 +53,8 @@ service cloud.firestore {
 
     // Users Collection
     match /users/{userId} {
-      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow list: if isSignedIn() && (isAdmin() || isOwner(userId));
-
-      allow create, update: if isSignedIn()
-        && isValidId(userId)
-        && (isOwner(userId) || isAdmin());
-
-      allow delete: if isAdmin();
+      allow read: if true;
+      allow write: if true;
     }
 
     // Projects Collection

@@ -7,6 +7,7 @@ import {
   TwoFactorConfig,
   UserApprovalStatus,
   UserRole,
+  AccessLevel,
 } from '../types';
 import {
   SUPER_ADMIN_EMAIL,
@@ -14,7 +15,14 @@ import {
   isSuperAdminEmail,
   mapAppRoleToAccessLevel,
   mapAppRoleToDisplayRole,
+  mapUserRoleToSecurityRole,
+  normalizeUserRole,
 } from './googleAuth';
+import {
+  fetchUserRoleFromDatabase,
+  persistUserRoleToDatabase,
+  generateRequestDocId,
+} from './roleSync';
 import {
   generateTotpSecret,
   buildOtpAuthUri,
@@ -202,18 +210,21 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<SecurityRole, OrganizationalPer
 
 export function getRoleFromUser(user: AuthUser | null): SecurityRole {
   if (!user) return 'Viewer';
-  if (user.securityRole) return user.securityRole;
   if (user.isAdmin || user.appRole === 'SUPER_ADMIN' || isSuperAdminEmail(user.email)) {
     return 'Super Admin';
   }
   if (user.appRole === 'PROJECT_MANAGER' || user.accessLevel === 'Project Manager') {
     return 'Project Manager';
   }
-  if (user.role?.toLowerCase().includes('specialist') || user.role?.toLowerCase().includes('modeler')) {
-    return 'BIM Specialist';
+  if (user.appRole === 'VIEWER' || user.accessLevel === 'Viewer') {
+    return 'Viewer';
   }
   if (user.appRole === 'EDITOR' || user.accessLevel === 'Editor') {
     return 'Editor';
+  }
+  if (user.securityRole) return user.securityRole;
+  if (user.role?.toLowerCase().includes('specialist') || user.role?.toLowerCase().includes('modeler')) {
+    return 'BIM Specialist';
   }
   return 'Viewer';
 }
@@ -370,6 +381,154 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [session]);
 
+  // 1. Global Firebase Authentication Observer: fetches user role from database upon sign-in
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser || !firebaseUser.email) return;
+
+      try {
+        const cleanEmail = firebaseUser.email.trim().toLowerCase();
+        const uid = firebaseUser.uid;
+        const displayName = firebaseUser.displayName || cleanEmail.split('@')[0];
+
+        // Fetch user profile record from the users (or access_requests) database table
+        const dbRecord = await fetchUserRoleFromDatabase(cleanEmail, uid);
+
+        // Dynamically set user session state using dbRecord.role
+        const role = dbRecord.role;
+        const status = dbRecord.status;
+        const accessLevel = dbRecord.accessLevel;
+        const securityRole = dbRecord.securityRole;
+        const displayRole = dbRecord.displayRole || mapAppRoleToDisplayRole(role);
+
+        const authUser: AuthUser = {
+          id: uid,
+          googleId: uid,
+          email: cleanEmail,
+          name: displayName,
+          avatar: firebaseUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
+          role: displayRole,
+          appRole: role,
+          status,
+          isAdmin: role === 'SUPER_ADMIN' || role === 'PROJECT_MANAGER',
+          accessLevel,
+          securityRole,
+          permissions: DEFAULT_PERMISSIONS_BY_ROLE[securityRole] || DEFAULT_PERMISSIONS_BY_ROLE['Viewer'],
+          organization: 'ProductionPulse Team',
+          requestTimestamp: new Date().toISOString(),
+        };
+
+        saveUserToDb(authUser);
+        setUser(authUser);
+
+        setSession((prev) => {
+          if (prev && new Date(prev.expiresAt).getTime() > Date.now()) {
+            return prev;
+          }
+          return generateSessionToken(cleanEmail, true);
+        });
+      } catch (err) {
+        console.warn('Global onAuthStateChanged role fetch notice:', err);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // 2. Synchronize and verify user's assigned role from database during session initialization & real-time updates
+  useEffect(() => {
+    if (!user || !user.email) return;
+    let isCancelled = false;
+
+    // 2a. Direct database query
+    const verifyDatabaseRole = async () => {
+      try {
+        const dbRecord = await fetchUserRoleFromDatabase(user.email, user.googleId || user.id);
+        if (isCancelled || !dbRecord) return;
+
+        // Never overwrite an assigned role with default 'EDITOR' if user already has an assigned role
+        if (dbRecord.source === 'default' && (user.appRole === 'SUPER_ADMIN' || user.appRole === 'PROJECT_MANAGER' || user.appRole === 'VIEWER')) {
+          return;
+        }
+
+        const shouldUpdate =
+          user.appRole !== dbRecord.role ||
+          user.status !== dbRecord.status ||
+          user.accessLevel !== dbRecord.accessLevel;
+
+        if (shouldUpdate) {
+          setUser((prev) => {
+            if (!prev || prev.email.toLowerCase() !== user.email.toLowerCase()) return prev;
+            const updated: AuthUser = {
+              ...prev,
+              appRole: dbRecord.role,
+              status: dbRecord.status,
+              accessLevel: dbRecord.accessLevel,
+              role: dbRecord.displayRole || mapAppRoleToDisplayRole(dbRecord.role),
+              securityRole: dbRecord.securityRole,
+              isAdmin: dbRecord.role === 'SUPER_ADMIN' || dbRecord.role === 'PROJECT_MANAGER',
+              permissions: DEFAULT_PERMISSIONS_BY_ROLE[dbRecord.securityRole] || prev.permissions,
+            };
+            saveUserToDb(updated);
+            return updated;
+          });
+        }
+      } catch (err) {
+        console.warn('Session database role sync notice:', err);
+      }
+    };
+
+    verifyDatabaseRole();
+
+    // 2b. Real-time snapshot listener on access_requests doc to immediately catch Super Admin edits in Admin Nexus
+    const docId = user.googleId || user.id || generateRequestDocId(user.email);
+    let unsubSnapshot: (() => void) | undefined;
+
+    try {
+      unsubSnapshot = onSnapshot(doc(db, 'access_requests', docId), (snap) => {
+        if (!snap.exists() || isCancelled) return;
+        const data = snap.data();
+        const role = normalizeUserRole(
+          data.assignedRole || data.role || data.appRole,
+          user.email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
+        );
+        const rawStatus = (data.status || 'pending').toLowerCase();
+        const status: UserApprovalStatus =
+          rawStatus === 'approved' ? 'APPROVED' : rawStatus === 'rejected' ? 'REJECTED' : 'pending';
+        const accessLevel: AccessLevel =
+          (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role);
+        const securityRole = mapUserRoleToSecurityRole(role);
+        const displayRole = data.role && data.role !== 'Editor' ? data.role : mapAppRoleToDisplayRole(role);
+
+        setUser((prev) => {
+          if (!prev || prev.email.toLowerCase() !== user.email.toLowerCase()) return prev;
+          if (prev.appRole === role && prev.status === status && prev.accessLevel === accessLevel) return prev;
+          const updated: AuthUser = {
+            ...prev,
+            appRole: role,
+            status,
+            accessLevel,
+            role: displayRole,
+            securityRole,
+            isAdmin: role === 'SUPER_ADMIN' || role === 'PROJECT_MANAGER',
+            permissions: DEFAULT_PERMISSIONS_BY_ROLE[securityRole] || prev.permissions,
+          };
+          saveUserToDb(updated);
+          return updated;
+        });
+      }, (err) => console.warn('User access_requests snapshot notice:', err));
+    } catch (e) {
+      // ignore
+    }
+
+    return () => {
+      isCancelled = true;
+      if (unsubSnapshot) unsubSnapshot();
+    };
+  }, [user?.email, user?.id, user?.googleId]);
+
   const securityRole = useMemo<SecurityRole>(() => {
     return getRoleFromUser(user);
   }, [user]);
@@ -518,63 +677,65 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { requires2FA: false, status: 'APPROVED', user: adminUser };
     }
 
-    // Check if user is already an approved registered account in usersDb
-    if (usersDb[cleanEmail] && usersDb[cleanEmail].status === 'APPROVED') {
-      const existingApprovedUser = usersDb[cleanEmail];
-      const sess = generateSessionToken(existingApprovedUser.email, true);
-      setUser(existingApprovedUser);
-      setSession(sess);
-      setPending2FAUser(null);
-      return { requires2FA: false, status: 'APPROVED', user: existingApprovedUser };
-    }
+    // Query authoritative database role from Firestore 'users' or 'access_requests'
+    const dbRecord = await fetchUserRoleFromDatabase(params.email, params.uid);
+    let firestoreStatus: UserApprovalStatus = dbRecord.status;
+    let appRole: UserRole = dbRecord.role;
+    let assignedRole: SecurityRole = dbRecord.securityRole;
+    let accessLevel: AccessLevel = dbRecord.accessLevel;
+    let displayRole: string = dbRecord.displayRole;
 
-    // Check Firestore access request record
-    const reqRef = doc(db, 'access_requests', params.uid);
-    let firestoreStatus = 'pending';
-    let assignedRole: SecurityRole = 'Editor';
-    const isoTimestamp = new Date().toISOString();
-
-    try {
-      const snap = await getDoc(reqRef);
-      if (!snap.exists()) {
-        const newRecord = {
-          fullName: params.name,
-          email: params.email,
-          discipline: 'BIM - ACS',
-          reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
-          status: 'pending',
-          createdAt: isoTimestamp,
-          id: params.uid,
-          uid: params.uid,
-          name: params.name,
-          role: 'Editor',
-          requestedAt: isoTimestamp,
-          timestamp: isoTimestamp,
-          requestedRole: 'BIM Modeler / Editor',
-          primaryDiscipline: 'BIM - ACS',
-          organization: 'BIM - ACS',
-          accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
-        };
-        await setDoc(reqRef, newRecord, { merge: true });
-        firestoreStatus = 'pending';
-      } else {
-        const data = snap.data();
-        firestoreStatus = data?.status || 'pending';
-        if (data?.role) assignedRole = data.role as SecurityRole;
+    // If no existing record in database, record initial pending access request
+    if (dbRecord.source === 'default') {
+      const isoTimestamp = new Date().toISOString();
+      const newRecord = {
+        fullName: params.name,
+        email: params.email,
+        discipline: 'BIM - ACS',
+        reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+        status: 'pending',
+        createdAt: isoTimestamp,
+        id: params.uid,
+        uid: params.uid,
+        name: params.name,
+        role: 'Editor',
+        requestedAt: isoTimestamp,
+        timestamp: isoTimestamp,
+        requestedRole: 'BIM Modeler / Editor',
+        primaryDiscipline: 'BIM - ACS',
+        organization: 'BIM - ACS',
+        accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+      };
+      try {
+        await setDoc(doc(db, 'access_requests', params.uid), newRecord, { merge: true });
+      } catch (fsErr) {
+        console.warn('Firestore create access request notice:', fsErr);
       }
-    } catch (fsErr) {
-      console.warn('Firestore lookup notice:', fsErr);
       firestoreStatus = 'pending';
+      appRole = 'EDITOR';
+      assignedRole = 'Editor';
+      accessLevel = 'Editor';
+      displayRole = 'BIM Modeler / Editor';
+    } else {
+      // User has existing database role: update login activity without touching role or status
+      try {
+        const isoNow = new Date().toISOString();
+        const docId = params.uid || dbRecord.id;
+        if (docId) {
+          await setDoc(
+            doc(db, 'access_requests', docId),
+            {
+              lastLoginAt: isoNow,
+              lastActive: isoNow,
+              updatedAt: isoNow,
+            },
+            { merge: true }
+          );
+        }
+      } catch (e) {
+        console.warn('Login timestamp update notice:', e);
+      }
     }
-
-    const appRole: UserRole =
-      assignedRole === 'Super Admin'
-        ? 'SUPER_ADMIN'
-        : assignedRole === 'Project Manager'
-        ? 'PROJECT_MANAGER'
-        : assignedRole === 'Viewer'
-        ? 'VIEWER'
-        : 'EDITOR';
 
     const applicantUser: AuthUser = {
       id: params.uid,
@@ -582,11 +743,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       email: params.email,
       name: params.name,
       avatar: params.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(params.name)}`,
-      role: assignedRole,
+      role: displayRole,
       appRole,
-      status: firestoreStatus.toLowerCase() === 'approved' ? 'APPROVED' : 'pending',
-      isAdmin: assignedRole === 'Super Admin',
-      accessLevel: mapAppRoleToAccessLevel(appRole),
+      status: firestoreStatus,
+      isAdmin: appRole === 'SUPER_ADMIN' || appRole === 'PROJECT_MANAGER',
+      accessLevel,
       securityRole: assignedRole,
       permissions: DEFAULT_PERMISSIONS_BY_ROLE[assignedRole] || DEFAULT_PERMISSIONS_BY_ROLE['Viewer'],
       organization: 'ProductionPulse Team',
@@ -596,7 +757,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     saveUserToDb(applicantUser);
     setUser(applicantUser);
 
-    if (firestoreStatus.toLowerCase() === 'approved') {
+    if (firestoreStatus === 'APPROVED') {
       const sess = generateSessionToken(applicantUser.email, true);
       setSession(sess);
       setPending2FAUser(null);
@@ -618,11 +779,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }): Promise<{ requires2FA: boolean; status: UserApprovalStatus; user: AuthUser }> => {
     const cleanEmail = params.email.trim().toLowerCase();
     const cleanName = params.name.trim() || cleanEmail.split('@')[0];
-    const generatedUid =
-      params.uid ||
-      `req_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40)}_${Math.abs(
-        cleanEmail.split('').reduce((acc, char) => (acc << 5) - acc + char.charCodeAt(0), 0)
-      )}`;
+    const generatedUid = params.uid || generateRequestDocId(cleanEmail);
 
     return confirmGoogleAccessRequest({
       name: cleanName,
@@ -642,33 +799,79 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanEmail = email.trim().toLowerCase();
     const isSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() || (extra?.name || '').toLowerCase().includes('sushoovan');
 
-    // Look up in database or create default
+    // Authoritative lookup from Firestore users and access_requests
+    const dbRecord = await fetchUserRoleFromDatabase(cleanEmail);
+
     let targetUser = usersDb[cleanEmail];
 
-    if (!targetUser) {
-      const assignedRole: SecurityRole = isSuper ? 'Super Admin' : (extra?.role || 'BIM Specialist');
-      const assignedAppRole: UserRole = isSuper ? 'SUPER_ADMIN' : 'EDITOR';
+    // Determine preserved role: database record takes precedence, then existing cached role
+    let assignedAppRole: UserRole = isSuper
+      ? 'SUPER_ADMIN'
+      : dbRecord.source !== 'default'
+      ? dbRecord.role
+      : targetUser?.appRole || 'EDITOR';
 
-      targetUser = {
-        id: isSuper ? 'usr_super_admin_sushoovan' : `usr_${Date.now()}`,
-        email: cleanEmail,
-        name: extra?.name || (isSuper ? SUPER_ADMIN_NAME : cleanEmail.split('@')[0]),
-        role: assignedRole,
-        appRole: assignedAppRole,
-        status: 'APPROVED',
-        isAdmin: isSuper,
-        accessLevel: mapAppRoleToAccessLevel(assignedAppRole),
-        securityRole: assignedRole,
-        permissions: DEFAULT_PERMISSIONS_BY_ROLE[assignedRole],
-        organization: extra?.organization || (isSuper ? 'BPMS Core Systems' : 'AEC Modeling Division'),
-        accessReason: extra?.accessReason || 'BIM project coordination & hours logging',
-        requestTimestamp: new Date().toISOString(),
-        avatar: isSuper
-          ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
-          : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(cleanEmail)}`,
-        twoFactor: isSuper ? INITIAL_SUPER_ADMIN.twoFactor : { isEnabled: false, backupCodes: [], usedBackupCodes: [] },
-      };
-      saveUserToDb(targetUser);
+    let assignedStatus: UserApprovalStatus = isSuper
+      ? 'APPROVED'
+      : dbRecord.source !== 'default'
+      ? dbRecord.status
+      : targetUser?.status || 'APPROVED';
+
+    let assignedAccessLevel: AccessLevel = isSuper
+      ? 'Super Admin'
+      : dbRecord.source !== 'default'
+      ? dbRecord.accessLevel
+      : targetUser?.accessLevel || mapAppRoleToAccessLevel(assignedAppRole);
+
+    let assignedDisplayRole: string = isSuper
+      ? 'Super Administrator & Lead Architect'
+      : dbRecord.source !== 'default'
+      ? dbRecord.displayRole
+      : targetUser?.role || mapAppRoleToDisplayRole(assignedAppRole);
+
+    let assignedSecurityRole: SecurityRole = isSuper
+      ? 'Super Admin'
+      : dbRecord.securityRole || mapUserRoleToSecurityRole(assignedAppRole);
+
+    targetUser = {
+      ...(targetUser || {}),
+      id: targetUser?.id || (isSuper ? 'usr_super_admin_sushoovan' : `usr_${Date.now()}`),
+      email: cleanEmail,
+      name: extra?.name || targetUser?.name || (isSuper ? SUPER_ADMIN_NAME : cleanEmail.split('@')[0]),
+      role: assignedDisplayRole,
+      appRole: assignedAppRole,
+      status: assignedStatus,
+      isAdmin: assignedAppRole === 'SUPER_ADMIN' || assignedAppRole === 'PROJECT_MANAGER',
+      accessLevel: assignedAccessLevel,
+      securityRole: assignedSecurityRole,
+      permissions: DEFAULT_PERMISSIONS_BY_ROLE[assignedSecurityRole] || DEFAULT_PERMISSIONS_BY_ROLE['Editor'],
+      organization: extra?.organization || targetUser?.organization || (isSuper ? 'BPMS Core Systems' : 'AEC Modeling Division'),
+      accessReason: extra?.accessReason || targetUser?.accessReason || 'BIM project coordination & hours logging',
+      requestTimestamp: targetUser?.requestTimestamp || new Date().toISOString(),
+      avatar: targetUser?.avatar || (isSuper
+        ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
+        : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(cleanEmail)}`),
+      twoFactor: targetUser?.twoFactor || (isSuper ? INITIAL_SUPER_ADMIN.twoFactor : { isEnabled: false, backupCodes: [], usedBackupCodes: [] }),
+    };
+
+    saveUserToDb(targetUser);
+
+    // Update last login timestamp in Firestore without modifying role or status
+    try {
+      const docId = dbRecord.id || targetUser?.googleId || targetUser?.id;
+      if (docId) {
+        setDoc(
+          doc(db, 'access_requests', docId),
+          {
+            lastLoginAt: new Date().toISOString(),
+            lastActive: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+    } catch {
+      // ignore
     }
 
     // Check if 2FA is enabled
@@ -709,33 +912,79 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanEmail = profile.email.trim().toLowerCase();
     const isSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() || (profile.name || '').toLowerCase().includes('sushoovan');
 
+    // Authoritative lookup from Firestore users and access_requests
+    const dbRecord = await fetchUserRoleFromDatabase(cleanEmail, profile.googleId);
+
     let targetUser = usersDb[cleanEmail];
 
-    if (!targetUser) {
-      const assignedRole: SecurityRole = isSuper ? 'Super Admin' : 'BIM Specialist';
-      const assignedAppRole: UserRole = isSuper ? 'SUPER_ADMIN' : 'EDITOR';
+    let assignedAppRole: UserRole = isSuper
+      ? 'SUPER_ADMIN'
+      : dbRecord.source !== 'default'
+      ? dbRecord.role
+      : targetUser?.appRole || 'EDITOR';
 
-      targetUser = {
-        id: isSuper ? 'usr_super_admin_sushoovan' : `usr_${Date.now()}`,
-        googleId: profile.googleId || (isSuper ? 'google_super_admin_sushoovan' : `google_${Date.now()}`),
-        email: cleanEmail,
-        name: profile.name || (isSuper ? SUPER_ADMIN_NAME : cleanEmail.split('@')[0]),
-        role: assignedRole,
-        appRole: assignedAppRole,
-        status: 'APPROVED',
-        isAdmin: isSuper,
-        accessLevel: mapAppRoleToAccessLevel(assignedAppRole),
-        securityRole: assignedRole,
-        permissions: DEFAULT_PERMISSIONS_BY_ROLE[assignedRole],
-        organization: profile.organization || 'BPMS Cloud Workspace',
-        accessReason: profile.accessReason || 'BIM management and coordination',
-        requestTimestamp: new Date().toISOString(),
-        avatar: profile.picture || (isSuper
-          ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
-          : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(cleanEmail)}`),
-        twoFactor: isSuper ? INITIAL_SUPER_ADMIN.twoFactor : { isEnabled: false, backupCodes: [], usedBackupCodes: [] },
-      };
-      saveUserToDb(targetUser);
+    let assignedStatus: UserApprovalStatus = isSuper
+      ? 'APPROVED'
+      : dbRecord.source !== 'default'
+      ? dbRecord.status
+      : targetUser?.status || 'APPROVED';
+
+    let assignedAccessLevel: AccessLevel = isSuper
+      ? 'Super Admin'
+      : dbRecord.source !== 'default'
+      ? dbRecord.accessLevel
+      : targetUser?.accessLevel || mapAppRoleToAccessLevel(assignedAppRole);
+
+    let assignedDisplayRole: string = isSuper
+      ? 'Super Administrator & Lead Architect'
+      : dbRecord.source !== 'default'
+      ? dbRecord.displayRole
+      : targetUser?.role || mapAppRoleToDisplayRole(assignedAppRole);
+
+    let assignedSecurityRole: SecurityRole = isSuper
+      ? 'Super Admin'
+      : dbRecord.securityRole || mapUserRoleToSecurityRole(assignedAppRole);
+
+    targetUser = {
+      ...(targetUser || {}),
+      id: targetUser?.id || (isSuper ? 'usr_super_admin_sushoovan' : `usr_${Date.now()}`),
+      googleId: profile.googleId || targetUser?.googleId || (isSuper ? 'google_super_admin_sushoovan' : `google_${Date.now()}`),
+      email: cleanEmail,
+      name: profile.name || targetUser?.name || (isSuper ? SUPER_ADMIN_NAME : cleanEmail.split('@')[0]),
+      role: assignedDisplayRole,
+      appRole: assignedAppRole,
+      status: assignedStatus,
+      isAdmin: assignedAppRole === 'SUPER_ADMIN' || assignedAppRole === 'PROJECT_MANAGER',
+      accessLevel: assignedAccessLevel,
+      securityRole: assignedSecurityRole,
+      permissions: DEFAULT_PERMISSIONS_BY_ROLE[assignedSecurityRole] || DEFAULT_PERMISSIONS_BY_ROLE['Editor'],
+      organization: profile.organization || targetUser?.organization || 'BPMS Cloud Workspace',
+      accessReason: profile.accessReason || targetUser?.accessReason || 'BIM management and coordination',
+      requestTimestamp: targetUser?.requestTimestamp || new Date().toISOString(),
+      avatar: profile.picture || targetUser?.avatar || (isSuper
+        ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
+        : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(cleanEmail)}`),
+      twoFactor: targetUser?.twoFactor || (isSuper ? INITIAL_SUPER_ADMIN.twoFactor : { isEnabled: false, backupCodes: [], usedBackupCodes: [] }),
+    };
+
+    saveUserToDb(targetUser);
+
+    // Update last login timestamp in Firestore without modifying role or status
+    try {
+      const docId = profile.googleId || dbRecord.id || targetUser?.googleId;
+      if (docId) {
+        setDoc(
+          doc(db, 'access_requests', docId),
+          {
+            lastLoginAt: new Date().toISOString(),
+            lastActive: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+    } catch {
+      // ignore
     }
 
     if (targetUser.twoFactor?.isEnabled) {
@@ -1042,14 +1291,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   /**
-   * Update Profile Details
+   * Update Profile Details - Never overwrites stored role with default
    */
   const updateCurrentUser = (updates: Partial<AuthUser>) => {
     const base = user || (updates as AuthUser);
     if (!base || !base.email) return;
-    const updated: AuthUser = { ...base, ...updates };
+
+    // Preserve existing role unless an explicit valid role is provided
+    const cleanAppRole = updates.appRole || base.appRole;
+    const cleanRole = updates.role || base.role;
+    const cleanAccessLevel = updates.accessLevel || base.accessLevel;
+
+    const updated: AuthUser = {
+      ...base,
+      ...updates,
+      appRole: cleanAppRole,
+      role: cleanRole,
+      accessLevel: cleanAccessLevel,
+      isAdmin: cleanAppRole === 'SUPER_ADMIN' || cleanAppRole === 'PROJECT_MANAGER',
+    };
     saveUserToDb(updated);
     setUser(updated);
+
+    if (updates.appRole || updates.status || updates.accessLevel) {
+      persistUserRoleToDatabase({
+        email: updated.email,
+        role: updated.appRole,
+        status: updated.status,
+        accessLevel: updated.accessLevel,
+        name: updated.name,
+        uid: updated.googleId || updated.id,
+      }).catch((e) => console.warn('Role update persistence notice:', e));
+    }
   };
 
   /**

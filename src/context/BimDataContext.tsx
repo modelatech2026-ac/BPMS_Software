@@ -28,7 +28,9 @@ import {
   SUPER_ADMIN_NAME,
   mapAppRoleToAccessLevel,
   mapAppRoleToDisplayRole,
+  normalizeUserRole,
 } from '../auth/googleAuth';
+import { persistUserRoleToDatabase, fetchUserRoleFromDatabase } from '../auth/roleSync';
 import { useOptionalAuth } from '../auth/AuthContext';
 import { db } from '../firebase/config';
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
@@ -401,6 +403,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const reasonForAccess = data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
       const createdAt = data.createdAt || data.requestedAt || data.timestamp || new Date().toISOString();
 
+      const normalizedRole: UserRole = normalizeUserRole(
+        data.assignedRole || data.role || data.appRole,
+        data.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
+      );
+      const calculatedAccessLevel: AccessLevel =
+        (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
+
       return {
         id: d.id,
         googleId: data.uid || d.id,
@@ -408,8 +417,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         name: fullName,
         fullName: fullName,
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
-        role: data.role || 'Editor',
-        requestedRole: data.requestedRole || data.role || 'BIM Modeler / Editor',
+        role: data.role || mapAppRoleToDisplayRole(normalizedRole),
+        requestedRole: data.requestedRole || data.role || mapAppRoleToDisplayRole(normalizedRole),
+        assignedRole: normalizedRole,
+        assignedAccessLevel: calculatedAccessLevel,
         primaryDiscipline: discipline,
         discipline: discipline,
         organization: discipline,
@@ -466,6 +477,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                   skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
                   phone: '+1 (555) 019-2834',
                 });
+              } else {
+                if (req.assignedRole && updated[idx].role !== role) {
+                  changed = true;
+                  updated[idx] = {
+                    ...updated[idx],
+                    role,
+                  };
+                }
               }
             });
             return changed ? updated : currentEmployees;
@@ -606,16 +625,27 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     );
 
     if (matchedEmployee) {
+      const matchedReq = onboardingRequests.find(
+        (r) => r.email.toLowerCase() === trimmedEmail
+      );
+      const resolvedAppRole: UserRole =
+        matchedReq?.assignedRole ||
+        normalizeUserRole(matchedReq?.role || matchedEmployee.role);
+      const resolvedAccessLevel =
+        matchedReq?.assignedAccessLevel || mapAppRoleToAccessLevel(resolvedAppRole);
+      const resolvedDisplayRole =
+        mapAppRoleToDisplayRole(resolvedAppRole);
+
       const activeUser: AuthUser = {
         id: matchedEmployee.id,
         googleId: profile.googleId,
         email: matchedEmployee.email,
         name: matchedEmployee.name,
-        role: matchedEmployee.role,
-        appRole: 'EDITOR',
+        role: resolvedDisplayRole,
+        appRole: resolvedAppRole,
         status: 'APPROVED',
-        isAdmin: false,
-        accessLevel: 'Editor',
+        isAdmin: resolvedAppRole === 'SUPER_ADMIN' || resolvedAppRole === 'PROJECT_MANAGER',
+        accessLevel: resolvedAccessLevel,
         avatar: profile.picture || matchedEmployee.avatar,
         organization: profile.organization || 'BPMS Production Team',
         requestTimestamp: '2026-08-23 09:00 AM',
@@ -630,16 +660,19 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     );
 
     if (existingReq) {
+      const resolvedRole: UserRole =
+        existingReq.assignedRole ||
+        normalizeUserRole(existingReq.role || existingReq.requestedRole);
       const authUser: AuthUser = {
         id: existingReq.id,
         googleId: profile.googleId || existingReq.googleId,
         email: existingReq.email,
         name: profile.name || existingReq.name,
-        role: existingReq.requestedRole,
-        appRole: (existingReq.assignedRole as UserRole) || 'VIEWER',
+        role: mapAppRoleToDisplayRole(resolvedRole),
+        appRole: resolvedRole,
         status: existingReq.status,
-        isAdmin: existingReq.assignedRole === 'SUPER_ADMIN',
-        accessLevel: existingReq.assignedAccessLevel || (existingReq.status === 'APPROVED' || existingReq.status === 'approved' ? 'Editor' : 'Viewer'),
+        isAdmin: resolvedRole === 'SUPER_ADMIN' || resolvedRole === 'PROJECT_MANAGER',
+        accessLevel: existingReq.assignedAccessLevel || mapAppRoleToAccessLevel(resolvedRole),
         avatar: profile.picture || existingReq.avatar,
         organization: existingReq.organization || profile.organization || 'ProductionPulse Partner Network',
         accessReason: existingReq.accessReason || profile.accessReason || existingReq.notes,
@@ -912,76 +945,120 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     });
 
     const isoTimestamp = new Date().toISOString();
-    const assignedRole = 'Editor';
     const discipline = params.discipline || params.organization || 'BIM - ACS';
     const reasonForAccess = params.reasonForAccess || params.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
 
+    // Check if an access request already exists in memory or Firestore database
+    const existingReq = onboardingRequests.find(
+      (r) => (r.email || '').toLowerCase().trim() === trimmedEmail || r.id === requestId
+    );
+    const dbRecord = await fetchUserRoleFromDatabase(trimmedEmail, requestId);
+    const isExistingUser = Boolean(existingReq || (dbRecord && dbRecord.source !== 'default'));
+
+    const preservedAppRole: UserRole =
+      existingReq?.assignedRole ||
+      (dbRecord && dbRecord.source !== 'default' ? dbRecord.role : 'EDITOR');
+
+    const preservedStatus: UserApprovalStatus =
+      existingReq?.status ||
+      (dbRecord && dbRecord.source !== 'default' ? dbRecord.status : 'pending');
+
+    const preservedAccessLevel: AccessLevel =
+      existingReq?.assignedAccessLevel ||
+      (dbRecord && dbRecord.source !== 'default' ? dbRecord.accessLevel : mapAppRoleToAccessLevel(preservedAppRole));
+
+    const preservedDisplayRole: string =
+      existingReq?.role ||
+      (dbRecord && dbRecord.source !== 'default' ? dbRecord.displayRole : mapAppRoleToDisplayRole(preservedAppRole));
+
     const newRequest: OnboardingRequest = {
-      id: requestId,
-      googleId: requestId,
+      id: existingReq?.id || requestId,
+      googleId: existingReq?.googleId || requestId,
       email: trimmedEmail,
       name: formattedName,
       fullName: formattedName,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(formattedName)}`,
-      role: assignedRole,
-      requestedRole: 'BIM Modeler / Editor',
-      primaryDiscipline: discipline,
-      discipline: discipline,
-      createdAt: isoTimestamp,
-      requestedAt: isoTimestamp,
-      requestTimestamp: timestamp,
-      timestamp: isoTimestamp,
-      status: 'pending',
-      organization: discipline,
-      reasonForAccess: reasonForAccess,
-      accessReason: reasonForAccess,
-      notes: 'Submitted via sign-in access gateway. Awaiting Super Admin review in Admin Nexus.',
+      avatar: existingReq?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(formattedName)}`,
+      role: preservedDisplayRole,
+      requestedRole: existingReq?.requestedRole || preservedDisplayRole,
+      assignedRole: preservedAppRole,
+      assignedAccessLevel: preservedAccessLevel,
+      primaryDiscipline: existingReq?.primaryDiscipline || discipline,
+      discipline: existingReq?.discipline || discipline,
+      createdAt: existingReq?.createdAt || isoTimestamp,
+      requestedAt: existingReq?.requestedAt || isoTimestamp,
+      requestTimestamp: existingReq?.requestTimestamp || timestamp,
+      timestamp: existingReq?.timestamp || isoTimestamp,
+      status: preservedStatus,
+      organization: existingReq?.organization || discipline,
+      reasonForAccess: existingReq?.reasonForAccess || reasonForAccess,
+      accessReason: existingReq?.accessReason || reasonForAccess,
+      notes: existingReq?.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+      reviewedBy: existingReq?.reviewedBy,
+      reviewedAt: existingReq?.reviewedAt,
     };
 
-    // 1. Immediately update in-memory React state
+    // 1. Update in-memory React state while preserving existing assigned roles
     setOnboardingRequests((prev) => [
       newRequest,
-      ...prev.filter((r) => r.email.toLowerCase() !== trimmedEmail && r.id !== requestId),
+      ...prev.filter((r) => (r.email || '').toLowerCase().trim() !== trimmedEmail && r.id !== requestId),
     ]);
 
-    // 2. Immediately log to Admin Audit Trail
-    const newAudit: AdminAuditLog = {
-      id: `audit-${Date.now()}`,
-      action: 'joined',
-      targetUserEmail: trimmedEmail,
-      targetUserName: formattedName,
-      performedBy: 'Sign-in Access Gateway',
-      timestamp,
-      details: `New access request submitted from sign-in: ${formattedName} (${trimmedEmail}). Registered in Admin Nexus awaiting Super Admin approval.`,
-    };
-    setAuditLogs((prev) => [newAudit, ...prev]);
+    // 2. Log to Admin Audit Trail if newly registered
+    if (!isExistingUser) {
+      const newAudit: AdminAuditLog = {
+        id: `audit-${Date.now()}`,
+        action: 'joined',
+        targetUserEmail: trimmedEmail,
+        targetUserName: formattedName,
+        performedBy: 'Sign-in Access Gateway',
+        timestamp,
+        details: `New access request submitted from sign-in: ${formattedName} (${trimmedEmail}). Registered in Admin Nexus awaiting Super Admin approval.`,
+      };
+      setAuditLogs((prev) => [newAudit, ...prev]);
+    }
 
-    // 3. Save to central database collection Firestore access_requests (No LocalStorage)
+    // 3. Save to central database collection Firestore access_requests without overwriting role or status for existing users
     try {
       const reqDoc = doc(db, 'access_requests', requestId);
-      await setDoc(
-        reqDoc,
-        {
-          fullName: formattedName,
-          email: trimmedEmail,
-          discipline,
-          reasonForAccess,
-          status: 'pending',
-          createdAt: isoTimestamp,
-          id: requestId,
-          uid: requestId,
-          name: formattedName,
-          role: assignedRole,
-          requestedRole: 'BIM Modeler / Editor',
-          primaryDiscipline: discipline,
-          organization: discipline,
-          accessReason: reasonForAccess,
-          requestedAt: isoTimestamp,
-          timestamp: isoTimestamp,
-          requestTimestamp: timestamp,
-        },
-        { merge: true }
-      );
+      if (isExistingUser) {
+        await setDoc(
+          reqDoc,
+          {
+            fullName: formattedName,
+            name: formattedName,
+            email: trimmedEmail,
+            lastLoginAt: isoTimestamp,
+            lastActive: isoTimestamp,
+            updatedAt: isoTimestamp,
+          },
+          { merge: true }
+        );
+      } else {
+        await setDoc(
+          reqDoc,
+          {
+            fullName: formattedName,
+            email: trimmedEmail,
+            discipline,
+            reasonForAccess,
+            status: 'pending',
+            createdAt: isoTimestamp,
+            id: requestId,
+            uid: requestId,
+            name: formattedName,
+            role: 'Editor',
+            assignedRole: 'EDITOR',
+            requestedRole: 'BIM Modeler / Editor',
+            primaryDiscipline: discipline,
+            organization: discipline,
+            accessReason: reasonForAccess,
+            requestedAt: isoTimestamp,
+            timestamp: isoTimestamp,
+            requestTimestamp: timestamp,
+          },
+          { merge: true }
+        );
+      }
     } catch (fsErr) {
       console.warn('Firestore setDoc notice for sign-in request:', fsErr);
     }
@@ -1115,17 +1192,33 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
 
-      // 4. Update status in Firestore access_requests collection
+      // 4. Update status in Firestore access_requests & users collection
       try {
         const reqDoc = doc(db, 'access_requests', effectiveReq.id);
         updateDoc(reqDoc, {
           status: 'approved',
           role: validatedRole,
+          assignedRole: validatedRole,
+          assignedAccessLevel: calculatedAccessLevel,
           discipline: targetDiscipline,
           reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
           reviewedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         }).catch((err) => {
           console.warn('Firestore updateDoc access_requests error:', err);
+        });
+
+        // Robust cross-collection persistence to users & access_requests
+        persistUserRoleToDatabase({
+          email: applicantEmail,
+          role: validatedRole,
+          status: 'APPROVED',
+          accessLevel: calculatedAccessLevel,
+          name: applicantFullName,
+          discipline: targetDiscipline,
+          uid: effectiveReq.googleId || effectiveReq.id,
+        }).catch((err) => {
+          console.warn('persistUserRoleToDatabase error in approve:', err);
         });
       } catch (e) {
         console.warn('Firestore doc access error:', e);

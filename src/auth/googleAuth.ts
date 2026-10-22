@@ -2,7 +2,7 @@
  * Google OAuth Authentication Handler & User Provisioning for BPMS Phase 1
  */
 
-import { UserDatabaseModel, UserRole, UserApprovalStatus, AuthUser } from '../types';
+import { UserDatabaseModel, UserRole, UserApprovalStatus, AuthUser, SecurityRole } from '../types';
 
 export const SUPER_ADMIN_EMAIL = 'modelatech2026@gmail.com';
 export const SUPER_ADMIN_NAME = 'Aditi Chakraborty';
@@ -156,5 +156,65 @@ export function mapAppRoleToDisplayRole(role: UserRole): string {
     case 'VIEWER':
     default:
       return 'Guest Viewer';
+  }
+}
+
+export function normalizeUserRole(rawRole: any, isSuperAdmin: boolean = false): UserRole {
+  if (isSuperAdmin) return 'SUPER_ADMIN';
+  if (!rawRole) return 'EDITOR';
+
+  const str = String(rawRole).trim().toUpperCase();
+  if (
+    str === 'SUPER_ADMIN' ||
+    str === 'SUPER ADMIN' ||
+    str === 'SUPER ADMINISTRATOR' ||
+    str.includes('SUPER ADMIN')
+  ) {
+    return 'SUPER_ADMIN';
+  }
+  if (
+    str === 'PROJECT_MANAGER' ||
+    str === 'PROJECT MANAGER' ||
+    str === 'PM' ||
+    str === 'BIM PROJECT MANAGER' ||
+    str === 'SENIOR BIM PROJECT MANAGER' ||
+    str.includes('PROJECT MANAGER')
+  ) {
+    return 'PROJECT_MANAGER';
+  }
+  if (
+    str === 'VIEWER' ||
+    str === 'GUEST VIEWER' ||
+    str === 'READ ONLY' ||
+    str === 'VIEWER (READ ONLY)' ||
+    str.includes('VIEWER')
+  ) {
+    return 'VIEWER';
+  }
+  if (
+    str === 'EDITOR' ||
+    str === 'BIM MODELER / EDITOR' ||
+    str === 'BIM SPECIALIST' ||
+    str === 'BIM SPECIALIST / MODELER' ||
+    str === 'MODELER' ||
+    str === 'LEAD COORDINATOR' ||
+    str.includes('EDITOR')
+  ) {
+    return 'EDITOR';
+  }
+  return 'EDITOR';
+}
+
+export function mapUserRoleToSecurityRole(role: UserRole): SecurityRole {
+  switch (role) {
+    case 'SUPER_ADMIN':
+      return 'Super Admin';
+    case 'PROJECT_MANAGER':
+      return 'Project Manager';
+    case 'VIEWER':
+      return 'Viewer';
+    case 'EDITOR':
+    default:
+      return 'BIM Specialist';
   }
 }
