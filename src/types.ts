@@ -150,6 +150,8 @@ export interface DailyWorkLog {
   billable: boolean;
   timestamp: string;
   memberEmail?: string;
+  userEmail?: string;
+  userId?: string;
 }
 
 export interface Employee {

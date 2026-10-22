@@ -27,6 +27,7 @@ import {
 import {
   SUPER_ADMIN_EMAIL,
   SUPER_ADMIN_NAME,
+  isSuperAdminEmail,
   mapAppRoleToAccessLevel,
   mapAppRoleToDisplayRole,
   normalizeUserRole,
@@ -34,7 +35,19 @@ import {
 import { persistUserRoleToDatabase, fetchUserRoleFromDatabase } from '../auth/roleSync';
 import { useOptionalAuth } from '../auth/AuthContext';
 import { db } from '../firebase/config';
-import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  onSnapshot,
+  updateDoc,
+  setDoc,
+  getDocs,
+  getDoc,
+  deleteDoc,
+  query,
+  where,
+  or,
+} from 'firebase/firestore';
 
 interface BimDataContextType {
   projects: BimProject[];
@@ -212,6 +225,63 @@ const DEFAULT_AUDIT_LOGS: AdminAuditLog[] = [
     details: 'Provisioned Super Admin credentials and master administrative privileges.',
   },
 ];
+
+export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
+  if (!u) return false;
+  const email = (u.email || '').trim().toLowerCase();
+  if (isSuperAdminEmail(email)) return true;
+  if (u.role === 'Super Admin' || u.securityRole === 'Super Admin') return true;
+  if (u.appRole && (u.appRole === 'SUPER_ADMIN' || normalizeUserRole(u.appRole) === 'SUPER_ADMIN')) return true;
+  if (u.isAdmin && (u.role?.toLowerCase().includes('admin') || u.securityRole?.toLowerCase().includes('admin'))) return true;
+  return false;
+};
+
+export const isRecordOwnedByMember = (
+  log: DailyWorkLog,
+  user: AuthUser | null | undefined,
+  allEmployees: Employee[]
+): boolean => {
+  if (!user) return false;
+  const userEmail = (user.email || '').trim().toLowerCase();
+  const userId = user.id || '';
+  const userGoogleId = user.googleId || '';
+
+  // 1. Direct email match
+  if (userEmail) {
+    if (log.memberEmail && log.memberEmail.trim().toLowerCase() === userEmail) return true;
+    if ((log as any).userEmail && (log as any).userEmail.trim().toLowerCase() === userEmail) return true;
+  }
+
+  // 2. Direct user ID match
+  if (userId) {
+    if ((log as any).userId === userId) return true;
+    if (log.employeeId === userId) return true;
+  }
+  if (userGoogleId) {
+    if ((log as any).userId === userGoogleId) return true;
+    if (log.employeeId === userGoogleId) return true;
+  }
+
+  // 3. Employee mapping match
+  const matchingEmp = allEmployees.find(
+    (e) =>
+      e.id === userId ||
+      (e.email && userEmail && e.email.trim().toLowerCase() === userEmail) ||
+      (e.name && user.name && e.name.trim().toLowerCase() === user.name.trim().toLowerCase())
+  );
+  if (matchingEmp) {
+    if (log.employeeId === matchingEmp.id) return true;
+    if (
+      log.employeeName &&
+      matchingEmp.name &&
+      log.employeeName.trim().toLowerCase() === matchingEmp.name.trim().toLowerCase()
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+};
 
 export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -581,14 +651,21 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   // Synchronize Firestore work_logs collection into state in real-time
+  // Enforcing strict access control at the database query level:
+  // - Super Admin: Queries and views all members' daily log records
+  // - Submitting Member: Queries and views ONLY their own daily log records
+  // - Other Members / Unauthenticated: Cannot view any other member's daily log records
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
+    const isSuper = isUserSuperAdmin(currentUser);
+
     try {
-      const colRef = collection(db, 'work_logs');
-      unsubscribe = onSnapshot(
-        colRef,
-        (snapshot) => {
-          if (!snapshot.empty) {
+      if (isSuper) {
+        // Super Admin query: Fetch all records across all members
+        const colRef = collection(db, 'work_logs');
+        unsubscribe = onSnapshot(
+          colRef,
+          (snapshot) => {
             const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
               const data = docSnap.data();
               return {
@@ -606,7 +683,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 notes: data.notes || '',
                 billable: data.billable !== undefined ? Boolean(data.billable) : true,
                 timestamp: data.timestamp || new Date().toISOString(),
-                memberEmail: data.memberEmail || data.userEmail || '',
+                memberEmail: (data.memberEmail || data.userEmail || '').toLowerCase(),
+                userEmail: (data.userEmail || data.memberEmail || '').toLowerCase(),
+                userId: data.userId || '',
               };
             });
 
@@ -617,23 +696,98 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
             });
 
-            // Merge with local state to protect and display all records
-            setWorkLogs((currentLogs) => {
-              const map = new Map<string, DailyWorkLog>();
-              currentLogs.forEach((l) => map.set(l.id, l));
-              list.forEach((l) => map.set(l.id, l));
-              return Array.from(map.values()).sort((a, b) => {
+            setWorkLogs(list);
+          },
+          (err) => {
+            console.warn('Super Admin work_logs listener notice:', err);
+          }
+        );
+      } else if (currentUser && (currentUser.email || currentUser.id)) {
+        // Submitting Member query: Strictly scoped database query for only their own records
+        const cleanEmail = (currentUser.email || '').trim().toLowerCase();
+        const userId = currentUser.id || '';
+        const userGoogleId = currentUser.googleId || '';
+
+        const matchingEmp = employees.find(
+          (e) =>
+            e.id === userId ||
+            (e.email && cleanEmail && e.email.trim().toLowerCase() === cleanEmail) ||
+            (e.name && currentUser.name && e.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
+        );
+        const empId = matchingEmp?.id || '';
+
+        const conditions: any[] = [];
+        if (cleanEmail) {
+          conditions.push(where('memberEmail', '==', cleanEmail));
+          conditions.push(where('userEmail', '==', cleanEmail));
+          if (currentUser.email && currentUser.email.trim() !== cleanEmail) {
+            conditions.push(where('memberEmail', '==', currentUser.email.trim()));
+          }
+        }
+        if (userId) {
+          conditions.push(where('userId', '==', userId));
+          conditions.push(where('employeeId', '==', userId));
+        }
+        if (userGoogleId && userGoogleId !== userId) {
+          conditions.push(where('userId', '==', userGoogleId));
+          conditions.push(where('employeeId', '==', userGoogleId));
+        }
+        if (empId && empId !== userId) {
+          conditions.push(where('employeeId', '==', empId));
+        }
+
+        if (conditions.length > 0) {
+          const colRef = collection(db, 'work_logs');
+          const memberQuery = query(colRef, or(...conditions));
+
+          unsubscribe = onSnapshot(
+            memberQuery,
+            (snapshot) => {
+              const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
+                const data = docSnap.data();
+                return {
+                  id: docSnap.id,
+                  employeeId: data.employeeId || '',
+                  employeeName: data.employeeName || 'BIM Modeler',
+                  projectId: data.projectId || '',
+                  projectName: data.projectName || 'BIM Project',
+                  date: data.date || new Date().toISOString().slice(0, 10),
+                  hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
+                  discipline: (data.discipline as Discipline) || 'BIM - ACS',
+                  activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
+                  taskName: data.taskName || 'BIM Modeling Task',
+                  lodStage: (data.lodStage as LODLevel) || 'LOD 350',
+                  notes: data.notes || '',
+                  billable: data.billable !== undefined ? Boolean(data.billable) : true,
+                  timestamp: data.timestamp || new Date().toISOString(),
+                  memberEmail: (data.memberEmail || data.userEmail || '').toLowerCase(),
+                  userEmail: (data.userEmail || data.memberEmail || '').toLowerCase(),
+                  userId: data.userId || '',
+                };
+              });
+
+              // Defense-in-depth: Ensure zero leakage of any other member's record
+              const myLogs = list.filter((l) => isRecordOwnedByMember(l, currentUser, employees));
+
+              myLogs.sort((a, b) => {
                 const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
                 if (dateDiff !== 0) return dateDiff;
                 return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
               });
-            });
-          }
-        },
-        (err) => {
-          console.warn('Firestore work_logs listener notice:', err);
+
+              setWorkLogs(myLogs);
+            },
+            (err) => {
+              console.warn('Member work_logs query notice:', err);
+            }
+          );
+        } else {
+          setWorkLogs([]);
         }
-      );
+      } else {
+        // Other Members / Unauthenticated: Cannot view any records
+        setWorkLogs([]);
+      }
     } catch (e) {
       console.warn('Firestore work_logs setup error:', e);
     }
@@ -641,7 +795,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, []);
+  }, [
+    currentUser?.email,
+    currentUser?.id,
+    currentUser?.role,
+    currentUser?.securityRole,
+    currentUser?.appRole,
+    employees,
+  ]);
 
   // One-time initial push of existing local logs to Firestore to ensure full persistence across devices
   useEffect(() => {
@@ -1664,14 +1825,21 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     logData: Omit<DailyWorkLog, 'id' | 'timestamp'>
   ): DailyWorkLog => {
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const userEmail = (logData.memberEmail || currentUser?.email || '').trim().toLowerCase();
+    const userId = (logData as any).userId || currentUser?.id || '';
     const newLog: DailyWorkLog = {
       ...logData,
       id: logId,
+      memberEmail: userEmail,
+      userEmail: userEmail,
+      userId: userId,
       timestamp: new Date().toISOString(),
     };
 
-    // 1. Optimistic state update
-    setWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
+    // 1. Optimistic state update (if Super Admin or owned by submitting member)
+    if (isUserSuperAdmin(currentUser) || isRecordOwnedByMember(newLog, currentUser, employees)) {
+      setWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
+    }
 
     // 2. Persist to central Firestore work_logs collection
     try {

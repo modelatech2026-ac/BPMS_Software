@@ -81,15 +81,50 @@ service cloud.firestore {
       allow create, update, delete: if true;
     }
 
+    function isSuperAdmin() {
+      return isAdmin() || (
+        isSignedIn() && (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'SUPER_ADMIN') ||
+          (exists(/databases/$(database)/documents/access_requests/$(request.auth.uid)) &&
+           (get(/databases/$(database)/documents/access_requests/$(request.auth.uid)).data.assignedRole == 'SUPER_ADMIN' ||
+            get(/databases/$(database)/documents/access_requests/$(request.auth.uid)).data.role == 'Super Admin'))
+        )
+      );
+    }
+
+    function isLogOwner(data) {
+      return isSignedIn() && (
+        ('memberEmail' in data && data.memberEmail is string && request.auth.token.email != null && data.memberEmail.lower() == request.auth.token.email.lower()) ||
+        ('userEmail' in data && data.userEmail is string && request.auth.token.email != null && data.userEmail.lower() == request.auth.token.email.lower()) ||
+        ('userId' in data && data.userId is string && data.userId == request.auth.uid) ||
+        ('employeeId' in data && data.employeeId is string && data.employeeId == request.auth.uid)
+      );
+    }
+
     // Daily Work Logs Collection
     match /work_logs/{logId} {
-      allow read: if true;
-      allow create, update, delete: if true;
+      allow read: if isSuperAdmin() || isLogOwner(resource.data);
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        ('memberEmail' in incoming() && incoming().memberEmail is string && request.auth.token.email != null && incoming().memberEmail.lower() == request.auth.token.email.lower()) ||
+        ('userEmail' in incoming() && incoming().userEmail is string && request.auth.token.email != null && incoming().userEmail.lower() == request.auth.token.email.lower()) ||
+        ('userId' in incoming() && incoming().userId is string && incoming().userId == request.auth.uid) ||
+        ('employeeId' in incoming() && incoming().employeeId is string && incoming().employeeId == request.auth.uid)
+      );
+      allow update, delete: if isSuperAdmin() || isLogOwner(resource.data);
     }
 
     match /daily_logs/{logId} {
-      allow read: if true;
-      allow create, update, delete: if true;
+      allow read: if isSuperAdmin() || isLogOwner(resource.data);
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        ('memberEmail' in incoming() && incoming().memberEmail is string && request.auth.token.email != null && incoming().memberEmail.lower() == request.auth.token.email.lower()) ||
+        ('userEmail' in incoming() && incoming().userEmail is string && request.auth.token.email != null && incoming().userEmail.lower() == request.auth.token.email.lower()) ||
+        ('userId' in incoming() && incoming().userId is string && incoming().userId == request.auth.uid) ||
+        ('employeeId' in incoming() && incoming().employeeId is string && incoming().employeeId == request.auth.uid)
+      );
+      allow update, delete: if isSuperAdmin() || isLogOwner(resource.data);
     }
   }
 }

@@ -33,7 +33,18 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     projects,
     deleteWorkLog,
     getEmployeeLoggedHours,
+    currentUser,
   } = useBimData();
+
+  const isSuperAdmin = useMemo(() => {
+    if (!currentUser) return false;
+    const cleanEmail = (currentUser.email || '').toLowerCase().trim();
+    if (cleanEmail === 'modelatech2026@gmail.com' || cleanEmail === 'sushoovandas@gmail.com') return true;
+    if (currentUser.role === 'Super Admin' || currentUser.securityRole === 'Super Admin') return true;
+    if (currentUser.appRole === 'SUPER_ADMIN') return true;
+    if (currentUser.isAdmin && (currentUser.role?.toLowerCase().includes('admin') || currentUser.securityRole?.toLowerCase().includes('admin'))) return true;
+    return false;
+  }, [currentUser]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployeeFilter, setSelectedEmployeeFilter] = useState('all');
@@ -53,8 +64,38 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     { date: '2026-08-18', label: 'Tue (Today)', dayNum: '18' },
   ];
 
-  // Combine registered employees with any additional members who have logged hours
+  // Super Admin tracks all team members; Submitting Member tracks only their own timesheet
   const allTrackedEmployees = useMemo(() => {
+    if (!isSuperAdmin) {
+      if (!currentUser) return [];
+      const userEmail = (currentUser.email || '').toLowerCase().trim();
+      const userId = currentUser.id || '';
+      const matched = employees.find(
+        (e) =>
+          e.id === userId ||
+          (e.email && e.email.toLowerCase().trim() === userEmail) ||
+          (e.name && currentUser.name && e.name.toLowerCase().trim() === currentUser.name.toLowerCase().trim())
+      );
+      if (matched) return [matched];
+      return [
+        {
+          id: userId || 'emp-user',
+          name: currentUser.name || userEmail.split('@')[0] || 'My Timesheet',
+          email: currentUser.email || '',
+          avatar: currentUser.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.name || 'User')}`,
+          role: (currentUser.role || 'BIM Modeler') as any,
+          primaryDiscipline: 'BIM - ACS' as Discipline,
+          discipline: 'BIM - ACS' as Discipline,
+          weeklyCapacityHours: 40,
+          experienceYears: 3,
+          status: 'Active' as const,
+          activeProjectIds: [],
+          skills: ['BIM - ACS'],
+          phone: '',
+        },
+      ];
+    }
+
     const list = [...employees];
     const knownKeys = new Set(
       employees.flatMap((e) => [e.id, (e.name || '').toLowerCase().trim(), (e.email || '').toLowerCase().trim()].filter(Boolean))
@@ -62,8 +103,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
     (workLogs || []).forEach((log) => {
       const nameKey = (log.employeeName || '').toLowerCase().trim();
-      const emailKey = ((log as any).memberEmail || '').toLowerCase().trim();
-      const idKey = log.employeeId;
+      const emailKey = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
+      const idKey = log.employeeId || (log as any).userId;
 
       const alreadyExists =
         (idKey && knownKeys.has(idKey)) ||
@@ -93,10 +134,22 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     });
 
     return list;
-  }, [employees, workLogs]);
+  }, [employees, workLogs, isSuperAdmin, currentUser]);
 
-  // Filtered log list: All successfully submitted records are visible to the Super Admin
+  // Filtered log list: Super Admin sees all records, Submitting Member sees only their own
   const filteredLogs = (workLogs || []).filter((log) => {
+    const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
+
+    if (!isSuperAdmin) {
+      const userEmail = (currentUser?.email || '').trim().toLowerCase();
+      const userId = currentUser?.id || '';
+      const isOwned =
+        (userEmail && ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase() === userEmail)) ||
+        (userId && ((log as any).userId === userId || log.employeeId === userId)) ||
+        (selectedEmpObj && (log.employeeName || '').toLowerCase().trim() === selectedEmpObj.name.toLowerCase().trim());
+      if (!isOwned) return false;
+    }
+
     const matchesSearch =
       (log.notes || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (log.taskName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -105,8 +158,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       (log.discipline || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (log.activityType || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-    const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
     const matchesEmp =
+      !isSuperAdmin ||
       selectedEmployeeFilter === 'all' ||
       log.employeeId === selectedEmployeeFilter ||
       (selectedEmpObj && (log.employeeName || '').toLowerCase().trim() === selectedEmpObj.name.toLowerCase().trim()) ||
@@ -208,8 +261,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
-            <span className="text-xs text-slate-400 font-semibold uppercase">Active Engaged Staff</span>
-            <p className="text-2xl font-bold text-white mt-1">{allTrackedEmployees.length} Specialists</p>
+            <span className="text-xs text-slate-400 font-semibold uppercase">
+              {isSuperAdmin ? 'Active Engaged Staff' : 'Active Modeler'}
+            </span>
+            <p className="text-2xl font-bold text-white mt-1">
+              {isSuperAdmin ? `${allTrackedEmployees.length} Specialists` : (currentUser?.name || 'My Record')}
+            </p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center">
             <User className="w-5 h-5" />
@@ -248,7 +305,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between text-xs text-slate-300 bg-slate-800/40">
             <span className="font-semibold text-white">
-              Weekly Team Timesheet Matrix (Aug 12 - Aug 18, 2026)
+              {isSuperAdmin
+                ? 'Weekly Team Timesheet Matrix (Aug 12 - Aug 18, 2026)'
+                : 'My Weekly Timesheet Matrix (Aug 12 - Aug 18, 2026)'}
             </span>
             <span className="text-slate-400">Standard Target: 40.0 hrs / week</span>
           </div>
@@ -376,19 +435,27 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
             </div>
 
             <div>
-              <label className="block text-slate-400 font-medium mb-1">Filter by Employee</label>
-              <select
-                value={selectedEmployeeFilter}
-                onChange={(e) => setSelectedEmployeeFilter(e.target.value)}
-                className="w-full bg-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-              >
-                <option value="all">All Employees</option>
-                {allTrackedEmployees.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name} {e.role ? `(${e.role})` : ''}
-                  </option>
-                ))}
-              </select>
+              <label className="block text-slate-400 font-medium mb-1">
+                {isSuperAdmin ? 'Filter by Employee' : 'Member Timesheet'}
+              </label>
+              {isSuperAdmin ? (
+                <select
+                  value={selectedEmployeeFilter}
+                  onChange={(e) => setSelectedEmployeeFilter(e.target.value)}
+                  className="w-full bg-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                >
+                  <option value="all">All Employees ({allTrackedEmployees.length})</option>
+                  {allTrackedEmployees.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name} {e.role ? `(${e.role})` : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="w-full bg-slate-800/80 text-blue-300 font-semibold rounded-lg px-2.5 py-1.5 border border-slate-700/80 text-xs truncate">
+                  {currentUser?.name || currentUser?.email || 'My Log Records'}
+                </div>
+              )}
             </div>
 
             <div>
