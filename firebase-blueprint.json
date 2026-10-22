@@ -184,6 +184,72 @@
         }
       },
       "required": ["name"]
+    },
+    "DailyWorkLog": {
+      "title": "DailyWorkLog",
+      "description": "Daily timesheet work log entry submitted by a team member for project tasks and LOD tracking",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "employeeId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "employeeName": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "projectId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "projectName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "hoursLogged": {
+          "type": "number"
+        },
+        "discipline": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "activityType": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "taskName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "lodStage": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "billable": {
+          "type": "boolean"
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "memberEmail": {
+          "type": "string",
+          "maxLength": 150
+        }
+      },
+      "required": ["employeeId", "projectId", "date", "hoursLogged"]
     }
   },
   "firestore": {
@@ -206,6 +272,10 @@
     "/disciplines/{disciplineId}": {
       "schema": "Discipline",
       "description": "Collection of active BIM disciplines"
+    },
+    "/work_logs/{logId}": {
+      "schema": "DailyWorkLog",
+      "description": "Collection of daily work log timesheet records submitted by team members"
     }
   }
 }

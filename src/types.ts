@@ -149,6 +149,7 @@ export interface DailyWorkLog {
   notes: string;
   billable: boolean;
   timestamp: string;
+  memberEmail?: string;
 }
 
 export interface Employee {

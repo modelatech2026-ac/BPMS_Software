@@ -6,6 +6,7 @@ import {
   GeneratedStakeholderReport,
   ViewTab,
   Discipline,
+  ActivityType,
   LODLevel,
   Milestone,
   ClashRecord,
@@ -33,7 +34,7 @@ import {
 import { persistUserRoleToDatabase, fetchUserRoleFromDatabase } from '../auth/roleSync';
 import { useOptionalAuth } from '../auth/AuthContext';
 import { db } from '../firebase/config';
-import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from 'firebase/firestore';
 
 interface BimDataContextType {
   projects: BimProject[];
@@ -577,6 +578,95 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => {
       if (unsubscribe) unsubscribe();
     };
+  }, []);
+
+  // Synchronize Firestore work_logs collection into state in real-time
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const colRef = collection(db, 'work_logs');
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          if (!snapshot.empty) {
+            const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
+              const data = docSnap.data();
+              return {
+                id: docSnap.id,
+                employeeId: data.employeeId || '',
+                employeeName: data.employeeName || 'BIM Modeler',
+                projectId: data.projectId || '',
+                projectName: data.projectName || 'BIM Project',
+                date: data.date || new Date().toISOString().slice(0, 10),
+                hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
+                discipline: (data.discipline as Discipline) || 'BIM - ACS',
+                activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
+                taskName: data.taskName || 'BIM Modeling Task',
+                lodStage: (data.lodStage as LODLevel) || 'LOD 350',
+                notes: data.notes || '',
+                billable: data.billable !== undefined ? Boolean(data.billable) : true,
+                timestamp: data.timestamp || new Date().toISOString(),
+                memberEmail: data.memberEmail || data.userEmail || '',
+              };
+            });
+
+            // Sort newest first
+            list.sort((a, b) => {
+              const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+              if (dateDiff !== 0) return dateDiff;
+              return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+            });
+
+            // Merge with local state to protect and display all records
+            setWorkLogs((currentLogs) => {
+              const map = new Map<string, DailyWorkLog>();
+              currentLogs.forEach((l) => map.set(l.id, l));
+              list.forEach((l) => map.set(l.id, l));
+              return Array.from(map.values()).sort((a, b) => {
+                const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+                if (dateDiff !== 0) return dateDiff;
+                return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+              });
+            });
+          }
+        },
+        (err) => {
+          console.warn('Firestore work_logs listener notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Firestore work_logs setup error:', e);
+    }
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // One-time initial push of existing local logs to Firestore to ensure full persistence across devices
+  useEffect(() => {
+    const syncExistingLocalLogs = async () => {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEYS.WORK_LOGS);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            for (const log of parsed) {
+              if (log && log.id) {
+                const logDoc = doc(db, 'work_logs', log.id);
+                const snap = await getDoc(logDoc);
+                if (!snap.exists()) {
+                  await setDoc(logDoc, log, { merge: true });
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Existing work logs Firestore sync notice:', err);
+      }
+    };
+    syncExistingLocalLogs();
   }, []);
 
   useEffect(() => {
@@ -1459,23 +1549,15 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const getEmployeeById = (id: string) => employees.find((e) => e.id === id);
 
   const getProjectCompletedHours = (projectId: string): number => {
-    const activeEmpIds = new Set(employees.map((e) => e.id));
-    const activeEmpNames = new Set(employees.map((e) => (e.name || '').toLowerCase().trim()));
-    // Sum hours from workLogs for this project exclusively for active team members
-    const logged = workLogs
-      .filter(
-        (w) =>
-          w.projectId === projectId &&
-          (activeEmpIds.has(w.employeeId) || activeEmpNames.has((w.employeeName || '').toLowerCase().trim()))
-      )
-      .reduce((sum, w) => sum + w.hoursLogged, 0);
+    // Sum hours from all workLogs for this project
+    const logged = (workLogs || [])
+      .filter((w) => w.projectId === projectId)
+      .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
 
-    // Also include task completion if logged directly for active members
+    // Also include task completion if logged directly
     const project = getProjectById(projectId);
     const taskHours = project
-      ? project.tasks
-          .filter((t) => activeEmpIds.has(t.assignedEmployeeId))
-          .reduce((sum, t) => sum + t.completedHours, 0)
+      ? project.tasks.reduce((sum, t) => sum + (Number(t.completedHours) || 0), 0)
       : 0;
 
     const baseHours = project?.totalCompletedHours ?? 0;
@@ -1486,12 +1568,17 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     employeeId: string,
     filterRange: string = 'this-week'
   ): number => {
-    // If member is no longer present in the active members collection/state, return 0
-    if (!employees.some((e) => e.id === employeeId)) return 0;
+    const emp = employees.find((e) => e.id === employeeId);
+    const empName = (emp?.name || '').toLowerCase().trim();
+    const empEmail = (emp?.email || '').toLowerCase().trim();
 
     const today = new Date('2026-08-18');
-    const logs = workLogs.filter((w) => {
-      if (w.employeeId !== employeeId) return false;
+    const logs = (workLogs || []).filter((w) => {
+      const isMatch =
+        w.employeeId === employeeId ||
+        (empName && (w.employeeName || '').toLowerCase().trim() === empName) ||
+        (empEmail && ((w as any).memberEmail || '').toLowerCase().trim() === empEmail);
+      if (!isMatch) return false;
       if (filterRange === 'all') return true;
 
       const logDate = new Date(w.date);
@@ -1512,7 +1599,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       return true;
     });
 
-    return logs.reduce((sum, l) => sum + l.hoursLogged, 0);
+    return logs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
   };
 
   // Actions
@@ -1576,20 +1663,33 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const addWorkLog = (
     logData: Omit<DailyWorkLog, 'id' | 'timestamp'>
   ): DailyWorkLog => {
+    const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const newLog: DailyWorkLog = {
       ...logData,
-      id: `log-${Date.now()}`,
+      id: logId,
       timestamp: new Date().toISOString(),
     };
-    setWorkLogs((prev) => [newLog, ...prev]);
 
-    // Also update project task completed hours if applicable
+    // 1. Optimistic state update
+    setWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
+
+    // 2. Persist to central Firestore work_logs collection
+    try {
+      const logDoc = doc(db, 'work_logs', logId);
+      setDoc(logDoc, newLog, { merge: true }).catch((err) =>
+        console.warn('Firestore addWorkLog sync notice:', err)
+      );
+    } catch (fsErr) {
+      console.warn('Firestore addWorkLog error:', fsErr);
+    }
+
+    // 3. Update project task completed hours if applicable
     setProjects((prev) =>
       prev.map((proj) => {
         if (proj.id !== logData.projectId) return proj;
         const updatedTasks = proj.tasks.map((task) => {
           if (task.name === logData.taskName) {
-            const newCompleted = task.completedHours + logData.hoursLogged;
+            const newCompleted = (task.completedHours || 0) + (Number(logData.hoursLogged) || 0);
             return {
               ...task,
               completedHours: newCompleted,
@@ -1601,7 +1701,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           }
           return task;
         });
-        return { ...proj, tasks: updatedTasks };
+        const updatedProj = { ...proj, tasks: updatedTasks };
+        try {
+          updateDoc(doc(db, 'projects', proj.id), { tasks: updatedTasks }).catch(() => {});
+        } catch {}
+        return updatedProj;
       })
     );
 
@@ -1612,10 +1716,24 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     setWorkLogs((prev) =>
       prev.map((w) => (w.id === id ? { ...w, ...updates } : w))
     );
+    try {
+      updateDoc(doc(db, 'work_logs', id), updates).catch((err) =>
+        console.warn('Firestore updateWorkLog sync notice:', err)
+      );
+    } catch (e) {
+      console.warn('Firestore updateWorkLog notice:', e);
+    }
   };
 
   const deleteWorkLog = (id: string) => {
     setWorkLogs((prev) => prev.filter((w) => w.id !== id));
+    try {
+      deleteDoc(doc(db, 'work_logs', id)).catch((err) =>
+        console.warn('Firestore deleteWorkLog sync notice:', err)
+      );
+    } catch (e) {
+      console.warn('Firestore deleteWorkLog notice:', e);
+    }
   };
 
   const addEmployee = (empData: Omit<Employee, 'id'>): Employee => {

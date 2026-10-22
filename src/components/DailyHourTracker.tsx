@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Clock,
   Calendar,
@@ -53,27 +53,65 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     { date: '2026-08-18', label: 'Tue (Today)', dayNum: '18' },
   ];
 
-  const activeMembers = employees;
-
-  // Filtered log list
-  const filteredLogs = (workLogs || []).filter((log) => {
-    // Live active team member filtering
-    const isActive = activeMembers.some(
-      (m) =>
-        m.id === log.employeeId ||
-        (log.employeeName && m.name.toLowerCase().trim() === log.employeeName.toLowerCase().trim()) ||
-        ((log as any).memberEmail && m.email.toLowerCase().trim() === ((log as any).memberEmail || '').toLowerCase().trim())
+  // Combine registered employees with any additional members who have logged hours
+  const allTrackedEmployees = useMemo(() => {
+    const list = [...employees];
+    const knownKeys = new Set(
+      employees.flatMap((e) => [e.id, (e.name || '').toLowerCase().trim(), (e.email || '').toLowerCase().trim()].filter(Boolean))
     );
-    if (!isActive) return false;
 
+    (workLogs || []).forEach((log) => {
+      const nameKey = (log.employeeName || '').toLowerCase().trim();
+      const emailKey = ((log as any).memberEmail || '').toLowerCase().trim();
+      const idKey = log.employeeId;
+
+      const alreadyExists =
+        (idKey && knownKeys.has(idKey)) ||
+        (nameKey && knownKeys.has(nameKey)) ||
+        (emailKey && knownKeys.has(emailKey));
+
+      if (!alreadyExists && (nameKey || idKey)) {
+        if (idKey) knownKeys.add(idKey);
+        if (nameKey) knownKeys.add(nameKey);
+        if (emailKey) knownKeys.add(emailKey);
+        list.push({
+          id: log.employeeId || `emp-${Date.now()}`,
+          name: log.employeeName || 'Team Member',
+          email: (log as any).memberEmail || '',
+          avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(log.employeeName || 'User')}`,
+          role: 'BIM Modeler' as any,
+          primaryDiscipline: log.discipline || 'BIM - ACS',
+          discipline: log.discipline || 'BIM - ACS',
+          weeklyCapacityHours: 40,
+          experienceYears: 3,
+          status: 'Active',
+          activeProjectIds: [log.projectId].filter(Boolean),
+          skills: [log.discipline || 'BIM - ACS'],
+          phone: '',
+        });
+      }
+    });
+
+    return list;
+  }, [employees, workLogs]);
+
+  // Filtered log list: All successfully submitted records are visible to the Super Admin
+  const filteredLogs = (workLogs || []).filter((log) => {
     const matchesSearch =
       (log.notes || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (log.taskName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (log.employeeName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (log.projectName || '').toLowerCase().includes(searchQuery.toLowerCase());
+      (log.projectName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (log.discipline || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (log.activityType || '').toLowerCase().includes(searchQuery.toLowerCase());
 
+    const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
     const matchesEmp =
-      selectedEmployeeFilter === 'all' || log.employeeId === selectedEmployeeFilter;
+      selectedEmployeeFilter === 'all' ||
+      log.employeeId === selectedEmployeeFilter ||
+      (selectedEmpObj && (log.employeeName || '').toLowerCase().trim() === selectedEmpObj.name.toLowerCase().trim()) ||
+      (selectedEmpObj && ((log as any).memberEmail || '').toLowerCase().trim() === selectedEmpObj.email.toLowerCase().trim());
+
     const matchesProj =
       selectedProjectFilter === 'all' || log.projectId === selectedProjectFilter;
     const matchesDisc =
@@ -82,7 +120,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     return matchesSearch && matchesEmp && matchesProj && matchesDisc;
   });
 
-  const totalFilteredHours = filteredLogs.reduce((sum, l) => sum + (l.hoursLogged || 0), 0);
+  const totalFilteredHours = filteredLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
 
   // Export to CSV function
   const exportLogsToCsv = () => {
@@ -171,7 +209,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
             <span className="text-xs text-slate-400 font-semibold uppercase">Active Engaged Staff</span>
-            <p className="text-2xl font-bold text-white mt-1">{employees.length} Specialists</p>
+            <p className="text-2xl font-bold text-white mt-1">{allTrackedEmployees.length} Specialists</p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center">
             <User className="w-5 h-5" />
@@ -231,11 +269,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {employees.map((emp) => {
+                {allTrackedEmployees.map((emp) => {
                   let weekSum = 0;
                   const dailyHours = weekDays.map((d) => {
                     const dayLogs = workLogs.filter(
-                      (w) => w.employeeId === emp.id && w.date === d.date
+                      (w) =>
+                        (w.employeeId === emp.id ||
+                          (emp.name && (w.employeeName || '').toLowerCase().trim() === emp.name.toLowerCase().trim()) ||
+                          (emp.email && ((w as any).memberEmail || '').toLowerCase().trim() === emp.email.toLowerCase().trim())) &&
+                        w.date === d.date
                     );
                     const hours = dayLogs.reduce((sum, l) => sum + l.hoursLogged, 0);
                     weekSum += hours;
@@ -341,9 +383,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 className="w-full bg-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
               >
                 <option value="all">All Employees</option>
-                {employees.map((e) => (
+                {allTrackedEmployees.map((e) => (
                   <option key={e.id} value={e.id}>
-                    {e.name} ({e.role})
+                    {e.name} {e.role ? `(${e.role})` : ''}
                   </option>
                 ))}
               </select>
@@ -387,23 +429,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <tbody className="divide-y divide-slate-800">
                   {filteredLogs.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-500">
+                      <td colSpan={8} className="py-12 text-center text-slate-500">
                         <p className="text-sm font-semibold text-slate-400">No daily hour logs recorded.</p>
                         <p className="text-xs text-slate-500 mt-1">Click "Log Daily Hours" above to record hours for projects.</p>
                       </td>
                     </tr>
                   ) : (
                     filteredLogs.map((log) => {
-                    const isActive = activeMembers.some(
-                      (m) =>
-                        m.id === log.employeeId ||
-                        (log.employeeName && m.name.toLowerCase().trim() === log.employeeName.toLowerCase().trim()) ||
-                        ((log as any).memberEmail && m.email.toLowerCase().trim() === ((log as any).memberEmail || '').toLowerCase().trim())
-                    );
-                    if (!isActive) return null;
-
-                    return (
-                      <tr key={log.id} className="hover:bg-slate-800/40 transition">
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-800/40 transition">
                       <td className="p-3.5 font-mono text-slate-400 whitespace-nowrap">
                         {log.date}
                       </td>

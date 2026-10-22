@@ -24,7 +24,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   onClose,
   preselectedProjectId,
 }) => {
-  const { projects, employees, addWorkLog } = useBimData();
+  const { projects, employees, addWorkLog, currentUser } = useBimData();
 
   const [projectId, setProjectId] = useState<string>(
     preselectedProjectId || projects[0]?.id || ''
@@ -48,6 +48,26 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     }
   }, [preselectedProjectId]);
 
+  // Auto-select current logged in user if available
+  useEffect(() => {
+    if (!isOpen) return;
+    if (currentUser?.email) {
+      const match = employees.find(
+        (e) =>
+          e.id === currentUser.id ||
+          (e.email && e.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+          (e.name && e.name.toLowerCase() === currentUser.name?.toLowerCase())
+      );
+      if (match) {
+        setEmployeeId(match.id);
+      } else if (currentUser.id) {
+        setEmployeeId(currentUser.id);
+      }
+    } else if (employees.length > 0 && !employeeId) {
+      setEmployeeId(employees[0].id);
+    }
+  }, [isOpen, currentUser, employees]);
+
   const selectedProject = projects.find((p) => p.id === projectId);
   const selectedEmployee = employees.find((e) => e.id === employeeId);
 
@@ -66,9 +86,22 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     e.preventDefault();
     if (!projectId || !employeeId || hours <= 0) return;
 
+    const selectedEmp = employees.find((e) => e.id === employeeId);
+    const finalEmpId = employeeId || (currentUser?.id ? currentUser.id : 'emp-user');
+    const finalEmpName =
+      selectedEmp?.name ||
+      (employeeId === currentUser?.id ? currentUser?.name : undefined) ||
+      currentUser?.name ||
+      'BIM Modeler';
+    const memberEmail =
+      selectedEmp?.email ||
+      (employeeId === currentUser?.id ? currentUser?.email : undefined) ||
+      currentUser?.email ||
+      '';
+
     addWorkLog({
-      employeeId,
-      employeeName: selectedEmployee?.name || 'BIM Modeler',
+      employeeId: finalEmpId,
+      employeeName: finalEmpName,
       projectId,
       projectName: selectedProject?.name || 'BIM Project',
       date,
@@ -79,6 +112,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       lodStage,
       notes: notes || `Logged ${hours}h on ${activityType} for ${selectedProject?.name}`,
       billable,
+      memberEmail,
     });
 
     try {
@@ -137,6 +171,16 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
                     {emp.name} ({emp.role})
                   </option>
                 ))}
+                {currentUser &&
+                  !employees.some(
+                    (e) =>
+                      e.id === currentUser.id ||
+                      (e.email && currentUser.email && e.email.toLowerCase() === currentUser.email.toLowerCase())
+                  ) && (
+                    <option value={currentUser.id}>
+                      {currentUser.name || currentUser.email} ({currentUser.role || 'Member'})
+                    </option>
+                  )}
               </select>
             </div>
 

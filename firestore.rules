@@ -80,5 +80,16 @@ service cloud.firestore {
       allow read: if true;
       allow create, update, delete: if true;
     }
+
+    // Daily Work Logs Collection
+    match /work_logs/{logId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
+
+    match /daily_logs/{logId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
   }
 }
