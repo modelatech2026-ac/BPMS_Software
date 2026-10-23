@@ -438,6 +438,63 @@ export const isRecordOwnedByMember = (
   return false;
 };
 
+const normalizeProjectNameKey = (name?: string): string =>
+  (name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
+  const byId = new Map<string, BimProject>();
+  const byName = new Map<string, BimProject>();
+
+  existingList.forEach((p) => {
+    if (p && p.id) byId.set(p.id, p);
+    const nKey = normalizeProjectNameKey(p?.name);
+    if (nKey && !byName.has(nKey)) byName.set(nKey, p);
+  });
+
+  const masterNameKeys = new Set(INITIAL_PROJECTS.map((mp) => normalizeProjectNameKey(mp.name)));
+  const masterIds = new Set(INITIAL_PROJECTS.map((mp) => mp.id));
+
+  // Keep any custom user-added projects that are not part of the 32 master spreadsheet projects at the top
+  const customProjects = existingList.filter(
+    (p) =>
+      p &&
+      p.id &&
+      !masterIds.has(p.id) &&
+      !masterNameKeys.has(normalizeProjectNameKey(p.name))
+  );
+
+  // Build the 32 master projects in exact Resource Allocation Sheet order
+  const masterMerged = INITIAL_PROJECTS.map((masterProj) => {
+    const matched =
+      byId.get(masterProj.id) || byName.get(normalizeProjectNameKey(masterProj.name));
+    if (!matched) {
+      return masterProj;
+    }
+    return {
+      ...masterProj,
+      ...matched,
+      id: masterProj.id,
+      code: masterProj.code,
+      name: masterProj.name,
+      totalEstimatedHours:
+        matched.totalEstimatedHours !== undefined &&
+        matched.totalEstimatedHours !== 0 &&
+        masterProj.totalEstimatedHours === 0
+          ? matched.totalEstimatedHours
+          : masterProj.totalEstimatedHours,
+      plannedDeliveryDate: masterProj.plannedDeliveryDate,
+      targetCompletionDate: masterProj.targetCompletionDate,
+      actualDeliveredDate: matched.actualDeliveredDate || masterProj.actualDeliveredDate,
+      status:
+        !matched.status || matched.status === 'Not Started'
+          ? masterProj.status
+          : matched.status,
+    };
+  });
+
+  return [...customProjects, ...masterMerged];
+};
+
 export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
@@ -447,7 +504,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return mergeWithMasterProjects(parsed);
         }
       }
     } catch {}
@@ -903,44 +960,99 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           });
 
           setProjects((prev) => {
-            // Seed initial portfolio projects to Firestore once if not yet present in Firestore
+            const masterById = new Map(INITIAL_PROJECTS.map((mp) => [mp.id, mp]));
+            const masterByName = new Map(
+              INITIAL_PROJECTS.map((mp) => [normalizeProjectNameKey(mp.name), mp])
+            );
+
+            // Seed / sync all 32 master portfolio projects to Firestore once
             if (!hasSeededProjectsRef.current && !snapshot.metadata.fromCache) {
               hasSeededProjectsRef.current = true;
-              prev.forEach((p) => {
-                if (!firestoreDocsMap.has(p.id)) {
-                  const sanitized = JSON.parse(JSON.stringify(p));
-                  setDoc(
-                    doc(db, 'projects', p.id),
-                    {
-                      ...sanitized,
-                      projectName: p.name,
-                      status: p.status || 'WIP',
-                      estimatedHours: Number(p.totalEstimatedHours) || 0,
-                      totalHoursLogged: Number(p.totalCompletedHours) || 0,
-                      plannedDeliveryDate: p.plannedDeliveryDate || p.targetCompletionDate || '2026-11-30',
-                      createdAt: serverTimestamp(),
-                    },
-                    { merge: true }
-                  ).catch(() => {});
+              const baseList = mergeWithMasterProjects(prev);
+              baseList.forEach((p) => {
+                const sanitized = JSON.parse(JSON.stringify(p));
+                setDoc(
+                  doc(db, 'projects', p.id),
+                  {
+                    ...sanitized,
+                    projectName: p.name,
+                    status: p.status || 'WIP',
+                    estimatedHours: Number(p.totalEstimatedHours) || 0,
+                    totalHoursLogged: Number(p.totalCompletedHours) || 0,
+                    plannedDeliveryDate: p.plannedDeliveryDate || p.targetCompletionDate || '',
+                    createdAt: serverTimestamp(),
+                  },
+                  { merge: true }
+                ).catch(() => {});
+              });
+
+              // Remove any legacy duplicate Firestore docs that have the same normalized name as a canonical master project
+              firestoreDocsMap.forEach((remote, docId) => {
+                const nKey = normalizeProjectNameKey(remote.name);
+                const canonicalMaster = nKey ? masterByName.get(nKey) : undefined;
+                if (canonicalMaster && canonicalMaster.id !== docId) {
+                  deleteDoc(doc(db, 'projects', docId)).catch(() => {});
                 }
               });
             }
 
             if (firestoreDocsMap.size === 0) {
-              return prev;
+              return mergeWithMasterProjects(prev);
             }
 
-            const existingIds = new Set(prev.map((p) => p.id));
-            const merged = prev.map((p) => {
-              const remote = firestoreDocsMap.get(p.id);
+            // Build a name lookup from remote docs in case a master project was stored under a custom ID
+            const remoteByName = new Map<string, Partial<BimProject> & { _createdAtMs?: number }>();
+            firestoreDocsMap.forEach((remote) => {
+              const nKey = normalizeProjectNameKey(remote.name);
+              if (nKey && !remoteByName.has(nKey)) {
+                remoteByName.set(nKey, remote);
+              }
+            });
+
+            const baseMerged = mergeWithMasterProjects(prev);
+            const existingIds = new Set(baseMerged.map((p) => p.id));
+            const existingNameKeys = new Set(
+              baseMerged.map((p) => normalizeProjectNameKey(p.name)).filter(Boolean)
+            );
+
+            const merged = baseMerged.map((p) => {
+              const nKey = normalizeProjectNameKey(p.name);
+              const remote = firestoreDocsMap.get(p.id) || (nKey ? remoteByName.get(nKey) : undefined);
               if (!remote) return p;
               const { _createdAtMs, ...cleanRemote } = remote;
+              const masterDef = masterById.get(p.id);
+              if (masterDef) {
+                return {
+                  ...p,
+                  ...cleanRemote,
+                  id: masterDef.id,
+                  code: masterDef.code,
+                  name: masterDef.name,
+                  totalEstimatedHours:
+                    cleanRemote.totalEstimatedHours !== undefined &&
+                    cleanRemote.totalEstimatedHours > 0 &&
+                    masterDef.totalEstimatedHours === 0
+                      ? cleanRemote.totalEstimatedHours
+                      : masterDef.totalEstimatedHours > 0
+                      ? masterDef.totalEstimatedHours
+                      : Number(cleanRemote.totalEstimatedHours) || 0,
+                  plannedDeliveryDate: masterDef.plannedDeliveryDate,
+                  targetCompletionDate: masterDef.targetCompletionDate,
+                  actualDeliveredDate:
+                    cleanRemote.actualDeliveredDate || masterDef.actualDeliveredDate,
+                  status:
+                    !cleanRemote.status || cleanRemote.status === 'Not Started'
+                      ? masterDef.status
+                      : cleanRemote.status,
+                };
+              }
               return { ...p, ...cleanRemote };
             });
 
             const newRemoteEntries: Array<{ proj: BimProject; createdAtMs: number }> = [];
             firestoreDocsMap.forEach((remote, id) => {
-              if (!existingIds.has(id) && remote.name) {
+              const nKey = normalizeProjectNameKey(remote.name);
+              if (!existingIds.has(id) && (!nKey || !existingNameKeys.has(nKey)) && remote.name) {
                 const defaultCode =
                   remote.code ||
                   `BIM-${remote.name
@@ -958,8 +1070,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                     location: remote.location || 'Global',
                     grossFloorAreaSqm: remote.grossFloorAreaSqm || 1000,
                     startDate: remote.startDate || toLocalIsoDate(new Date()),
-                    targetCompletionDate: remote.targetCompletionDate || remote.plannedDeliveryDate || '2026-11-30',
-                    plannedDeliveryDate: remote.plannedDeliveryDate || remote.targetCompletionDate || '2026-11-30',
+                    targetCompletionDate: remote.targetCompletionDate || remote.plannedDeliveryDate || '',
+                    plannedDeliveryDate: remote.plannedDeliveryDate || remote.targetCompletionDate || '',
                     actualDeliveredDate: remote.actualDeliveredDate,
                     status: remote.status || 'WIP',
                     totalEstimatedHours: Number(remote.totalEstimatedHours) || 0,
@@ -2069,12 +2181,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const getEmployeeById = (id: string) => employees.find((e) => e.id === id);
 
   const getProjectCompletedHours = (projectId: string): number => {
-    // Sum hours from all organizational workLogs for this project
+    const project = getProjectById(projectId);
+    const normProjName = project ? normalizeProjectNameKey(project.name) : '';
+
+    // Sum hours from all organizational workLogs for this project (by ID or normalized project name)
     const logged = (allWorkLogs || [])
-      .filter((w) => w.projectId === projectId)
+      .filter(
+        (w) =>
+          w.projectId === projectId ||
+          (normProjName && normalizeProjectNameKey(w.projectName) === normProjName)
+      )
       .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
 
-    const project = getProjectById(projectId);
     if (
       project &&
       project.manualHoursOverride !== undefined &&
