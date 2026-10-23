@@ -49,6 +49,14 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     preselectedProjectId || projects[0]?.id || ''
   );
+
+  React.useEffect(() => {
+    if (preselectedProjectId) {
+      setSelectedProjectId(preselectedProjectId);
+    } else if (projects.length > 0 && !projects.some((p) => p.id === selectedProjectId)) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [preselectedProjectId, projects, selectedProjectId]);
   const [audience, setAudience] = useState<string>(
     'Project Owners & Executive Steering Committee'
   );

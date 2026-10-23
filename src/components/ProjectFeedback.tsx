@@ -68,6 +68,11 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
   const [showAddModal, setShowAddModal] = useState(false);
   const [copiedClientLink, setCopiedClientLink] = useState(false);
   const [formProjectId, setFormProjectId] = useState(projects[0]?.id || 'p1');
+  useEffect(() => {
+    if (projects.length > 0 && !projects.some((p) => p.id === formProjectId)) {
+      setFormProjectId(projects[0].id);
+    }
+  }, [projects, formProjectId]);
   const [formRating, setFormRating] = useState<number>(5);
   const [formFeedbackText, setFormFeedbackText] = useState('');
   const [formCategory, setFormCategory] = useState<ProjectFeedbackItem['category']>('Quality of BIM Deliverables');

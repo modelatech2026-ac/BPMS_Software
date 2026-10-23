@@ -99,8 +99,10 @@ service cloud.firestore {
       allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(projectId) && incoming().keys().size() > 0 && (
         isSuperAdmin() ||
-        !('totalEstimatedHours' in incoming()) ||
-        (incoming().totalEstimatedHours is number && incoming().totalEstimatedHours >= 0)
+        ((!('totalEstimatedHours' in incoming()) ||
+          (incoming().totalEstimatedHours is number && incoming().totalEstimatedHours >= 0)) &&
+         (!('estimatedHours' in incoming()) ||
+          (incoming().estimatedHours is number && incoming().estimatedHours >= 0)))
       );
       allow delete: if isValidId(projectId) && (isSuperAdmin() || request.time != null);
     }

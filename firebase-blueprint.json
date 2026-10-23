@@ -125,22 +125,40 @@
           "type": "string",
           "maxLength": 200
         },
+        "projectName": {
+          "type": "string",
+          "maxLength": 200
+        },
         "clientName": {
           "type": "string",
           "maxLength": 200
         },
+        "estimatedHours": {
+          "type": "number"
+        },
         "totalEstimatedHours": {
+          "type": "number"
+        },
+        "totalHoursLogged": {
           "type": "number"
         },
         "totalCompletedHours": {
           "type": "number"
+        },
+        "plannedDeliveryDate": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
         },
         "status": {
           "type": "string",
           "maxLength": 64
         }
       },
-      "required": ["name", "totalEstimatedHours"]
+      "required": ["projectName", "status", "estimatedHours"]
     },
     "ProjectAssignment": {
       "title": "ProjectAssignment",

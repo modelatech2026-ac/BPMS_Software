@@ -39,7 +39,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onOpenNewProjectModal,
   onOpenReportModalWithProject,
 }) => {
-  const { projects, workLogs, getProjectCompletedHours, employees, updateProjectStatus, updateProject, currentUser } = useBimData();
+  const { projects, workLogs, getProjectCompletedHours, employees, updateProjectStatus, updateProject, currentUser, selectedProjectId } = useBimData();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [disciplineFilter, setDisciplineFilter] = useState<string>('all');
@@ -99,11 +99,14 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   ];
 
   const filteredProjects = projects.filter((p) => {
+    const matchesScope = selectedProjectId === 'all' || p.id === selectedProjectId;
+    const q = searchTerm.toLowerCase();
     const matchesSearch =
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.location.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.status.toLowerCase().includes(searchTerm.toLowerCase());
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.code || '').toLowerCase().includes(q) ||
+      (p.clientName || '').toLowerCase().includes(q) ||
+      (p.location || '').toLowerCase().includes(q) ||
+      (p.status || '').toLowerCase().includes(q);
     const matchesStatus =
       statusFilter === 'all' || p.status === statusFilter;
     const matchesDiscipline =
@@ -111,9 +114,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       (p.disciplines || []).some(
         (d) =>
           d === disciplineFilter ||
-          (disciplineFilter === 'BIM - ACS' && (d === 'BIM - ACS' || d === 'Architecture' as any))
+          (disciplineFilter === 'BIM - ACS' && (d === 'BIM - ACS' || d === ('Architecture' as any)))
       );
-    return matchesSearch && matchesStatus && matchesDiscipline;
+    return matchesScope && matchesSearch && matchesStatus && matchesDiscipline;
   });
 
   // Calculate total portfolio stats

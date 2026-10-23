@@ -27,7 +27,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { addProject, employees } = useBimData();
+  const { addProject, employees, selectedProjectId, setSelectedProjectId } = useBimData();
 
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
@@ -49,10 +49,9 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     'MEP - HVAC',
     'MEP - Electrical',
   ]);
-  const [assignedEmployeeIds, setAssignedEmployeeIds] = useState<string[]>([
-    employees[0]?.id || '',
-    employees[1]?.id || '',
-  ]);
+  const [assignedEmployeeIds, setAssignedEmployeeIds] = useState<string[]>(() =>
+    [employees[0]?.id, employees[1]?.id].filter((id): id is string => Boolean(id))
+  );
 
   if (!isOpen) return null;
 
@@ -76,52 +75,81 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !code || !clientName) return;
+    const cleanName = name.trim();
+    if (!cleanName) return;
+
+    const cleanCode =
+      code.trim() ||
+      `BIM-${cleanName
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .slice(0, 4)
+        .toUpperCase() || 'PRJ'}`;
+    const cleanClient = clientName.trim() || 'Enterprise Portfolio Client';
+    const effectiveDisciplines: Discipline[] =
+      selectedDisciplines.length > 0 ? selectedDisciplines : ['BIM - ACS'];
+    const cleanAssignees = assignedEmployeeIds.filter(Boolean);
+    const effectivePlannedDate = plannedDeliveryDate || new Date().toISOString().slice(0, 10);
 
     addProject({
-      name,
-      code,
-      clientName,
-      buildingType,
-      location: location || 'Global',
-      description: description || `${buildingType} BIM modeling and multi-trade coordination project.`,
-      status,
+      name: cleanName,
+      code: cleanCode,
+      clientName: cleanClient,
+      buildingType: buildingType.trim() || 'Commercial High-Rise',
+      location: location.trim() || 'Global',
+      description:
+        description.trim() ||
+        `${buildingType || 'Commercial'} BIM modeling and multi-trade coordination project.`,
+      status: status || 'WIP',
       currentLOD,
       targetLOD,
-      totalEstimatedHours: Number(totalEstimatedHours),
+      totalEstimatedHours: Number(totalEstimatedHours) || 0,
       totalCompletedHours: 0,
-      budgetAmount: Number(budgetAmount),
-      startDate,
-      targetCompletionDate: plannedDeliveryDate,
-      plannedDeliveryDate,
-      actualDeliveredDate: actualDeliveredDate.trim() ? actualDeliveredDate : undefined,
-      disciplines: selectedDisciplines,
-      assignedEmployeeIds,
+      budgetAmount: Number(budgetAmount) || 0,
+      startDate: startDate || new Date().toISOString().slice(0, 10),
+      targetCompletionDate: effectivePlannedDate,
+      plannedDeliveryDate: effectivePlannedDate,
+      actualDeliveredDate: actualDeliveredDate.trim() ? actualDeliveredDate.trim() : undefined,
+      disciplines: effectiveDisciplines,
+      assignedEmployeeIds: cleanAssignees,
       tasks: [
         {
           id: `task-${Date.now()}-1`,
           name: `${currentLOD} Core Modeling Setup`,
-          discipline: selectedDisciplines[0] || 'BIM - ACS',
+          discipline: effectiveDisciplines[0] || 'BIM - ACS',
           lod: currentLOD,
-          estimatedHours: Math.round(Number(totalEstimatedHours) * 0.4),
+          estimatedHours: Math.round((Number(totalEstimatedHours) || 0) * 0.4),
           completedHours: 0,
           status: 'In Progress',
-          assignedEmployeeId: assignedEmployeeIds[0] || '',
-          dueDate: plannedDeliveryDate,
+          assignedEmployeeId: cleanAssignees[0] || '',
+          dueDate: effectivePlannedDate,
         },
       ],
       milestones: [
         {
           id: `ms-${Date.now()}-1`,
           title: `Initial ${currentLOD} Model Release`,
-          targetDate: startDate,
+          targetDate: startDate || effectivePlannedDate,
           status: 'in-progress',
           lodRequirement: currentLOD,
-          deliverableDescription: `Delivery of coordinated ${selectedDisciplines.join(', ')} geometry to client.`,
+          deliverableDescription: `Delivery of coordinated ${effectiveDisciplines.join(', ')} geometry to client.`,
         },
       ],
       clashes: [],
     });
+
+    if (selectedProjectId !== 'all') {
+      setSelectedProjectId('all');
+    }
+
+    // Reset form fields for next creation
+    setName('');
+    setCode('');
+    setClientName('');
+    setLocation('');
+    setDescription('');
+    setStatus('WIP');
+    setTotalEstimatedHours(1200);
+    setActualDeliveredDate('');
 
     try {
       confetti({
@@ -181,7 +209,6 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
-                required
               />
             </div>
             <div>
@@ -210,7 +237,6 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
                 className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                required
               />
             </div>
             <div>

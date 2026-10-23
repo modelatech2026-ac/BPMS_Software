@@ -54,6 +54,7 @@ import {
   query,
   where,
   or,
+  serverTimestamp,
 } from 'firebase/firestore';
 
 interface BimDataContextType {
@@ -829,7 +830,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Synchronize Firestore projects collection into state in real-time
+  // Synchronize Firestore projects collection into state in real-time via onSnapshot
+  const hasSeededProjectsRef = React.useRef(false);
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
     try {
@@ -837,56 +839,126 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       unsubscribe = onSnapshot(
         colRef,
         (snapshot) => {
-          if (!snapshot.empty) {
-            const firestoreDocsMap = new Map<string, Partial<BimProject>>();
-            snapshot.docs.forEach((docSnap) => {
-              const data = docSnap.data();
-              firestoreDocsMap.set(docSnap.id, {
-                id: docSnap.id,
-                ...(data.code !== undefined ? { code: data.code } : {}),
-                ...(data.name !== undefined ? { name: data.name } : {}),
-                ...(data.clientName !== undefined ? { clientName: data.clientName } : {}),
-                ...(data.buildingType !== undefined ? { buildingType: data.buildingType } : {}),
-                ...(data.location !== undefined ? { location: data.location } : {}),
-                ...(data.grossFloorAreaSqm !== undefined ? { grossFloorAreaSqm: Number(data.grossFloorAreaSqm) } : {}),
-                ...(data.startDate !== undefined ? { startDate: data.startDate } : {}),
-                ...(data.targetCompletionDate !== undefined ? { targetCompletionDate: data.targetCompletionDate } : {}),
-                ...(data.plannedDeliveryDate !== undefined ? { plannedDeliveryDate: data.plannedDeliveryDate } : {}),
-                ...(data.actualDeliveredDate !== undefined ? { actualDeliveredDate: data.actualDeliveredDate } : {}),
-                ...(data.status !== undefined ? { status: data.status } : {}),
-                ...(data.totalEstimatedHours !== undefined ? { totalEstimatedHours: Number(data.totalEstimatedHours) } : {}),
-                ...(data.totalCompletedHours !== undefined ? { totalCompletedHours: Number(data.totalCompletedHours) } : {}),
-                ...(data.manualHoursOverride !== undefined ? { manualHoursOverride: Number(data.manualHoursOverride) } : {}),
-                ...(data.manualHoursBaseLogged !== undefined ? { manualHoursBaseLogged: Number(data.manualHoursBaseLogged) } : {}),
-                ...(data.currentLOD !== undefined ? { currentLOD: data.currentLOD } : {}),
-                ...(data.targetLOD !== undefined ? { targetLOD: data.targetLOD } : {}),
-                ...(data.budgetAmount !== undefined ? { budgetAmount: Number(data.budgetAmount) } : {}),
-                ...(data.disciplines !== undefined ? { disciplines: data.disciplines } : {}),
-                ...(data.milestones !== undefined ? { milestones: data.milestones } : {}),
-                ...(data.tasks !== undefined ? { tasks: data.tasks } : {}),
-                ...(data.clashes !== undefined ? { clashes: data.clashes } : {}),
-                ...(data.assignedEmployeeIds !== undefined ? { assignedEmployeeIds: data.assignedEmployeeIds } : {}),
-                ...(data.description !== undefined ? { description: data.description } : {}),
-              });
+          const firestoreDocsMap = new Map<string, Partial<BimProject> & { _createdAtMs?: number }>();
+          snapshot.docs.forEach((docSnap) => {
+            const data = docSnap.data();
+            const resolvedName = data.name || data.projectName;
+            const resolvedEstHours =
+              data.totalEstimatedHours !== undefined
+                ? Number(data.totalEstimatedHours)
+                : data.estimatedHours !== undefined
+                ? Number(data.estimatedHours)
+                : undefined;
+            const resolvedLoggedHours =
+              data.totalCompletedHours !== undefined
+                ? Number(data.totalCompletedHours)
+                : data.totalHoursLogged !== undefined
+                ? Number(data.totalHoursLogged)
+                : undefined;
+            const resolvedPlannedDate = data.plannedDeliveryDate || data.targetCompletionDate;
+            let createdAtMs = 0;
+            if (data.createdAt) {
+              if (typeof data.createdAt?.toMillis === 'function') {
+                createdAtMs = data.createdAt.toMillis();
+              } else if (typeof data.createdAt?.seconds === 'number') {
+                createdAtMs = data.createdAt.seconds * 1000;
+              } else {
+                const parsed = new Date(data.createdAt).getTime();
+                if (!Number.isNaN(parsed)) createdAtMs = parsed;
+              }
+            }
+
+            firestoreDocsMap.set(docSnap.id, {
+              id: docSnap.id,
+              _createdAtMs: createdAtMs,
+              ...(data.code !== undefined ? { code: data.code } : {}),
+              ...(resolvedName !== undefined ? { name: resolvedName } : {}),
+              ...(data.clientName !== undefined ? { clientName: data.clientName } : {}),
+              ...(data.buildingType !== undefined ? { buildingType: data.buildingType } : {}),
+              ...(data.location !== undefined ? { location: data.location } : {}),
+              ...(data.grossFloorAreaSqm !== undefined ? { grossFloorAreaSqm: Number(data.grossFloorAreaSqm) } : {}),
+              ...(data.startDate !== undefined ? { startDate: data.startDate } : {}),
+              ...(resolvedPlannedDate !== undefined
+                ? {
+                    targetCompletionDate: data.targetCompletionDate || resolvedPlannedDate,
+                    plannedDeliveryDate: resolvedPlannedDate,
+                  }
+                : {}),
+              ...(data.actualDeliveredDate !== undefined ? { actualDeliveredDate: data.actualDeliveredDate } : {}),
+              ...(data.status !== undefined ? { status: data.status } : {}),
+              ...(resolvedEstHours !== undefined ? { totalEstimatedHours: resolvedEstHours } : {}),
+              ...(resolvedLoggedHours !== undefined ? { totalCompletedHours: resolvedLoggedHours } : {}),
+              ...(data.manualHoursOverride !== undefined ? { manualHoursOverride: Number(data.manualHoursOverride) } : {}),
+              ...(data.manualHoursBaseLogged !== undefined ? { manualHoursBaseLogged: Number(data.manualHoursBaseLogged) } : {}),
+              ...(data.currentLOD !== undefined ? { currentLOD: data.currentLOD } : {}),
+              ...(data.targetLOD !== undefined ? { targetLOD: data.targetLOD } : {}),
+              ...(data.budgetAmount !== undefined ? { budgetAmount: Number(data.budgetAmount) } : {}),
+              ...(data.disciplines !== undefined ? { disciplines: data.disciplines } : {}),
+              ...(data.milestones !== undefined ? { milestones: data.milestones } : {}),
+              ...(data.tasks !== undefined ? { tasks: data.tasks } : {}),
+              ...(data.clashes !== undefined ? { clashes: data.clashes } : {}),
+              ...(data.assignedEmployeeIds !== undefined ? { assignedEmployeeIds: data.assignedEmployeeIds } : {}),
+              ...(data.description !== undefined ? { description: data.description } : {}),
             });
-            setProjects((prev) => {
-              const existingIds = new Set(prev.map((p) => p.id));
-              const merged = prev.map((p) => {
-                const remote = firestoreDocsMap.get(p.id);
-                return remote ? { ...p, ...remote } : p;
+          });
+
+          setProjects((prev) => {
+            // Seed initial portfolio projects to Firestore once if not yet present in Firestore
+            if (!hasSeededProjectsRef.current && !snapshot.metadata.fromCache) {
+              hasSeededProjectsRef.current = true;
+              prev.forEach((p) => {
+                if (!firestoreDocsMap.has(p.id)) {
+                  const sanitized = JSON.parse(JSON.stringify(p));
+                  setDoc(
+                    doc(db, 'projects', p.id),
+                    {
+                      ...sanitized,
+                      projectName: p.name,
+                      status: p.status || 'WIP',
+                      estimatedHours: Number(p.totalEstimatedHours) || 0,
+                      totalHoursLogged: Number(p.totalCompletedHours) || 0,
+                      plannedDeliveryDate: p.plannedDeliveryDate || p.targetCompletionDate || '2026-11-30',
+                      createdAt: serverTimestamp(),
+                    },
+                    { merge: true }
+                  ).catch(() => {});
+                }
               });
-              firestoreDocsMap.forEach((remote, id) => {
-                if (!existingIds.has(id) && remote.name) {
-                  merged.unshift({
+            }
+
+            if (firestoreDocsMap.size === 0) {
+              return prev;
+            }
+
+            const existingIds = new Set(prev.map((p) => p.id));
+            const merged = prev.map((p) => {
+              const remote = firestoreDocsMap.get(p.id);
+              if (!remote) return p;
+              const { _createdAtMs, ...cleanRemote } = remote;
+              return { ...p, ...cleanRemote };
+            });
+
+            const newRemoteEntries: Array<{ proj: BimProject; createdAtMs: number }> = [];
+            firestoreDocsMap.forEach((remote, id) => {
+              if (!existingIds.has(id) && remote.name) {
+                const defaultCode =
+                  remote.code ||
+                  `BIM-${remote.name
+                    .replace(/[^a-zA-Z0-9]/g, '')
+                    .slice(0, 4)
+                    .toUpperCase() || 'PRJ'}`;
+                newRemoteEntries.push({
+                  createdAtMs: remote._createdAtMs || 0,
+                  proj: {
                     id,
-                    code: remote.code || 'BIM-PRJ',
-                    name: remote.name || 'BIM Project',
-                    clientName: remote.clientName || 'Client',
+                    code: defaultCode,
+                    name: remote.name,
+                    clientName: remote.clientName || 'Enterprise Client',
                     buildingType: remote.buildingType || 'Commercial',
                     location: remote.location || 'Global',
                     grossFloorAreaSqm: remote.grossFloorAreaSqm || 1000,
-                    startDate: remote.startDate || '2026-08-01',
-                    targetCompletionDate: remote.targetCompletionDate || '2026-11-30',
+                    startDate: remote.startDate || toLocalIsoDate(new Date()),
+                    targetCompletionDate: remote.targetCompletionDate || remote.plannedDeliveryDate || '2026-11-30',
                     plannedDeliveryDate: remote.plannedDeliveryDate || remote.targetCompletionDate || '2026-11-30',
                     actualDeliveredDate: remote.actualDeliveredDate,
                     status: remote.status || 'WIP',
@@ -897,18 +969,26 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                     currentLOD: remote.currentLOD || 'LOD 300',
                     targetLOD: remote.targetLOD || 'LOD 350',
                     budgetAmount: Number(remote.budgetAmount) || 0,
-                    disciplines: remote.disciplines || ['BIM - ACS'],
-                    milestones: remote.milestones || [],
-                    tasks: remote.tasks || [],
-                    clashes: remote.clashes || [],
-                    assignedEmployeeIds: remote.assignedEmployeeIds || [],
+                    disciplines:
+                      Array.isArray(remote.disciplines) && remote.disciplines.length > 0
+                        ? remote.disciplines
+                        : ['BIM - ACS'],
+                    milestones: Array.isArray(remote.milestones) ? remote.milestones : [],
+                    tasks: Array.isArray(remote.tasks) ? remote.tasks : [],
+                    clashes: Array.isArray(remote.clashes) ? remote.clashes : [],
+                    assignedEmployeeIds: Array.isArray(remote.assignedEmployeeIds)
+                      ? remote.assignedEmployeeIds
+                      : [],
                     description: remote.description || '',
-                  });
-                }
-              });
-              return merged;
+                  },
+                });
+              }
             });
-          }
+
+            // Sort newest first so newly created projects appear at the top
+            newRemoteEntries.sort((a, b) => b.createdAtMs - a.createdAtMs);
+            return [...newRemoteEntries.map((e) => e.proj), ...merged];
+          });
         },
         (err) => {
           console.warn('Firestore projects listener notice:', err);
@@ -2147,10 +2227,34 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const newProj: BimProject = {
       ...projectData,
       id: `proj-${Date.now()}`,
+      status: projectData.status || 'WIP',
+      totalEstimatedHours: Number(projectData.totalEstimatedHours) || 0,
+      totalCompletedHours: Number(projectData.totalCompletedHours) || 0,
+      plannedDeliveryDate:
+        projectData.plannedDeliveryDate ||
+        projectData.targetCompletionDate ||
+        new Date().toISOString().slice(0, 10),
     };
-    setProjects((prev) => [newProj, ...prev]);
+
+    // Immediate optimistic update so all views and dropdowns reflect the new project right away
+    setProjects((prev) => [newProj, ...prev.filter((p) => p.id !== newProj.id)]);
+
     try {
-      setDoc(doc(db, 'projects', newProj.id), newProj).catch((err) =>
+      // Strip undefined values so Firestore setDoc never rejects optional fields
+      const sanitizedProj = JSON.parse(JSON.stringify(newProj));
+      const firestorePayload = {
+        ...sanitizedProj,
+        projectName: newProj.name,
+        status: newProj.status || 'WIP',
+        estimatedHours: Number(newProj.totalEstimatedHours) || 0,
+        totalHoursLogged: Number(newProj.totalCompletedHours) || 0,
+        plannedDeliveryDate:
+          newProj.plannedDeliveryDate ||
+          newProj.targetCompletionDate ||
+          new Date().toISOString().slice(0, 10),
+        createdAt: serverTimestamp(),
+      };
+      setDoc(doc(db, 'projects', newProj.id), firestorePayload, { merge: true }).catch((err) =>
         console.warn('Firestore addProject sync notice:', err)
       );
     } catch (e) {
@@ -2171,8 +2275,17 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       })
     );
     try {
-      const payload = updatedDoc ? { ...updatedDoc, ...updates } : { id, ...updates };
-      const sanitizedPayload = JSON.parse(JSON.stringify(payload));
+      const base = updatedDoc ? { ...updatedDoc, ...updates } : { id, ...updates };
+      const sanitizedPayload = JSON.parse(JSON.stringify(base));
+      if (sanitizedPayload.name !== undefined) {
+        sanitizedPayload.projectName = sanitizedPayload.name;
+      }
+      if (sanitizedPayload.totalEstimatedHours !== undefined) {
+        sanitizedPayload.estimatedHours = Number(sanitizedPayload.totalEstimatedHours) || 0;
+      }
+      if (sanitizedPayload.totalCompletedHours !== undefined) {
+        sanitizedPayload.totalHoursLogged = Number(sanitizedPayload.totalCompletedHours) || 0;
+      }
       setDoc(doc(db, 'projects', id), sanitizedPayload, { merge: true }).catch((err) =>
         console.warn('Firestore updateProject sync notice:', err)
       );
