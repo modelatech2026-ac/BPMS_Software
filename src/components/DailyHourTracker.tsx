@@ -36,6 +36,16 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     currentUser,
   } = useBimData();
 
+  const isDirector = useMemo(() => {
+    if (!currentUser) return false;
+    return (
+      currentUser.securityRole === 'Director' ||
+      currentUser.appRole === 'DIRECTOR' ||
+      currentUser.accessLevel === 'Director' ||
+      currentUser.role === 'Director'
+    );
+  }, [currentUser]);
+
   const isSuperAdmin = useMemo(() => {
     if (!currentUser) return false;
     if (
@@ -75,26 +85,110 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const [selectedDate, setSelectedDate] = useState('2026-08-18');
   const [activeView, setActiveView] = useState<'matrix' | 'logs'>('matrix');
 
-  // Days for the current week (August 12 to August 18, 2026)
-  const weekDays = [
-    { date: '2026-08-12', label: 'Wed', dayNum: '12' },
-    { date: '2026-08-13', label: 'Thu', dayNum: '13' },
-    { date: '2026-08-14', label: 'Fri', dayNum: '14' },
-    { date: '2026-08-15', label: 'Sat', dayNum: '15' },
-    { date: '2026-08-16', label: 'Sun', dayNum: '16' },
-    { date: '2026-08-17', label: 'Mon', dayNum: '17' },
-    { date: '2026-08-18', label: 'Tue (Today)', dayNum: '18' },
-  ];
+  // Helper to match a work log to an employee record across all identifiers
+  const doesLogMatchEmployee = (log: DailyWorkLog, emp: { id: string; name?: string; email?: string }): boolean => {
+    const empId = (emp.id || '').trim();
+    const empIdStripped = empId.replace(/^emp-/, '');
+    const logEmpId = (log.employeeId || '').trim();
+    const logEmpIdStripped = logEmpId.replace(/^emp-/, '');
+    const logUserId = ((log as any).userId || '').trim();
+    const logUserIdStripped = logUserId.replace(/^emp-/, '');
 
-  // Super Admin tracks all team members; Submitting Member tracks only their own timesheet
+    if (
+      empId &&
+      (logEmpId === empId ||
+        (empIdStripped && logEmpIdStripped === empIdStripped) ||
+        logUserId === empId ||
+        (empIdStripped && logUserIdStripped === empIdStripped))
+    ) {
+      return true;
+    }
+
+    const empEmail = (emp.email || '').toLowerCase().trim();
+    const logEmail = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
+    if (empEmail && logEmail && empEmail === logEmail) {
+      return true;
+    }
+
+    const empName = (emp.name || '').toLowerCase().trim();
+    const logName = (log.employeeName || '').toLowerCase().trim();
+    if (empName && logName && empName === logName) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // Days for the current week (defaults to Aug 12 - Aug 18, 2026, and dynamically incorporates any active log dates)
+  const weekDays = useMemo(() => {
+    const defaultDays = [
+      { date: '2026-08-12', label: 'Wed', dayNum: '12' },
+      { date: '2026-08-13', label: 'Thu', dayNum: '13' },
+      { date: '2026-08-14', label: 'Fri', dayNum: '14' },
+      { date: '2026-08-15', label: 'Sat', dayNum: '15' },
+      { date: '2026-08-16', label: 'Sun', dayNum: '16' },
+      { date: '2026-08-17', label: 'Mon', dayNum: '17' },
+      { date: '2026-08-18', label: 'Tue (Today)', dayNum: '18' },
+    ];
+
+    const defaultDateSet = new Set(defaultDays.map((d) => d.date));
+    const extraDates = Array.from<string>(
+      new Set(
+        (workLogs || [])
+          .map((l) => (l.date || '').trim())
+          .filter((d): d is string => Boolean(d && !defaultDateSet.has(d)))
+      )
+    ).sort();
+
+    if (extraDates.length === 0) {
+      return defaultDays;
+    }
+
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const formatDateEntry = (dateStr: string) => {
+      const parsed = new Date(`${dateStr}T00:00:00`);
+      const label = !Number.isNaN(parsed.getTime())
+        ? dayNames[parsed.getDay()]
+        : dateStr.slice(5);
+      const dayNum = dateStr.slice(8, 10) || dateStr;
+      return {
+        date: dateStr,
+        label: dateStr === '2026-08-18' ? 'Tue (Today)' : label,
+        dayNum,
+      };
+    };
+
+    // Keep all dates that have logs, plus fill up to 7 columns from defaultDays
+    const activeDefaultDates = defaultDays
+      .filter((d) => (workLogs || []).some((l) => l.date === d.date))
+      .map((d) => d.date);
+    const combinedSet = new Set<string>([...activeDefaultDates, ...extraDates]);
+    for (const d of defaultDays) {
+      if (combinedSet.size >= Math.max(7, combinedSet.size)) break;
+      combinedSet.add(d.date);
+    }
+    // Ensure at least 7 columns
+    for (const d of defaultDays) {
+      if (combinedSet.size >= 7) break;
+      combinedSet.add(d.date);
+    }
+
+    return Array.from(combinedSet)
+      .sort()
+      .map(formatDateEntry);
+  }, [workLogs]);
+
+  // Super Admin & Director track all team members; Submitting Member tracks only their own timesheet
   const allTrackedEmployees = useMemo(() => {
     if (!isSuperAdmin) {
       if (!currentUser) return [];
       const userEmail = (currentUser.email || '').toLowerCase().trim();
-      const userId = currentUser.id || '';
+      const userId = (currentUser.id || '').trim();
+      const userIdStripped = userId.replace(/^emp-/, '');
       const matched = employees.find(
         (e) =>
           e.id === userId ||
+          e.id.replace(/^emp-/, '') === userIdStripped ||
           (e.email && e.email.toLowerCase().trim() === userEmail) ||
           (e.name && currentUser.name && e.name.toLowerCase().trim() === currentUser.name.toLowerCase().trim())
       );
@@ -120,28 +214,38 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
     const list = [...employees];
     const knownKeys = new Set(
-      employees.flatMap((e) => [e.id, (e.name || '').toLowerCase().trim(), (e.email || '').toLowerCase().trim()].filter(Boolean))
+      employees.flatMap((e) =>
+        [
+          e.id,
+          (e.id || '').replace(/^emp-/, ''),
+          (e.name || '').toLowerCase().trim(),
+          (e.email || '').toLowerCase().trim(),
+        ].filter(Boolean)
+      )
     );
 
     (workLogs || []).forEach((log) => {
       const nameKey = (log.employeeName || '').toLowerCase().trim();
       const emailKey = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
-      const idKey = log.employeeId || (log as any).userId;
+      const idKey = (log.employeeId || (log as any).userId || '').trim();
+      const strippedIdKey = idKey.replace(/^emp-/, '');
 
       const alreadyExists =
         (idKey && knownKeys.has(idKey)) ||
+        (strippedIdKey && knownKeys.has(strippedIdKey)) ||
         (nameKey && knownKeys.has(nameKey)) ||
         (emailKey && knownKeys.has(emailKey));
 
-      if (!alreadyExists && (nameKey || idKey)) {
+      if (!alreadyExists && (nameKey || idKey || emailKey)) {
         if (idKey) knownKeys.add(idKey);
+        if (strippedIdKey) knownKeys.add(strippedIdKey);
         if (nameKey) knownKeys.add(nameKey);
         if (emailKey) knownKeys.add(emailKey);
         list.push({
-          id: log.employeeId || `emp-${Date.now()}`,
-          name: log.employeeName || 'Team Member',
-          email: (log as any).memberEmail || '',
-          avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(log.employeeName || 'User')}`,
+          id: log.employeeId || (log as any).userId || `emp-${Date.now()}`,
+          name: log.employeeName || (emailKey ? emailKey.split('@')[0] : 'Team Member'),
+          email: emailKey,
+          avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(log.employeeName || emailKey || 'User')}`,
           role: 'BIM Modeler' as any,
           primaryDiscipline: log.discipline || 'BIM - ACS',
           discipline: log.discipline || 'BIM - ACS',
@@ -158,17 +262,21 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     return list;
   }, [employees, workLogs, isSuperAdmin, currentUser]);
 
-  // Filtered log list: Super Admin sees all records, Submitting Member sees only their own
+  // Filtered log list: Super Admin & Director see all records, Submitting Member sees only their own
   const filteredLogs = (workLogs || []).filter((log) => {
     const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
 
     if (!isSuperAdmin) {
       const userEmail = (currentUser?.email || '').trim().toLowerCase();
-      const userId = currentUser?.id || '';
+      const userId = (currentUser?.id || '').trim();
+      const userIdStripped = userId.replace(/^emp-/, '');
+      const logEmpId = (log.employeeId || '').trim();
+      const logUserId = ((log as any).userId || '').trim();
       const isOwned =
         (userEmail && ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase() === userEmail)) ||
-        (userId && ((log as any).userId === userId || log.employeeId === userId)) ||
-        (selectedEmpObj && (log.employeeName || '').toLowerCase().trim() === selectedEmpObj.name.toLowerCase().trim());
+        (userId && (logUserId === userId || logEmpId === userId || logUserId.replace(/^emp-/, '') === userIdStripped || logEmpId.replace(/^emp-/, '') === userIdStripped)) ||
+        (currentUser?.name && (log.employeeName || '').toLowerCase().trim() === currentUser.name.toLowerCase().trim()) ||
+        (selectedEmpObj && doesLogMatchEmployee(log, selectedEmpObj));
       if (!isOwned) return false;
     }
 
@@ -184,8 +292,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       !isSuperAdmin ||
       selectedEmployeeFilter === 'all' ||
       log.employeeId === selectedEmployeeFilter ||
-      (selectedEmpObj && (log.employeeName || '').toLowerCase().trim() === selectedEmpObj.name.toLowerCase().trim()) ||
-      (selectedEmpObj && ((log as any).memberEmail || '').toLowerCase().trim() === selectedEmpObj.email.toLowerCase().trim());
+      (selectedEmpObj ? doesLogMatchEmployee(log, selectedEmpObj) : false);
 
     const matchesProj =
       selectedProjectFilter === 'all' || log.projectId === selectedProjectFilter;
@@ -354,13 +461,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   let weekSum = 0;
                   const dailyHours = weekDays.map((d) => {
                     const dayLogs = workLogs.filter(
-                      (w) =>
-                        (w.employeeId === emp.id ||
-                          (emp.name && (w.employeeName || '').toLowerCase().trim() === emp.name.toLowerCase().trim()) ||
-                          (emp.email && ((w as any).memberEmail || '').toLowerCase().trim() === emp.email.toLowerCase().trim())) &&
-                        w.date === d.date
+                      (w) => doesLogMatchEmployee(w, emp) && w.date === d.date
                     );
-                    const hours = dayLogs.reduce((sum, l) => sum + l.hoursLogged, 0);
+                    const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
                     weekSum += hours;
                     return { date: d.date, hours };
                   });
@@ -555,17 +658,20 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                         {log.notes}
                       </td>
                       <td className="p-3.5 text-right">
-                        <button
-                          onClick={() => {
-                            if (confirm('Delete this work log entry?')) {
+                        {(!isDirector ||
+                          ((currentUser?.email || '').toLowerCase().trim() &&
+                            ((log.memberEmail || (log as any).userEmail || '').toLowerCase().trim() ===
+                              (currentUser?.email || '').toLowerCase().trim()))) && (
+                          <button
+                            onClick={() => {
                               deleteWorkLog(log.id);
-                            }
-                          }}
-                          className="p-1 text-slate-500 hover:text-rose-400 transition"
-                          title="Delete entry"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                            }}
+                            className="p-1 text-slate-500 hover:text-rose-400 transition"
+                            title="Delete entry"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

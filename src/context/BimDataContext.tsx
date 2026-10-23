@@ -277,8 +277,14 @@ export const isRecordOwnedByMember = (
 ): boolean => {
   if (!user) return false;
   const userEmail = (user.email || '').trim().toLowerCase();
-  const userId = user.id || '';
-  const userGoogleId = user.googleId || '';
+  const userId = (user.id || '').trim();
+  const userIdStripped = userId.replace(/^emp-/, '');
+  const userGoogleId = (user.googleId || '').trim();
+  const detEmailId = userEmail ? generateRequestDocId(userEmail) : '';
+  const logEmpId = (log.employeeId || '').trim();
+  const logEmpIdStripped = logEmpId.replace(/^emp-/, '');
+  const logUserId = ((log as any).userId || '').trim();
+  const logUserIdStripped = logUserId.replace(/^emp-/, '');
 
   // 1. Direct email match
   if (userEmail) {
@@ -286,25 +292,47 @@ export const isRecordOwnedByMember = (
     if ((log as any).userEmail && (log as any).userEmail.trim().toLowerCase() === userEmail) return true;
   }
 
-  // 2. Direct user ID match
-  if (userId) {
-    if ((log as any).userId === userId) return true;
-    if (log.employeeId === userId) return true;
-  }
-  if (userGoogleId) {
-    if ((log as any).userId === userGoogleId) return true;
-    if (log.employeeId === userGoogleId) return true;
+  // 2. Direct user ID / deterministic ID match
+  const candidateIds = new Set(
+    [userId, userIdStripped, userGoogleId, detEmailId].filter(Boolean)
+  );
+  if (
+    (logEmpId && candidateIds.has(logEmpId)) ||
+    (logEmpIdStripped && candidateIds.has(logEmpIdStripped)) ||
+    (logUserId && candidateIds.has(logUserId)) ||
+    (logUserIdStripped && candidateIds.has(logUserIdStripped))
+  ) {
+    return true;
   }
 
-  // 3. Employee mapping match
+  // 3. Direct name match if user has a name
+  if (
+    user.name &&
+    log.employeeName &&
+    log.employeeName.trim().toLowerCase() === user.name.trim().toLowerCase()
+  ) {
+    return true;
+  }
+
+  // 4. Employee mapping match
   const matchingEmp = allEmployees.find(
     (e) =>
       e.id === userId ||
+      e.id.replace(/^emp-/, '') === userIdStripped ||
+      (detEmailId && e.id.replace(/^emp-/, '') === detEmailId) ||
       (e.email && userEmail && e.email.trim().toLowerCase() === userEmail) ||
       (e.name && user.name && e.name.trim().toLowerCase() === user.name.trim().toLowerCase())
   );
   if (matchingEmp) {
-    if (log.employeeId === matchingEmp.id) return true;
+    const matchEmpIdStripped = matchingEmp.id.replace(/^emp-/, '');
+    if (
+      logEmpId === matchingEmp.id ||
+      logEmpIdStripped === matchEmpIdStripped ||
+      logUserId === matchingEmp.id ||
+      logUserIdStripped === matchEmpIdStripped
+    ) {
+      return true;
+    }
     if (
       log.employeeName &&
       matchingEmp.name &&
@@ -349,7 +377,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     return [];
   });
 
-  const [workLogs, setWorkLogs] = useState<DailyWorkLog[]>(() => {
+  const [allWorkLogs, setAllWorkLogs] = useState<DailyWorkLog[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.WORK_LOGS);
       if (saved) {
@@ -473,9 +501,20 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     localStorage.setItem(STORAGE_KEYS.EMPLOYEES, JSON.stringify(employees));
   }, [employees]);
 
+  // Role-scoped workLogs view:
+  // - Super Admins and Directors have global access to all organizational daily logs
+  // - Other authenticated members access their own daily logs
+  const workLogs = useMemo<DailyWorkLog[]>(() => {
+    if (!currentUser) return [];
+    if (isUserSuperAdmin(currentUser)) {
+      return allWorkLogs;
+    }
+    return allWorkLogs.filter((l) => isRecordOwnedByMember(l, currentUser, employees));
+  }, [allWorkLogs, currentUser, employees]);
+
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.WORK_LOGS, JSON.stringify(workLogs));
-  }, [workLogs]);
+    localStorage.setItem(STORAGE_KEYS.WORK_LOGS, JSON.stringify(allWorkLogs));
+  }, [allWorkLogs]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(generatedReports));
@@ -745,144 +784,115 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Synchronize Firestore work_logs collection into state in real-time
-  // Enforcing strict access control at the database query level:
-  // - Super Admin: Queries and views all members' daily log records
-  // - Submitting Member: Queries and views ONLY their own daily log records
-  // - Other Members / Unauthenticated: Cannot view any other member's daily log records
+  // Synchronize Firestore work_logs collection into state in real-time via onSnapshot()
+  // - Super Admins & Directors view all organizational daily logs in real time
+  // - Standard engineers view their own logs (enforced via role-scoped workLogs memo & DailyHourTracker)
+  // - Project hour totals (Total Logged Hours & Remaining Hours) recalculate automatically on every snapshot
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
-    const isSuper = isUserSuperAdmin(currentUser);
 
     try {
-      if (isSuper) {
-        // Super Admin query: Fetch all records across all members
-        const colRef = collection(db, 'work_logs');
-        unsubscribe = onSnapshot(
-          colRef,
-          (snapshot) => {
-            const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
-              const data = docSnap.data();
-              return {
-                id: docSnap.id,
-                employeeId: data.employeeId || '',
-                employeeName: data.employeeName || 'BIM Modeler',
-                projectId: data.projectId || '',
-                projectName: data.projectName || 'BIM Project',
-                date: data.date || new Date().toISOString().slice(0, 10),
-                hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
-                discipline: (data.discipline as Discipline) || 'BIM - ACS',
-                activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
-                taskName: data.taskName || 'BIM Modeling Task',
-                lodStage: (data.lodStage as LODLevel) || 'LOD 350',
-                notes: data.notes || '',
-                billable: data.billable !== undefined ? Boolean(data.billable) : true,
-                timestamp: data.timestamp || new Date().toISOString(),
-                memberEmail: (data.memberEmail || data.userEmail || '').toLowerCase(),
-                userEmail: (data.userEmail || data.memberEmail || '').toLowerCase(),
-                userId: data.userId || '',
-              };
-            });
+      const colRef = collection(db, 'work_logs');
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
+            const data = docSnap.data();
+            const normalizedEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
+            return {
+              id: docSnap.id,
+              employeeId: data.employeeId || data.userId || '',
+              employeeName: data.employeeName || 'BIM Modeler',
+              projectId: data.projectId || '',
+              projectName: data.projectName || 'BIM Project',
+              date: data.date || new Date().toISOString().slice(0, 10),
+              hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
+              discipline: (data.discipline as Discipline) || 'BIM - ACS',
+              activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
+              taskName: data.taskName || 'BIM Modeling Task',
+              lodStage: (data.lodStage as LODLevel) || 'LOD 350',
+              notes: data.notes || '',
+              billable: data.billable !== undefined ? Boolean(data.billable) : true,
+              timestamp: data.timestamp || new Date().toISOString(),
+              memberEmail: normalizedEmail,
+              userEmail: normalizedEmail,
+              userId: data.userId || data.employeeId || '',
+            };
+          });
 
-            // Sort newest first
-            list.sort((a, b) => {
-              const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
-              if (dateDiff !== 0) return dateDiff;
-              return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-            });
+          // Sort newest first by log date, then submission timestamp
+          list.sort((a, b) => {
+            const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+            if (dateDiff !== 0) return dateDiff;
+            return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+          });
 
-            setWorkLogs(list);
-          },
-          (err) => {
-            console.warn('Super Admin work_logs listener notice:', err);
-          }
-        );
-      } else if (currentUser && (currentUser.email || currentUser.id)) {
-        // Submitting Member query: Strictly scoped database query for only their own records
-        const cleanEmail = (currentUser.email || '').trim().toLowerCase();
-        const userId = currentUser.id || '';
-        const userGoogleId = currentUser.googleId || '';
+          setAllWorkLogs(list);
 
-        const matchingEmp = employees.find(
-          (e) =>
-            e.id === userId ||
-            (e.email && cleanEmail && e.email.trim().toLowerCase() === cleanEmail) ||
-            (e.name && currentUser.name && e.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
-        );
-        const empId = matchingEmp?.id || '';
+          // Ensure any engineer who submitted work logs is represented in employees state
+          if (list.length > 0) {
+            setEmployees((currentEmployees) => {
+              let changed = false;
+              const updated = [...currentEmployees];
 
-        const conditions: any[] = [];
-        if (cleanEmail) {
-          conditions.push(where('memberEmail', '==', cleanEmail));
-          conditions.push(where('userEmail', '==', cleanEmail));
-          if (currentUser.email && currentUser.email.trim() !== cleanEmail) {
-            conditions.push(where('memberEmail', '==', currentUser.email.trim()));
-          }
-        }
-        if (userId) {
-          conditions.push(where('userId', '==', userId));
-          conditions.push(where('employeeId', '==', userId));
-        }
-        if (userGoogleId && userGoogleId !== userId) {
-          conditions.push(where('userId', '==', userGoogleId));
-          conditions.push(where('employeeId', '==', userGoogleId));
-        }
-        if (empId && empId !== userId) {
-          conditions.push(where('employeeId', '==', empId));
-        }
+              list.forEach((log) => {
+                const emailKey = (log.memberEmail || log.userEmail || '').trim().toLowerCase();
+                const nameKey = (log.employeeName || '').trim().toLowerCase();
+                const rawId = (log.employeeId || log.userId || '').trim();
+                const strippedId = rawId.replace(/^emp-/, '');
 
-        if (conditions.length > 0) {
-          const colRef = collection(db, 'work_logs');
-          const memberQuery = query(colRef, or(...conditions));
+                if (!emailKey && !nameKey && !rawId) return;
+                if (emailKey === 'sushovan.das@bimworkspace.com' || emailKey === 'aditi@bimworkspace.com') return;
 
-          unsubscribe = onSnapshot(
-            memberQuery,
-            (snapshot) => {
-              const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
-                const data = docSnap.data();
-                return {
-                  id: docSnap.id,
-                  employeeId: data.employeeId || '',
-                  employeeName: data.employeeName || 'BIM Modeler',
-                  projectId: data.projectId || '',
-                  projectName: data.projectName || 'BIM Project',
-                  date: data.date || new Date().toISOString().slice(0, 10),
-                  hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
-                  discipline: (data.discipline as Discipline) || 'BIM - ACS',
-                  activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
-                  taskName: data.taskName || 'BIM Modeling Task',
-                  lodStage: (data.lodStage as LODLevel) || 'LOD 350',
-                  notes: data.notes || '',
-                  billable: data.billable !== undefined ? Boolean(data.billable) : true,
-                  timestamp: data.timestamp || new Date().toISOString(),
-                  memberEmail: (data.memberEmail || data.userEmail || '').toLowerCase(),
-                  userEmail: (data.userEmail || data.memberEmail || '').toLowerCase(),
-                  userId: data.userId || '',
-                };
+                const exists = updated.some((e) => {
+                  const eEmail = (e.email || '').trim().toLowerCase();
+                  const eName = (e.name || '').trim().toLowerCase();
+                  const eIdStripped = (e.id || '').replace(/^emp-/, '');
+                  return (
+                    (rawId && (e.id === rawId || eIdStripped === strippedId)) ||
+                    (emailKey && eEmail === emailKey) ||
+                    (nameKey && eName === nameKey)
+                  );
+                });
+
+                if (!exists && (nameKey || emailKey)) {
+                  changed = true;
+                  const empId = rawId.startsWith('emp-')
+                    ? rawId
+                    : rawId
+                    ? `emp-${rawId}`
+                    : emailKey
+                    ? `emp-${generateRequestDocId(emailKey)}`
+                    : `emp-${Date.now()}`;
+                  const displayName = log.employeeName || (emailKey ? emailKey.split('@')[0] : 'BIM Engineer');
+                  const disc = (log.discipline as Discipline) || 'BIM - ACS';
+
+                  updated.push({
+                    id: empId,
+                    name: displayName,
+                    email: emailKey,
+                    role: 'BIM Modeler' as any,
+                    primaryDiscipline: disc,
+                    discipline: disc,
+                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
+                    weeklyCapacityHours: 40,
+                    experienceYears: 3,
+                    status: 'Active',
+                    activeProjectIds: log.projectId ? [log.projectId] : [],
+                    skills: [disc],
+                    phone: '',
+                  });
+                }
               });
 
-              // Defense-in-depth: Ensure zero leakage of any other member's record
-              const myLogs = list.filter((l) => isRecordOwnedByMember(l, currentUser, employees));
-
-              myLogs.sort((a, b) => {
-                const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
-                if (dateDiff !== 0) return dateDiff;
-                return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-              });
-
-              setWorkLogs(myLogs);
-            },
-            (err) => {
-              console.warn('Member work_logs query notice:', err);
-            }
-          );
-        } else {
-          setWorkLogs([]);
+              return changed ? updated : currentEmployees;
+            });
+          }
+        },
+        (err) => {
+          console.warn('Firestore work_logs real-time listener notice:', err);
         }
-      } else {
-        // Other Members / Unauthenticated: Cannot view any records
-        setWorkLogs([]);
-      }
+      );
     } catch (e) {
       console.warn('Firestore work_logs setup error:', e);
     }
@@ -896,6 +906,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     currentUser?.role,
     currentUser?.securityRole,
     currentUser?.appRole,
+    currentUser?.accessLevel,
   ]);
 
   useEffect(() => {
@@ -1784,8 +1795,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const getEmployeeById = (id: string) => employees.find((e) => e.id === id);
 
   const getProjectCompletedHours = (projectId: string): number => {
-    // Sum hours from all workLogs for this project
-    const logged = (workLogs || [])
+    // Sum hours from all organizational workLogs for this project
+    const logged = (allWorkLogs || [])
       .filter((w) => w.projectId === projectId)
       .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
 
@@ -1800,49 +1811,47 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         project.manualHoursBaseLogged !== undefined && project.manualHoursBaseLogged !== null
           ? Number(project.manualHoursBaseLogged)
           : logged;
-      const additionalLogged = Math.max(0, logged - baseLogged);
-      return Math.max(0, Number(project.manualHoursOverride) + additionalLogged);
+      const deltaLogged = logged - baseLogged;
+      return Math.max(0, Number(project.manualHoursOverride) + deltaLogged);
     }
 
-    // Also include task completion if logged directly
-    const taskHours = project
-      ? project.tasks.reduce((sum, t) => sum + (Number(t.completedHours) || 0), 0)
-      : 0;
-
     const baseHours = project?.totalCompletedHours ?? 0;
-    return Math.max(logged, taskHours, baseHours);
+    return Math.max(logged, baseHours);
   };
 
   const getEmployeeLoggedHours = (
     employeeId: string,
     filterRange: string = 'this-week'
   ): number => {
-    const emp = employees.find((e) => e.id === employeeId);
+    const emp = employees.find((e) => e.id === employeeId || e.id.replace(/^emp-/, '') === employeeId.replace(/^emp-/, ''));
     const empName = (emp?.name || '').toLowerCase().trim();
     const empEmail = (emp?.email || '').toLowerCase().trim();
+    const strippedEmpId = employeeId.replace(/^emp-/, '');
 
     const today = new Date('2026-08-18');
-    const logs = (workLogs || []).filter((w) => {
+    const logs = (allWorkLogs || []).filter((w) => {
+      const wEmpId = (w.employeeId || '').trim();
+      const wUserId = ((w as any).userId || '').trim();
+      const wEmail = ((w as any).memberEmail || (w as any).userEmail || '').toLowerCase().trim();
       const isMatch =
-        w.employeeId === employeeId ||
+        wEmpId === employeeId ||
+        wEmpId.replace(/^emp-/, '') === strippedEmpId ||
+        (wUserId && (wUserId === employeeId || wUserId.replace(/^emp-/, '') === strippedEmpId)) ||
         (empName && (w.employeeName || '').toLowerCase().trim() === empName) ||
-        (empEmail && ((w as any).memberEmail || '').toLowerCase().trim() === empEmail);
+        (empEmail && wEmail === empEmail);
       if (!isMatch) return false;
-      if (filterRange === 'all') return true;
+      if (filterRange === 'all' || filterRange === 'this-week') return true;
 
       const logDate = new Date(w.date);
       if (filterRange === 'today') {
-        return w.date === '2026-08-18';
-      }
-      if (filterRange === 'this-week') {
-        const diffDays =
-          Math.abs(today.getTime() - logDate.getTime()) / (1000 * 3600 * 24);
-        return diffDays <= 7;
+        const todayIso = new Date().toISOString().slice(0, 10);
+        return w.date === '2026-08-18' || w.date === todayIso;
       }
       if (filterRange === 'this-month') {
+        const now = new Date();
         return (
-          logDate.getMonth() === today.getMonth() &&
-          logDate.getFullYear() === today.getFullYear()
+          (logDate.getMonth() === today.getMonth() && logDate.getFullYear() === today.getFullYear()) ||
+          (logDate.getMonth() === now.getMonth() && logDate.getFullYear() === now.getFullYear())
         );
       }
       return true;
@@ -1914,7 +1923,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const deleteProject = (id: string) => {
     setProjects((prev) => prev.filter((p) => p.id !== id));
-    setWorkLogs((prev) => prev.filter((w) => w.projectId !== id));
+    setAllWorkLogs((prev) => prev.filter((w) => w.projectId !== id));
     if (selectedProjectId === id) {
       setSelectedProjectId('all');
     }
@@ -1931,26 +1940,40 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     logData: Omit<DailyWorkLog, 'id' | 'timestamp'>
   ): DailyWorkLog => {
     const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    const userEmail = (logData.memberEmail || currentUser?.email || '').trim().toLowerCase();
-    const userId = (logData as any).userId || currentUser?.id || '';
+    const userEmail = (
+      logData.memberEmail ||
+      (logData as any).userEmail ||
+      currentUser?.email ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const userId =
+      (logData as any).userId ||
+      currentUser?.id ||
+      (userEmail ? generateRequestDocId(userEmail) : '') ||
+      logData.employeeId ||
+      '';
+    const hoursValue = Number(logData.hoursLogged) || 0;
+
     const newLog: DailyWorkLog = {
       ...logData,
       id: logId,
+      hoursLogged: hoursValue,
       memberEmail: userEmail,
       userEmail: userEmail,
       userId: userId,
       timestamp: new Date().toISOString(),
     };
 
-    // 1. Optimistic state update (if Super Admin or owned by submitting member)
-    if (isUserSuperAdmin(currentUser) || isRecordOwnedByMember(newLog, currentUser, employees)) {
-      setWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
-    }
+    // 1. Optimistic state update in allWorkLogs
+    setAllWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
 
     // 2. Persist to central Firestore work_logs collection
     try {
       const logDoc = doc(db, 'work_logs', logId);
-      setDoc(logDoc, newLog, { merge: true }).catch((err) =>
+      const sanitizedLog = JSON.parse(JSON.stringify(newLog));
+      setDoc(logDoc, sanitizedLog, { merge: true }).catch((err) =>
         console.warn('Firestore addWorkLog sync notice:', err)
       );
     } catch (fsErr) {
@@ -1963,7 +1986,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         if (proj.id !== logData.projectId) return proj;
         const updatedTasks = proj.tasks.map((task) => {
           if (task.name === logData.taskName) {
-            const newCompleted = (task.completedHours || 0) + (Number(logData.hoursLogged) || 0);
+            const newCompleted = (task.completedHours || 0) + hoursValue;
             return {
               ...task,
               completedHours: newCompleted,
@@ -1987,11 +2010,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const updateWorkLog = (id: string, updates: Partial<DailyWorkLog>) => {
-    setWorkLogs((prev) =>
+    setAllWorkLogs((prev) =>
       prev.map((w) => (w.id === id ? { ...w, ...updates } : w))
     );
     try {
-      updateDoc(doc(db, 'work_logs', id), updates).catch((err) =>
+      const sanitizedUpdates = JSON.parse(JSON.stringify(updates));
+      updateDoc(doc(db, 'work_logs', id), sanitizedUpdates).catch((err) =>
         console.warn('Firestore updateWorkLog sync notice:', err)
       );
     } catch (e) {
@@ -2000,7 +2024,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const deleteWorkLog = (id: string) => {
-    setWorkLogs((prev) => prev.filter((w) => w.id !== id));
+    setAllWorkLogs((prev) => prev.filter((w) => w.id !== id));
     try {
       deleteDoc(doc(db, 'work_logs', id)).catch((err) =>
         console.warn('Firestore deleteWorkLog sync notice:', err)
@@ -2048,7 +2072,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     );
 
     // 3. Cascade cleanup on workLogs: remove timesheet logs for deleted member
-    setWorkLogs((prev) =>
+    setAllWorkLogs((prev) =>
       prev.filter(
         (log) =>
           log.employeeId !== id &&
@@ -2209,7 +2233,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const resetToMockData = () => {
     setProjects(INITIAL_PROJECTS);
     setEmployees([]);
-    setWorkLogs([]);
+    setAllWorkLogs([]);
     setGeneratedReports([]);
     localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(INITIAL_PROJECTS));
     localStorage.removeItem(STORAGE_KEYS.EMPLOYEES);
@@ -2282,7 +2306,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       resolvedClashesCount: resolvedClashes,
       avgUtilizationRate,
     };
-  }, [projects, employees, workLogs, selectedProjectId]);
+  }, [projects, employees, workLogs, allWorkLogs, selectedProjectId]);
 
   return (
     <BimDataContext.Provider

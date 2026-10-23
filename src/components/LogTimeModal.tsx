@@ -10,7 +10,8 @@ import {
   FileText
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
+import { generateRequestDocId } from '../auth/roleSync';
 import { Discipline, ActivityType, LODLevel } from '../types';
 
 interface LogTimeModalProps {
@@ -25,11 +26,14 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   preselectedProjectId,
 }) => {
   const { projects, employees, addWorkLog, currentUser } = useBimData();
+  const isSuper = isUserSuperAdmin(currentUser);
 
   const [projectId, setProjectId] = useState<string>(
     preselectedProjectId || projects[0]?.id || ''
   );
-  const [employeeId, setEmployeeId] = useState<string>(employees[0]?.id || '');
+  const [employeeId, setEmployeeId] = useState<string>(
+    employees[0]?.id || currentUser?.id || ''
+  );
   const [date, setDate] = useState<string>('2026-08-18');
   const [hours, setHours] = useState<number>(4);
   const [discipline, setDiscipline] = useState<Discipline>('MEP - HVAC');
@@ -41,34 +45,42 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [billable, setBillable] = useState<boolean>(true);
 
-  // Sync selected project
+  // Sync selected project when modal opens or preselectedProjectId/projects change
   useEffect(() => {
     if (preselectedProjectId) {
       setProjectId(preselectedProjectId);
+    } else if (!projectId && projects.length > 0) {
+      setProjectId(projects[0].id);
     }
-  }, [preselectedProjectId]);
+  }, [isOpen, preselectedProjectId, projects, projectId]);
 
   // Auto-select current logged in user if available
   useEffect(() => {
     if (!isOpen) return;
     if (currentUser?.email) {
+      const cleanEmail = currentUser.email.trim().toLowerCase();
+      const detId = generateRequestDocId(cleanEmail);
       const match = employees.find(
         (e) =>
           e.id === currentUser.id ||
-          (e.email && e.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-          (e.name && e.name.toLowerCase() === currentUser.name?.toLowerCase())
+          e.id.replace(/^emp-/, '') === (currentUser.id || '').replace(/^emp-/, '') ||
+          e.id.replace(/^emp-/, '') === detId ||
+          (e.email && e.email.trim().toLowerCase() === cleanEmail) ||
+          (e.name && currentUser.name && e.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
       );
       if (match) {
         setEmployeeId(match.id);
       } else if (currentUser.id) {
         setEmployeeId(currentUser.id);
+      } else {
+        setEmployeeId(`emp-${detId}`);
       }
     } else if (employees.length > 0 && !employeeId) {
       setEmployeeId(employees[0].id);
     }
   }, [isOpen, currentUser, employees]);
 
-  const selectedProject = projects.find((p) => p.id === projectId);
+  const selectedProject = projects.find((p) => p.id === projectId) || projects[0];
   const selectedEmployee = employees.find((e) => e.id === employeeId);
 
   // Auto-fill task if project has tasks
@@ -84,25 +96,48 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!projectId || !employeeId || hours <= 0) return;
+    const resolvedProjectId = projectId || projects[0]?.id || '';
+    if (!resolvedProjectId || hours <= 0) return;
 
-    const selectedEmp = employees.find((e) => e.id === employeeId);
-    const finalEmpId = employeeId || (currentUser?.id ? currentUser.id : 'emp-user');
+    const cleanCurrentEmail = (currentUser?.email || '').trim().toLowerCase();
+    const fallbackUserId =
+      currentUser?.id || (cleanCurrentEmail ? `emp-${generateRequestDocId(cleanCurrentEmail)}` : 'emp-user');
+    const effectiveEmployeeId = employeeId || fallbackUserId;
+
+    const selectedEmp = employees.find(
+      (emp) =>
+        emp.id === effectiveEmployeeId ||
+        emp.id.replace(/^emp-/, '') === effectiveEmployeeId.replace(/^emp-/, '')
+    );
+    const isLoggingForSelf =
+      !isSuper ||
+      !selectedEmp ||
+      selectedEmp.id === currentUser?.id ||
+      (selectedEmp.email && cleanCurrentEmail && selectedEmp.email.trim().toLowerCase() === cleanCurrentEmail);
+
+    const finalEmpId = selectedEmp?.id || effectiveEmployeeId;
     const finalEmpName =
       selectedEmp?.name ||
-      (employeeId === currentUser?.id ? currentUser?.name : undefined) ||
+      (isLoggingForSelf ? currentUser?.name : undefined) ||
       currentUser?.name ||
-      'BIM Modeler';
-    const memberEmail =
+      (cleanCurrentEmail ? cleanCurrentEmail.split('@')[0] : 'BIM Modeler');
+    const memberEmail = (
       selectedEmp?.email ||
-      (employeeId === currentUser?.id ? currentUser?.email : undefined) ||
-      currentUser?.email ||
-      '';
+      (isLoggingForSelf ? cleanCurrentEmail : '') ||
+      cleanCurrentEmail ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const resolvedUserId =
+      (isLoggingForSelf && currentUser?.id) ||
+      (memberEmail ? generateRequestDocId(memberEmail) : '') ||
+      finalEmpId.replace(/^emp-/, '');
 
     addWorkLog({
       employeeId: finalEmpId,
       employeeName: finalEmpName,
-      projectId,
+      projectId: resolvedProjectId,
       projectName: selectedProject?.name || 'BIM Project',
       date,
       hoursLogged: Number(hours),
@@ -110,9 +145,11 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       activityType,
       taskName: taskName || `${discipline} Modeling Task`,
       lodStage,
-      notes: notes || `Logged ${hours}h on ${activityType} for ${selectedProject?.name}`,
+      notes: notes || `Logged ${hours}h on ${activityType} for ${selectedProject?.name || 'BIM Project'}`,
       billable,
       memberEmail,
+      userEmail: memberEmail,
+      userId: resolvedUserId,
     });
 
     try {
@@ -163,21 +200,39 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
                 aria-label="Select Modeler"
                 value={employeeId}
                 onChange={(e) => setEmployeeId(e.target.value)}
-                className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                disabled={!isSuper && Boolean(currentUser)}
+                className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer disabled:opacity-80"
                 required
               >
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.name} ({emp.role})
-                  </option>
-                ))}
+                {isSuper &&
+                  employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name} ({emp.role})
+                    </option>
+                  ))}
+                {!isSuper &&
+                  selectedEmployee && (
+                    <option value={selectedEmployee.id}>
+                      {selectedEmployee.name} ({selectedEmployee.role})
+                    </option>
+                  )}
                 {currentUser &&
-                  !employees.some(
-                    (e) =>
-                      e.id === currentUser.id ||
-                      (e.email && currentUser.email && e.email.toLowerCase() === currentUser.email.toLowerCase())
-                  ) && (
-                    <option value={currentUser.id}>
+                  (!selectedEmployee ||
+                    (!employees.some(
+                      (e) =>
+                        e.id === currentUser.id ||
+                        (e.email &&
+                          currentUser.email &&
+                          e.email.trim().toLowerCase() === currentUser.email.trim().toLowerCase())
+                    ) &&
+                      isSuper)) && (
+                    <option
+                      value={
+                        selectedEmployee?.id ||
+                        currentUser.id ||
+                        (currentUser.email ? `emp-${generateRequestDocId(currentUser.email)}` : 'emp-user')
+                      }
+                    >
                       {currentUser.name || currentUser.email} ({currentUser.role || 'Member'})
                     </option>
                   )}
