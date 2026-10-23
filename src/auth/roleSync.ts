@@ -102,7 +102,7 @@ export async function fetchUserRoleFromDatabase(
     return Number.isNaN(ms) ? 0 : ms;
   };
 
-  // 2. Query Firestore 'access_requests' collection
+  // 2. Query Firestore 'access_requests' collection (direct deterministic doc lookup first)
   try {
     for (const dId of docIdsToTry) {
       const reqSnap = await getDoc(doc(db, 'access_requests', dId));
@@ -129,39 +129,70 @@ export async function fetchUserRoleFromDatabase(
       }
     }
 
-    const reqsCol = collection(db, 'access_requests');
-    const reqQ = query(reqsCol, where('email', '==', cleanEmail));
-    const reqQuerySnap = await getDocs(reqQ);
-    reqQuerySnap.docs.forEach((docSnap) => {
-      const rData = docSnap.data();
-      const rawRole = rData?.assignedRole || rData?.role || rData?.requestedRole;
-      const role = normalizeUserRole(rawRole);
-      const status = normalizeApprovalStatus(rData?.status);
-      candidates.push({
-        role,
-        status,
-        accessLevel: (rData?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-        displayRole: mapAppRoleToDisplayRole(role),
-        securityRole: mapUserRoleToSecurityRole(role),
-        name: rData?.fullName || rData?.name,
-        discipline: rData?.discipline || rData?.primaryDiscipline,
-        source: 'database_access_requests',
-        isApproved: status === 'APPROVED',
-        id: docSnap.id,
-        updatedAtMs: parseTimestampMs(rData),
+    if (!candidates.some((c) => c.isApproved)) {
+      const reqsCol = collection(db, 'access_requests');
+      const reqQ = query(reqsCol, where('email', '==', cleanEmail));
+      const reqQuerySnap = await getDocs(reqQ);
+      reqQuerySnap.docs.forEach((docSnap) => {
+        const rData = docSnap.data();
+        const rawRole = rData?.assignedRole || rData?.role || rData?.requestedRole;
+        const role = normalizeUserRole(rawRole);
+        const status = normalizeApprovalStatus(rData?.status);
+        candidates.push({
+          role,
+          status,
+          accessLevel: (rData?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+          displayRole: mapAppRoleToDisplayRole(role),
+          securityRole: mapUserRoleToSecurityRole(role),
+          name: rData?.fullName || rData?.name,
+          discipline: rData?.discipline || rData?.primaryDiscipline,
+          source: 'database_access_requests',
+          isApproved: status === 'APPROVED',
+          id: docSnap.id,
+          updatedAtMs: parseTimestampMs(rData),
+        });
       });
-    });
+    }
   } catch (err) {
     console.warn('Firestore access_requests collection lookup notice:', err);
   }
 
-  // 3. Query Firestore 'users' collection
-  try {
-    for (const dId of docIdsToTry) {
-      const userSnap = await getDoc(doc(db, 'users', dId));
-      if (userSnap.exists()) {
-        const uData = userSnap.data();
-        if ((uData?.email || '').trim().toLowerCase() === cleanEmail) {
+  // 3. Query Firestore 'users' collection (only if not already confirmed approved)
+  if (!candidates.some((c) => c.isApproved)) {
+    try {
+      for (const dId of docIdsToTry) {
+        const userSnap = await getDoc(doc(db, 'users', dId));
+        if (userSnap.exists()) {
+          const uData = userSnap.data();
+          if ((uData?.email || '').trim().toLowerCase() === cleanEmail) {
+            const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
+            if (rawRole) {
+              const role = normalizeUserRole(rawRole);
+              const status = normalizeApprovalStatus(uData?.status || 'APPROVED');
+              candidates.push({
+                role,
+                status,
+                accessLevel: (uData?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+                displayRole: mapAppRoleToDisplayRole(role),
+                securityRole: mapUserRoleToSecurityRole(role),
+                name: uData?.name,
+                discipline: uData?.discipline,
+                source: 'database_users',
+                isApproved: status === 'APPROVED',
+                id: userSnap.id,
+                updatedAtMs: parseTimestampMs(uData),
+              });
+            }
+          }
+        }
+      }
+
+      if (!candidates.some((c) => c.isApproved)) {
+        const usersCol = collection(db, 'users');
+        const userQ = query(usersCol, where('email', '==', cleanEmail));
+        const userQuerySnap = await getDocs(userQ);
+        userQuerySnap.docs.forEach((docSnap) => {
+          const uData = docSnap.data();
           const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
           if (rawRole) {
             const role = normalizeUserRole(rawRole);
@@ -176,40 +207,15 @@ export async function fetchUserRoleFromDatabase(
               discipline: uData?.discipline,
               source: 'database_users',
               isApproved: status === 'APPROVED',
-              id: userSnap.id,
+              id: docSnap.id,
               updatedAtMs: parseTimestampMs(uData),
             });
           }
-        }
-      }
-    }
-
-    const usersCol = collection(db, 'users');
-    const userQ = query(usersCol, where('email', '==', cleanEmail));
-    const userQuerySnap = await getDocs(userQ);
-    userQuerySnap.docs.forEach((docSnap) => {
-      const uData = docSnap.data();
-      const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
-      if (rawRole) {
-        const role = normalizeUserRole(rawRole);
-        const status = normalizeApprovalStatus(uData?.status || 'APPROVED');
-        candidates.push({
-          role,
-          status,
-          accessLevel: (uData?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-          displayRole: mapAppRoleToDisplayRole(role),
-          securityRole: mapUserRoleToSecurityRole(role),
-          name: uData?.name,
-          discipline: uData?.discipline,
-          source: 'database_users',
-          isApproved: status === 'APPROVED',
-          id: docSnap.id,
-          updatedAtMs: parseTimestampMs(uData),
         });
       }
-    });
-  } catch (err) {
-    console.warn('Firestore users collection lookup notice:', err);
+    } catch (err) {
+      console.warn('Firestore users collection lookup notice:', err);
+    }
   }
 
   if (candidates.length > 0) {

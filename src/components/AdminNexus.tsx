@@ -220,9 +220,6 @@ export const AdminNexus: React.FC = () => {
 
   // Real-time Firestore listener in Admin Nexus
   useEffect(() => {
-    // Initial fetch on mount
-    fetchPendingRequests();
-
     // Attach Firestore onSnapshot listener for instant updates in Pending Queue
     let unsubscribe: (() => void) | undefined;
     try {

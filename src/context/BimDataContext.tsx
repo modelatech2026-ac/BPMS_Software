@@ -619,19 +619,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         }
       };
 
-      // Initial active fetch from Firestore
-      getDocs(colRef)
-        .then((snapshot) => {
-          const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
-          const list = deduplicateAndSortRequests(rawList);
-          setOnboardingRequests(list);
-          syncApprovedToEmployees(list);
-        })
-        .catch((err) => {
-          console.warn('Initial access_requests fetch notice:', err);
-        });
-
-      // Real-time onSnapshot listener
+      // Real-time onSnapshot listener (delivers initial snapshot + live changes without redundant getDocs)
       unsubscribe = onSnapshot(
         colRef,
         (snapshot) => {
@@ -898,34 +886,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     currentUser?.role,
     currentUser?.securityRole,
     currentUser?.appRole,
-    employees,
   ]);
-
-  // One-time initial push of existing local logs to Firestore to ensure full persistence across devices
-  useEffect(() => {
-    const syncExistingLocalLogs = async () => {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEYS.WORK_LOGS);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            for (const log of parsed) {
-              if (log && log.id) {
-                const logDoc = doc(db, 'work_logs', log.id);
-                const snap = await getDoc(logDoc);
-                if (!snap.exists()) {
-                  await setDoc(logDoc, log, { merge: true });
-                }
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Existing work logs Firestore sync notice:', err);
-      }
-    };
-    syncExistingLocalLogs();
-  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
@@ -1336,57 +1297,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       reviewedAt: existingReq?.reviewedAt,
     };
 
-    // 1. Save to central database collection Firestore access_requests FIRST before confirming
-    const reqDoc = doc(db, 'access_requests', effectiveDocId);
-    if (isExistingUser) {
-      await setDoc(
-        reqDoc,
-        {
-          id: effectiveDocId,
-          uid: effectiveDocId,
-          fullName: formattedName,
-          name: formattedName,
-          email: trimmedEmail,
-          lastLoginAt: isoTimestamp,
-          lastActive: isoTimestamp,
-          updatedAt: isoTimestamp,
-        },
-        { merge: true }
-      );
-    } else {
-      await setDoc(
-        reqDoc,
-        {
-          id: effectiveDocId,
-          uid: effectiveDocId,
-          name: formattedName,
-          fullName: formattedName,
-          email: trimmedEmail,
-          discipline,
-          primaryDiscipline: discipline,
-          organization: discipline,
-          reasonForAccess,
-          accessReason: reasonForAccess,
-          status: 'Pending',
-          role: 'Editor',
-          assignedRole: 'EDITOR',
-          requestedRole: 'Editor',
-          createdAt: isoTimestamp,
-          requestedAt: isoTimestamp,
-          timestamp: isoTimestamp,
-          requestTimestamp: timestamp,
-        },
-        { merge: true }
-      );
-    }
-
-    // 2. Update in-memory React state while preserving existing assigned roles
+    // 1. Update in-memory React state while preserving existing assigned roles
     setOnboardingRequests((prev) => [
       newRequest,
       ...prev.filter((r) => (r.email || '').toLowerCase().trim() !== trimmedEmail && r.id !== effectiveDocId),
     ]);
 
-    // 3. Log to Admin Audit Trail if newly registered
+    // 2. Log to Admin Audit Trail if newly registered
     if (!isExistingUser) {
       const newAudit: AdminAuditLog = {
         id: `audit-${Date.now()}`,
@@ -1398,6 +1315,57 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         details: `New access request submitted from sign-in: ${formattedName} (${trimmedEmail}). Registered in Admin Nexus awaiting Super Admin approval.`,
       };
       setAuditLogs((prev) => [newAudit, ...prev]);
+    }
+
+    // 3. Save to central database collection Firestore access_requests
+    try {
+      const reqDoc = doc(db, 'access_requests', effectiveDocId);
+      if (isExistingUser) {
+        await setDoc(
+          reqDoc,
+          {
+            id: effectiveDocId,
+            uid: effectiveDocId,
+            fullName: formattedName,
+            name: formattedName,
+            email: trimmedEmail,
+            lastLoginAt: isoTimestamp,
+            lastActive: isoTimestamp,
+            updatedAt: isoTimestamp,
+          },
+          { merge: true }
+        );
+      } else {
+        await setDoc(
+          reqDoc,
+          {
+            id: effectiveDocId,
+            uid: effectiveDocId,
+            name: formattedName,
+            fullName: formattedName,
+            email: trimmedEmail,
+            discipline,
+            primaryDiscipline: discipline,
+            organization: discipline,
+            reasonForAccess,
+            accessReason: reasonForAccess,
+            status: 'Pending',
+            role: 'Editor',
+            assignedRole: 'EDITOR',
+            requestedRole: 'Editor',
+            createdAt: isoTimestamp,
+            requestedAt: isoTimestamp,
+            timestamp: isoTimestamp,
+            requestTimestamp: timestamp,
+          },
+          { merge: true }
+        );
+      }
+    } catch (fsErr: any) {
+      console.warn('Firestore setDoc notice for sign-in request:', fsErr);
+      if (fsErr?.code !== 'resource-exhausted' && !String(fsErr?.message || '').includes('Quota exceeded')) {
+        throw fsErr;
+      }
     }
 
     return newRequest;
