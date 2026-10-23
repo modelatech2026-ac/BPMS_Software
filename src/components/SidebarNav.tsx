@@ -52,12 +52,16 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
   const isLight = theme === 'light';
-  const pendingCount = onboardingRequests.filter((r) => r.status === 'pending').length;
+  const pendingCount = onboardingRequests.filter((r) =>
+    (r.status || '').toLowerCase().includes('pending')
+  ).length;
 
   const isSuperAdmin =
     currentUser?.isAdmin ||
     currentUser?.appRole === 'SUPER_ADMIN' ||
+    currentUser?.appRole === 'DIRECTOR' ||
     currentUser?.accessLevel === 'Super Admin' ||
+    currentUser?.accessLevel === 'Director' ||
     (currentUser?.email && (
       currentUser.email.toLowerCase() === 'modelatech2026@gmail.com' ||
       currentUser.email.toLowerCase() === 'sushoovandas@gmail.com'

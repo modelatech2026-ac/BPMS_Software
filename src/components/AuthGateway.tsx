@@ -268,7 +268,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         await setDoc(reqDoc, requestPayload, { merge: true });
       }
 
-      // 2. Register in memory and notify listeners
+      // 2. Register in memory and notify listeners without repeating Firestore write
       await registerAccessRequest({
         name: cleanName,
         fullName: cleanName,
@@ -278,13 +278,26 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         uid: docId,
         organization: userDiscipline,
         accessReason: userReason,
+        existingDbRecord: existingRecord,
+        skipFirestoreWrite: true,
       });
 
-      // 3. Submit through AuthContext to establish session
+      // 3. Submit through AuthContext to establish session without repeating Firestore write
+      const effectiveRecordForSession = isApprovedUser
+        ? existingRecord
+        : {
+            ...existingRecord,
+            status: 'PENDING' as const,
+            isApproved: false,
+            id: docId,
+          };
+
       const result = await submitAccessRequest({
         name: cleanName,
         email: cleanEmail,
         uid: docId,
+        existingDbRecord: effectiveRecordForSession,
+        skipFirestoreWrite: true,
       });
 
       const record: SubmittedRequestData = {
@@ -312,9 +325,16 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     } catch (err: any) {
       console.error('Access request submission error:', err);
       setIsLoading(false);
-      setErrorMessage(
-        err?.message || 'Failed to submit access request to database. Please check your connection and try again.'
-      );
+      const rawMsg = String(err?.message || '');
+      if (err?.code === 'permission-denied' || rawMsg.includes('Missing or insufficient permissions')) {
+        setErrorMessage('Database permission error while saving your access request. Please contact the Super Administrator.');
+      } else if (err?.code === 'resource-exhausted' || rawMsg.includes('Quota exceeded')) {
+        setErrorMessage('Firestore database quota temporarily exceeded. Please wait a moment and try again.');
+      } else {
+        setErrorMessage(
+          rawMsg || 'Failed to submit access request to database. Please check your connection and try again.'
+        );
+      }
     }
   };
 

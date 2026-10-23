@@ -15,6 +15,7 @@ import { AccessLevel } from '../types';
 export const PendingApprovalScreen: React.FC = () => {
   const { user, updateCurrentUser, logout } = useAuth();
   const { currentUser, signOut } = useBimData();
+  const [syncError, setSyncError] = React.useState<string | null>(null);
 
   const activeUser = user || currentUser;
   const cleanEmail = (activeUser?.email || '').trim().toLowerCase();
@@ -29,6 +30,7 @@ export const PendingApprovalScreen: React.FC = () => {
       unsubscribe = onSnapshot(
         reqQuery,
         (snapshot) => {
+          setSyncError(null);
           if (!snapshot.empty) {
             const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as any));
             docs.sort((a, b) => {
@@ -67,12 +69,14 @@ export const PendingApprovalScreen: React.FC = () => {
             }
           }
         },
-        (error) => {
+        (error: any) => {
           console.warn('Real-time access_requests listener notice:', error);
+          setSyncError(error?.message || 'Unable to sync approval status in real time.');
         }
       );
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Error setting up onSnapshot listener:', e);
+      setSyncError(e?.message || 'Unable to connect to real-time status listener.');
     }
 
     return () => {
@@ -110,6 +114,12 @@ export const PendingApprovalScreen: React.FC = () => {
         <p className="text-sm text-slate-400 max-w-sm mx-auto leading-relaxed">
           Your request has been sent to the Super Admin. Please wait for approval.
         </p>
+
+        {syncError && (
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
+            {syncError}
+          </div>
+        )}
 
         {/* Primary Action Button */}
         <div className="pt-2">

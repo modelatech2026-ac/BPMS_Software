@@ -32,7 +32,12 @@ import {
   mapAppRoleToDisplayRole,
   normalizeUserRole,
 } from '../auth/googleAuth';
-import { persistUserRoleToDatabase, fetchUserRoleFromDatabase, generateRequestDocId } from '../auth/roleSync';
+import {
+  persistUserRoleToDatabase,
+  fetchUserRoleFromDatabase,
+  generateRequestDocId,
+  DatabaseRoleResult,
+} from '../auth/roleSync';
 import { useOptionalAuth } from '../auth/AuthContext';
 import { db } from '../firebase/config';
 import {
@@ -75,9 +80,14 @@ interface BimDataContextType {
   registerAccessRequest: (params: {
     name: string;
     email: string;
+    fullName?: string;
+    discipline?: string;
+    reasonForAccess?: string;
     uid?: string;
     organization?: string;
     accessReason?: string;
+    existingDbRecord?: DatabaseRoleResult;
+    skipFirestoreWrite?: boolean;
   }) => Promise<OnboardingRequest>;
   auditLogs: AdminAuditLog[];
   setAuditLogs: React.Dispatch<React.SetStateAction<AdminAuditLog[]>>;
@@ -1230,6 +1240,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     uid?: string;
     organization?: string;
     accessReason?: string;
+    existingDbRecord?: DatabaseRoleResult;
+    skipFirestoreWrite?: boolean;
   }): Promise<OnboardingRequest> => {
     const trimmedEmail = params.email.trim().toLowerCase();
     const formattedName = (params.fullName || params.name || '').trim() || trimmedEmail.split('@')[0];
@@ -1250,7 +1262,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const existingReq = onboardingRequests.find(
       (r) => (r.email || '').toLowerCase().trim() === trimmedEmail || r.id === requestId
     );
-    const dbRecord = await fetchUserRoleFromDatabase(trimmedEmail, requestId);
+    const dbRecord = params.existingDbRecord || (await fetchUserRoleFromDatabase(trimmedEmail, requestId));
     const isExistingUser = Boolean(existingReq || (dbRecord && dbRecord.source !== 'default'));
 
     const preservedAppRole: UserRole =
@@ -1317,10 +1329,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       setAuditLogs((prev) => [newAudit, ...prev]);
     }
 
-    // 3. Save to central database collection Firestore access_requests
-    try {
+    // 3. Save to central database collection Firestore access_requests unless caller already wrote it
+    if (!params.skipFirestoreWrite) {
       const reqDoc = doc(db, 'access_requests', effectiveDocId);
-      if (isExistingUser) {
+      if (isExistingUser && preservedStatus === 'APPROVED') {
         await setDoc(
           reqDoc,
           {
@@ -1357,14 +1369,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             requestedAt: isoTimestamp,
             timestamp: isoTimestamp,
             requestTimestamp: timestamp,
+            updatedAt: isoTimestamp,
           },
           { merge: true }
         );
-      }
-    } catch (fsErr: any) {
-      console.warn('Firestore setDoc notice for sign-in request:', fsErr);
-      if (fsErr?.code !== 'resource-exhausted' && !String(fsErr?.message || '').includes('Quota exceeded')) {
-        throw fsErr;
       }
     }
 
@@ -1498,47 +1506,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
 
-      // 4. Update status in Firestore access_requests & users collection
-      const nowIso = new Date().toISOString();
-      try {
-        const reqDoc = doc(db, 'access_requests', effectiveReq.id);
-        setDoc(
-          reqDoc,
-          {
-            id: effectiveReq.id,
-            email: applicantEmail,
-            name: applicantFullName,
-            fullName: applicantFullName,
-            status: 'Approved',
-            role: validatedRole,
-            assignedRole: validatedRole,
-            assignedAccessLevel: calculatedAccessLevel,
-            discipline: targetDiscipline,
-            primaryDiscipline: targetDiscipline,
-            reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
-            reviewedAt: nowIso,
-            updatedAt: nowIso,
-          },
-          { merge: true }
-        ).catch((err) => {
-          console.error('Firestore setDoc access_requests error:', err);
-        });
-
-        // Robust cross-collection persistence to users & all matching access_requests docs
-        persistUserRoleToDatabase({
-          email: applicantEmail,
-          role: validatedRole,
-          status: 'APPROVED',
-          accessLevel: calculatedAccessLevel,
-          name: applicantFullName,
-          discipline: targetDiscipline,
-          uid: effectiveReq.googleId || effectiveReq.id,
-        }).catch((err) => {
-          console.error('persistUserRoleToDatabase error in approve:', err);
-        });
-      } catch (e) {
-        console.error('Firestore doc access error:', e);
-      }
+      // 4. Persist status and assigned role in Firestore access_requests & users collection
+      persistUserRoleToDatabase({
+        email: applicantEmail,
+        role: validatedRole,
+        status: 'APPROVED',
+        accessLevel: calculatedAccessLevel,
+        name: applicantFullName,
+        discipline: targetDiscipline,
+        uid: effectiveReq.googleId || effectiveReq.id,
+      }).catch((err) => {
+        console.error('persistUserRoleToDatabase error in approve:', err);
+      });
     }
   };
 
@@ -1601,34 +1580,17 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         setCurrentUser((prev) => (prev ? { ...prev, status: 'REJECTED' } : null));
       }
 
-      // Update status in Firestore access_requests & users collection
-      const nowIso = new Date().toISOString();
-      try {
-        const reqDoc = doc(db, 'access_requests', effectiveReq.id);
-        setDoc(
-          reqDoc,
-          {
-            email: applicantEmail,
-            status: 'Rejected',
-            reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
-            reviewedAt: nowIso,
-            updatedAt: nowIso,
-          },
-          { merge: true }
-        ).catch((err) => {
-          console.error('Firestore setDoc reject error:', err);
-        });
-
-        persistUserRoleToDatabase({
-          email: applicantEmail,
-          role: (effectiveReq.assignedRole as UserRole) || 'VIEWER',
-          status: 'REJECTED',
-          name: effectiveReq.name,
-          uid: effectiveReq.googleId || effectiveReq.id,
-        }).catch(() => {});
-      } catch (e) {
-        console.warn('Firestore doc access error:', e);
-      }
+      // Persist rejected status in Firestore access_requests & users collection
+      persistUserRoleToDatabase({
+        email: applicantEmail,
+        role: (effectiveReq.assignedRole as UserRole) || 'VIEWER',
+        status: 'REJECTED',
+        name: effectiveReq.name,
+        uid: effectiveReq.googleId || effectiveReq.id,
+        notes: notes || 'Access request rejected by Super Admin.',
+      }).catch((err) => {
+        console.error('persistUserRoleToDatabase error in reject:', err);
+      });
     }
   };
 
@@ -1675,53 +1637,59 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       setAuditLogs((prev) => [newAudit, ...prev]);
 
-      const nowIso = new Date().toISOString();
-      try {
-        const reqDoc = doc(db, 'access_requests', effectiveReq.id);
-        setDoc(
-          reqDoc,
-          {
-            email: applicantEmail,
-            status: 'Pending',
-            reviewedBy: null,
-            reviewedAt: null,
-            updatedAt: nowIso,
-          },
-          { merge: true }
-        ).catch(() => {});
-
-        persistUserRoleToDatabase({
-          email: applicantEmail,
-          role: (effectiveReq.assignedRole as UserRole) || 'EDITOR',
-          status: 'PENDING',
-          name: effectiveReq.name,
-          uid: effectiveReq.googleId || effectiveReq.id,
-        }).catch(() => {});
-      } catch (e) {
-        console.warn('Firestore doc access error:', e);
-      }
+      persistUserRoleToDatabase({
+        email: applicantEmail,
+        role: (effectiveReq.assignedRole as UserRole) || 'EDITOR',
+        status: 'PENDING',
+        name: effectiveReq.name,
+        uid: effectiveReq.googleId || effectiveReq.id,
+        notes: 'Re-opened and restored to Pending Queue by Super Admin.',
+      }).catch((err) => {
+        console.error('persistUserRoleToDatabase error in reopen:', err);
+      });
     }
   };
 
   const deleteOnboardingRequest = (requestId: string) => {
-    const target = onboardingRequests.find((r) => r.id === requestId);
-    if (!target) return;
+    const matchedEmp = employees.find((e) => e.id === requestId);
+    const target =
+      onboardingRequests.find((r) => r.id === requestId) ||
+      (matchedEmp
+        ? onboardingRequests.find((r) => r.email.trim().toLowerCase() === matchedEmp.email.trim().toLowerCase())
+        : undefined);
 
-    const targetEmail = target.email.trim().toLowerCase();
+    const targetEmail = (target?.email || matchedEmp?.email || '').trim().toLowerCase();
+    const targetName = target?.name || matchedEmp?.name || targetEmail;
+    if (!target && !targetEmail) return;
+
     setOnboardingRequests((prev) =>
-      prev.filter((r) => r.id !== requestId && r.email.trim().toLowerCase() !== targetEmail)
+      prev.filter((r) => r.id !== requestId && (!targetEmail || r.email.trim().toLowerCase() !== targetEmail))
     );
 
     try {
-      deleteDoc(doc(db, 'access_requests', requestId)).catch(() => {});
-      const q = query(collection(db, 'access_requests'), where('email', '==', targetEmail));
-      getDocs(q)
-        .then((snap) => {
-          snap.docs.forEach((d) => {
-            deleteDoc(doc(db, 'access_requests', d.id)).catch(() => {});
-          });
-        })
-        .catch(() => {});
+      if (!requestId.startsWith('emp-')) {
+        deleteDoc(doc(db, 'access_requests', requestId)).catch(() => {});
+        deleteDoc(doc(db, 'users', requestId)).catch(() => {});
+      }
+      if (targetEmail) {
+        const detId = generateRequestDocId(targetEmail);
+        deleteDoc(doc(db, 'access_requests', detId)).catch(() => {});
+        deleteDoc(doc(db, 'users', detId)).catch(() => {});
+        getDocs(query(collection(db, 'access_requests'), where('email', '==', targetEmail)))
+          .then((snap) => {
+            snap.docs.forEach((d) => {
+              deleteDoc(doc(db, 'access_requests', d.id)).catch(() => {});
+            });
+          })
+          .catch(() => {});
+        getDocs(query(collection(db, 'users'), where('email', '==', targetEmail)))
+          .then((snap) => {
+            snap.docs.forEach((d) => {
+              deleteDoc(doc(db, 'users', d.id)).catch(() => {});
+            });
+          })
+          .catch(() => {});
+      }
     } catch {
       // ignore
     }
@@ -1729,8 +1697,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const newAudit: AdminAuditLog = {
       id: `audit-${Date.now()}`,
       action: 'user_deleted',
-      targetUserEmail: target.email,
-      targetUserName: target.name,
+      targetUserEmail: targetEmail || requestId,
+      targetUserName: targetName,
       performedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
       timestamp: new Date().toLocaleString([], {
         year: 'numeric',
@@ -1739,11 +1707,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         hour: '2-digit',
         minute: '2-digit',
       }),
-      details: `Removed access request record for ${target.email}`,
+      details: `Removed access request record for ${targetEmail || requestId}`,
     };
     setAuditLogs((prev) => [newAudit, ...prev]);
 
-    if (currentUser && currentUser.email.toLowerCase() === targetEmail) {
+    if (currentUser && targetEmail && currentUser.email.toLowerCase() === targetEmail) {
       setCurrentUser(null);
     }
   };

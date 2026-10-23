@@ -22,6 +22,7 @@ import {
   fetchUserRoleFromDatabase,
   persistUserRoleToDatabase,
   generateRequestDocId,
+  DatabaseRoleResult,
 } from './roleSync';
 import {
   generateTotpSecret,
@@ -86,12 +87,16 @@ export interface AuthContextType {
     name: string;
     email: string;
     uid?: string;
+    existingDbRecord?: DatabaseRoleResult;
+    skipFirestoreWrite?: boolean;
   }) => Promise<{ requires2FA: boolean; status: UserApprovalStatus; user: AuthUser }>;
   confirmGoogleAccessRequest: (params: {
     name: string;
     email: string;
     uid: string;
     photoURL?: string;
+    existingDbRecord?: DatabaseRoleResult;
+    skipFirestoreWrite?: boolean;
   }) => Promise<{ requires2FA: boolean; status: UserApprovalStatus; user: AuthUser }>;
   loginWithEmail: (
     email: string,
@@ -671,6 +676,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     email: string;
     uid: string;
     photoURL?: string;
+    existingDbRecord?: DatabaseRoleResult;
+    skipFirestoreWrite?: boolean;
   }): Promise<{ requires2FA: boolean; status: UserApprovalStatus; user: AuthUser }> => {
     const cleanEmail = params.email.trim().toLowerCase();
     const isSuper = isSuperAdminEmail(cleanEmail);
@@ -693,25 +700,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         requestTimestamp: new Date().toISOString(),
       };
 
-      try {
-        await setDoc(
-          doc(db, 'access_requests', adminUser.id),
-          {
-            id: adminUser.id,
-            uid: adminUser.id,
-            name: adminUser.name,
-            fullName: adminUser.name,
-            email: adminUser.email,
-            timestamp: new Date().toISOString(),
-            status: 'Approved',
-            role: 'SUPER_ADMIN',
-            assignedRole: 'SUPER_ADMIN',
-            requestedRole: 'Super Admin',
-          },
-          { merge: true }
-        );
-      } catch (err) {
-        console.warn('Firestore admin write notice:', err);
+      if (!params.skipFirestoreWrite) {
+        try {
+          await setDoc(
+            doc(db, 'access_requests', adminUser.id),
+            {
+              id: adminUser.id,
+              uid: adminUser.id,
+              name: adminUser.name,
+              fullName: adminUser.name,
+              email: adminUser.email,
+              timestamp: new Date().toISOString(),
+              status: 'Approved',
+              role: 'SUPER_ADMIN',
+              assignedRole: 'SUPER_ADMIN',
+              requestedRole: 'Super Admin',
+            },
+            { merge: true }
+          );
+        } catch (err) {
+          console.warn('Firestore admin write notice:', err);
+        }
       }
 
       saveUserToDb(adminUser);
@@ -722,8 +731,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { requires2FA: false, status: 'APPROVED', user: adminUser };
     }
 
-    // Query authoritative database role from Firestore 'users' or 'access_requests'
-    const dbRecord = await fetchUserRoleFromDatabase(cleanEmail, params.uid);
+    // Query authoritative database role from Firestore 'users' or 'access_requests' unless already fetched
+    const dbRecord = params.existingDbRecord || (await fetchUserRoleFromDatabase(cleanEmail, params.uid));
     let firestoreStatus: UserApprovalStatus = dbRecord.status;
     let appRole: UserRole = dbRecord.role;
     let assignedRole: SecurityRole = dbRecord.securityRole;
@@ -731,36 +740,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let displayRole: string = dbRecord.displayRole;
     const effectiveUid = dbRecord.id || params.uid || generateRequestDocId(cleanEmail);
 
-    // If no existing record in database, record initial pending access request
     if (dbRecord.source === 'default') {
-      const isoTimestamp = new Date().toISOString();
-      const newRecord = {
-        fullName: params.name,
-        email: cleanEmail,
-        discipline: 'BIM - ACS',
-        reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
-        status: 'Pending',
-        createdAt: isoTimestamp,
-        id: effectiveUid,
-        uid: effectiveUid,
-        name: params.name,
-        role: 'Editor',
-        assignedRole: 'EDITOR',
-        requestedAt: isoTimestamp,
-        timestamp: isoTimestamp,
-        requestTimestamp: isoTimestamp,
-        requestedRole: 'Editor',
-        primaryDiscipline: 'BIM - ACS',
-        organization: 'BIM - ACS',
-        accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
-      };
-      await setDoc(doc(db, 'access_requests', effectiveUid), newRecord, { merge: true });
+      if (!params.skipFirestoreWrite) {
+        const isoTimestamp = new Date().toISOString();
+        const newRecord = {
+          fullName: params.name,
+          email: cleanEmail,
+          discipline: 'BIM - ACS',
+          reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+          status: 'Pending',
+          createdAt: isoTimestamp,
+          id: effectiveUid,
+          uid: effectiveUid,
+          name: params.name,
+          role: 'Editor',
+          assignedRole: 'EDITOR',
+          requestedAt: isoTimestamp,
+          timestamp: isoTimestamp,
+          requestTimestamp: isoTimestamp,
+          requestedRole: 'Editor',
+          primaryDiscipline: 'BIM - ACS',
+          organization: 'BIM - ACS',
+          accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+        };
+        await setDoc(doc(db, 'access_requests', effectiveUid), newRecord, { merge: true });
+      }
       firestoreStatus = 'PENDING';
       appRole = 'EDITOR';
       assignedRole = 'Editor';
       accessLevel = 'Editor';
       displayRole = 'BIM Modeler / Editor';
-    } else {
+    } else if (!params.skipFirestoreWrite) {
       // User has existing database role: update login activity without touching role or status
       try {
         const isoNow = new Date().toISOString();
@@ -820,6 +830,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     name: string;
     email: string;
     uid?: string;
+    existingDbRecord?: DatabaseRoleResult;
+    skipFirestoreWrite?: boolean;
   }): Promise<{ requires2FA: boolean; status: UserApprovalStatus; user: AuthUser }> => {
     const cleanEmail = params.email.trim().toLowerCase();
     const cleanName = params.name.trim() || cleanEmail.split('@')[0];
@@ -829,6 +841,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       name: cleanName,
       email: cleanEmail,
       uid: generatedUid,
+      existingDbRecord: params.existingDbRecord,
+      skipFirestoreWrite: params.skipFirestoreWrite,
     });
   };
 

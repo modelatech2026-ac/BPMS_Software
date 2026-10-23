@@ -121,6 +121,7 @@ export const AdminNexus: React.FC = () => {
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const mapDocToRequest = (d: any): OnboardingRequest | null => {
     const data = d.data();
@@ -204,6 +205,7 @@ export const AdminNexus: React.FC = () => {
   // Active Real-Time Hook / Query for Pending Access Requests from Firestore
   const fetchPendingRequests = async () => {
     setIsSyncing(true);
+    setSyncError(null);
     try {
       // 1. Fetch from Firestore collection access_requests
       const colRef = collection(db, 'access_requests');
@@ -211,8 +213,9 @@ export const AdminNexus: React.FC = () => {
       const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
       const list = deduplicateAndSortRequests(rawList);
       setOnboardingRequests(list);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Admin Nexus pending fetch notice:', err);
+      setSyncError(err?.message || 'Failed to fetch access requests from Firestore.');
     }
     setIsSyncing(false);
     setLastSyncTime(new Date().toLocaleTimeString());
@@ -227,17 +230,20 @@ export const AdminNexus: React.FC = () => {
       unsubscribe = onSnapshot(
         colRef,
         (snapshot) => {
+          setSyncError(null);
           const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
           const list = deduplicateAndSortRequests(rawList);
           setOnboardingRequests(list);
           setLastSyncTime(new Date().toLocaleTimeString());
         },
-        (err) => {
+        (err: any) => {
           console.warn('Admin Nexus onSnapshot notice:', err);
+          setSyncError(err?.message || 'Real-time synchronization error on access_requests collection.');
         }
       );
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Failed to attach onSnapshot listener in Admin Nexus:', err);
+      setSyncError(err?.message || 'Failed to initialize real-time listener.');
     }
 
     return () => {
@@ -261,7 +267,7 @@ export const AdminNexus: React.FC = () => {
     const list: UserAccessRecord[] = employees.map((emp, index) => {
       const customPerm = permissionsMap[emp.id] || {};
       const isSuperAdminUser =
-        emp.email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase() ||
+        isSuperAdminEmail(emp.email) ||
         emp.name.toLowerCase().includes('sushoovan') ||
         emp.role?.toLowerCase().includes('super admin');
 
@@ -363,7 +369,11 @@ export const AdminNexus: React.FC = () => {
     setTimeout(() => setSuccessToast(null), 3000);
   };
 
-  const handleUpdateAccessLevel = (userId: string, newLevel: AccessLevel) => {
+  const handleUpdateAccessLevel = (
+    userId: string,
+    newLevel: AccessLevel,
+    explicitTarget?: { email: string; name: string }
+  ) => {
     const isSuper = newLevel === 'Super Admin';
     const isDirector = newLevel === 'Director';
     const isAdmin = newLevel === 'BIM Admin';
@@ -372,8 +382,8 @@ export const AdminNexus: React.FC = () => {
     const isViewer = newLevel === 'Viewer';
 
     const targetUser = users.find((u) => u.id === userId);
-    const targetEmail = targetUser?.email;
-    const targetName = targetUser?.name || 'User';
+    const targetEmail = explicitTarget?.email || targetUser?.email;
+    const targetName = explicitTarget?.name || targetUser?.name || 'User';
 
     // 1. Update permissionsMap
     setPermissionsMap((prev) => ({
@@ -468,7 +478,10 @@ export const AdminNexus: React.FC = () => {
         accessLevel: newLevel,
         name: targetName,
         uid: userId,
-      }).catch((e) => console.warn('persistUserRoleToDatabase in handleUpdateAccessLevel notice:', e));
+      }).catch((e: any) => {
+        console.warn('persistUserRoleToDatabase in handleUpdateAccessLevel notice:', e);
+        setSyncError(e?.message || 'Failed to persist updated role to Firestore.');
+      });
 
       if (currentUser && currentUser.email.toLowerCase() === targetEmail.toLowerCase()) {
         setCurrentUser({
@@ -515,8 +528,8 @@ export const AdminNexus: React.FC = () => {
 
   const handleDeleteUser = (userId: string) => {
     const target = users.find((e) => e.id === userId);
-    if (target?.email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
-      alert('Cannot delete the primary Super Admin account (sushoovan Das).');
+    if (isSuperAdminEmail(target?.email)) {
+      setSyncError('Cannot delete a primary Super Admin account.');
       return;
     }
 
@@ -546,20 +559,20 @@ export const AdminNexus: React.FC = () => {
   const handlePurgeOtherAccounts = () => {
     if (
       confirm(
-        'Are you sure you want to delete all other team members and accounts, leaving ONLY Super Admin sushoovan Das with master privileges?'
+        'Are you sure you want to delete all other team members and accounts, leaving ONLY Super Admin accounts with master privileges?'
       )
     ) {
       employees.forEach((emp) => {
-        if (emp.email.toLowerCase() !== SUPER_ADMIN_EMAIL.toLowerCase()) {
+        if (!isSuperAdminEmail(emp.email)) {
           deleteEmployee(emp.id);
         }
       });
       onboardingRequests.forEach((req) => {
-        if (req.email.toLowerCase() !== SUPER_ADMIN_EMAIL.toLowerCase()) {
+        if (!isSuperAdminEmail(req.email)) {
           deleteOnboardingRequest(req.id);
         }
       });
-      showNotification('All other team members have been purged. sushoovan Das is now the exclusive Super Admin.');
+      showNotification('All other team members have been purged.');
     }
   };
 
@@ -567,9 +580,12 @@ export const AdminNexus: React.FC = () => {
     e.preventDefault();
     if (!newUserName.trim() || !newUserEmail.trim()) return;
 
+    const cleanName = newUserName.trim();
+    const cleanEmail = newUserEmail.trim().toLowerCase();
+
     const newEmp = addEmployee({
-      name: newUserName.trim(),
-      email: newUserEmail.trim(),
+      name: cleanName,
+      email: cleanEmail,
       role: newUserRole.trim(),
       primaryDiscipline: 'BIM - ACS',
       weeklyCapacityHours: 40,
@@ -578,7 +594,10 @@ export const AdminNexus: React.FC = () => {
       skills: ['Revit 2026', 'Navisworks Manage', 'Solibri'],
     });
 
-    handleUpdateAccessLevel(newEmp.id, newUserAccessLevel);
+    handleUpdateAccessLevel(newEmp.id, newUserAccessLevel, {
+      email: cleanEmail,
+      name: cleanName,
+    });
     setIsInviteModalOpen(false);
     setNewUserName('');
     setNewUserEmail('');
@@ -709,6 +728,22 @@ export const AdminNexus: React.FC = () => {
         <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-2xl text-xs font-semibold animate-bounce">
           <CheckCircle2 className="w-4 h-4" />
           <span>{successToast}</span>
+        </div>
+      )}
+
+      {syncError && (
+        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{syncError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSyncError(null)}
+            className="text-rose-400 hover:text-white p-1 rounded-lg transition cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 

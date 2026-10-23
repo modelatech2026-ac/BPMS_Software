@@ -58,10 +58,10 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Connection validation
+// Connection validation helper (on-demand only)
 export async function testFirestoreConnection() {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(db, 'projects', 'proj-1'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error('Please check your Firebase configuration.');
@@ -69,4 +69,3 @@ export async function testFirestoreConnection() {
   }
 }
 
-testFirestoreConnection();

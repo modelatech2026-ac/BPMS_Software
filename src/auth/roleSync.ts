@@ -93,7 +93,8 @@ export async function fetchUserRoleFromDatabase(
 
   const candidates: Array<DatabaseRoleResult & { updatedAtMs: number }> = [];
   const deterministicId = generateRequestDocId(cleanEmail);
-  const docIdsToTry = Array.from(new Set([uid, deterministicId].filter(Boolean) as string[]));
+  const validUid = uid && !uid.startsWith('emp-') ? uid : undefined;
+  const docIdsToTry = Array.from(new Set([deterministicId, validUid].filter(Boolean) as string[]));
 
   const parseTimestampMs = (data: any): number => {
     const raw = data?.updatedAt || data?.reviewedAt || data?.timestamp || data?.requestedAt || data?.createdAt;
@@ -102,37 +103,66 @@ export async function fetchUserRoleFromDatabase(
     return Number.isNaN(ms) ? 0 : ms;
   };
 
-  // 2. Query Firestore 'access_requests' collection (direct deterministic doc lookup first)
+  // 2. Direct deterministic document lookups across 'access_requests' and 'users' in parallel
   try {
-    for (const dId of docIdsToTry) {
-      const reqSnap = await getDoc(doc(db, 'access_requests', dId));
-      if (reqSnap.exists()) {
-        const rData = reqSnap.data();
-        if ((rData?.email || '').trim().toLowerCase() === cleanEmail) {
-          const rawRole = rData?.assignedRole || rData?.role || rData?.requestedRole;
+    const directReads = await Promise.all(
+      docIdsToTry.flatMap((dId) => [
+        getDoc(doc(db, 'access_requests', dId)).then((snap) => ({ kind: 'req' as const, snap })),
+        getDoc(doc(db, 'users', dId)).then((snap) => ({ kind: 'usr' as const, snap })),
+      ])
+    );
+
+    for (const item of directReads) {
+      if (!item.snap.exists()) continue;
+      const data = item.snap.data();
+      if ((data?.email || '').trim().toLowerCase() !== cleanEmail) continue;
+
+      if (item.kind === 'req') {
+        const rawRole = data?.assignedRole || data?.role || data?.requestedRole;
+        const role = normalizeUserRole(rawRole);
+        const status = normalizeApprovalStatus(data?.status);
+        candidates.push({
+          role,
+          status,
+          accessLevel: (data?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+          displayRole: mapAppRoleToDisplayRole(role),
+          securityRole: mapUserRoleToSecurityRole(role),
+          name: data?.fullName || data?.name,
+          discipline: data?.discipline || data?.primaryDiscipline,
+          source: 'database_access_requests',
+          isApproved: status === 'APPROVED',
+          id: item.snap.id,
+          updatedAtMs: parseTimestampMs(data),
+        });
+      } else {
+        const rawRole = data?.role || data?.appRole || data?.assignedRole;
+        if (rawRole) {
           const role = normalizeUserRole(rawRole);
-          const status = normalizeApprovalStatus(rData?.status);
+          const status = normalizeApprovalStatus(data?.status || 'APPROVED');
           candidates.push({
             role,
             status,
-            accessLevel: (rData?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+            accessLevel: (data?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
             displayRole: mapAppRoleToDisplayRole(role),
             securityRole: mapUserRoleToSecurityRole(role),
-            name: rData?.fullName || rData?.name,
-            discipline: rData?.discipline || rData?.primaryDiscipline,
-            source: 'database_access_requests',
+            name: data?.name || data?.fullName,
+            discipline: data?.discipline || data?.primaryDiscipline,
+            source: 'database_users',
             isApproved: status === 'APPROVED',
-            id: reqSnap.id,
-            updatedAtMs: parseTimestampMs(rData),
+            id: item.snap.id,
+            updatedAtMs: parseTimestampMs(data),
           });
         }
       }
     }
 
+    // 3. Fallback query by email only if no approved record was found via deterministic ID
     if (!candidates.some((c) => c.isApproved)) {
-      const reqsCol = collection(db, 'access_requests');
-      const reqQ = query(reqsCol, where('email', '==', cleanEmail));
-      const reqQuerySnap = await getDocs(reqQ);
+      const [reqQuerySnap, userQuerySnap] = await Promise.all([
+        getDocs(query(collection(db, 'access_requests'), where('email', '==', cleanEmail))),
+        getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail))),
+      ]);
+
       reqQuerySnap.docs.forEach((docSnap) => {
         const rData = docSnap.data();
         const rawRole = rData?.assignedRole || rData?.role || rData?.requestedRole;
@@ -152,70 +182,31 @@ export async function fetchUserRoleFromDatabase(
           updatedAtMs: parseTimestampMs(rData),
         });
       });
+
+      userQuerySnap.docs.forEach((docSnap) => {
+        const uData = docSnap.data();
+        const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
+        if (rawRole) {
+          const role = normalizeUserRole(rawRole);
+          const status = normalizeApprovalStatus(uData?.status || 'APPROVED');
+          candidates.push({
+            role,
+            status,
+            accessLevel: (uData?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+            displayRole: mapAppRoleToDisplayRole(role),
+            securityRole: mapUserRoleToSecurityRole(role),
+            name: uData?.name || uData?.fullName,
+            discipline: uData?.discipline || uData?.primaryDiscipline,
+            source: 'database_users',
+            isApproved: status === 'APPROVED',
+            id: docSnap.id,
+            updatedAtMs: parseTimestampMs(uData),
+          });
+        }
+      });
     }
   } catch (err) {
-    console.warn('Firestore access_requests collection lookup notice:', err);
-  }
-
-  // 3. Query Firestore 'users' collection (only if not already confirmed approved)
-  if (!candidates.some((c) => c.isApproved)) {
-    try {
-      for (const dId of docIdsToTry) {
-        const userSnap = await getDoc(doc(db, 'users', dId));
-        if (userSnap.exists()) {
-          const uData = userSnap.data();
-          if ((uData?.email || '').trim().toLowerCase() === cleanEmail) {
-            const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
-            if (rawRole) {
-              const role = normalizeUserRole(rawRole);
-              const status = normalizeApprovalStatus(uData?.status || 'APPROVED');
-              candidates.push({
-                role,
-                status,
-                accessLevel: (uData?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-                displayRole: mapAppRoleToDisplayRole(role),
-                securityRole: mapUserRoleToSecurityRole(role),
-                name: uData?.name,
-                discipline: uData?.discipline,
-                source: 'database_users',
-                isApproved: status === 'APPROVED',
-                id: userSnap.id,
-                updatedAtMs: parseTimestampMs(uData),
-              });
-            }
-          }
-        }
-      }
-
-      if (!candidates.some((c) => c.isApproved)) {
-        const usersCol = collection(db, 'users');
-        const userQ = query(usersCol, where('email', '==', cleanEmail));
-        const userQuerySnap = await getDocs(userQ);
-        userQuerySnap.docs.forEach((docSnap) => {
-          const uData = docSnap.data();
-          const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
-          if (rawRole) {
-            const role = normalizeUserRole(rawRole);
-            const status = normalizeApprovalStatus(uData?.status || 'APPROVED');
-            candidates.push({
-              role,
-              status,
-              accessLevel: (uData?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-              displayRole: mapAppRoleToDisplayRole(role),
-              securityRole: mapUserRoleToSecurityRole(role),
-              name: uData?.name,
-              discipline: uData?.discipline,
-              source: 'database_users',
-              isApproved: status === 'APPROVED',
-              id: docSnap.id,
-              updatedAtMs: parseTimestampMs(uData),
-            });
-          }
-        });
-      }
-    } catch (err) {
-      console.warn('Firestore users collection lookup notice:', err);
-    }
+    console.warn('Firestore role lookup notice:', err);
   }
 
   if (candidates.length > 0) {
@@ -267,6 +258,7 @@ export async function persistUserRoleToDatabase(params: {
   discipline?: string;
   uid?: string;
   reviewedBy?: string;
+  notes?: string;
 }): Promise<void> {
   const cleanEmail = params.email.trim().toLowerCase();
   if (!cleanEmail) return;
@@ -284,9 +276,10 @@ export async function persistUserRoleToDatabase(params: {
   const displayRole = mapAppRoleToDisplayRole(validatedRole);
   const nowIso = new Date().toISOString();
   const deterministicId = generateRequestDocId(cleanEmail);
-  const targetId = params.uid || deterministicId;
+  const cleanUid = params.uid && !params.uid.startsWith('emp-') ? params.uid : deterministicId;
+  const targetId = cleanUid || deterministicId;
 
-  const updatePayload = {
+  const updatePayload: Record<string, any> = {
     email: cleanEmail,
     name: params.name || cleanEmail.split('@')[0],
     fullName: params.name || cleanEmail.split('@')[0],
@@ -294,10 +287,16 @@ export async function persistUserRoleToDatabase(params: {
     assignedRole: validatedRole,
     requestedRole: displayRole,
     assignedAccessLevel: calculatedAccessLevel,
+    discipline: params.discipline || 'BIM - ACS',
+    primaryDiscipline: params.discipline || 'BIM - ACS',
     status: firestoreRequestStatus,
-    reviewedBy: params.reviewedBy || `${SUPER_ADMIN_NAME} (Super Admin)`,
-    reviewedAt: nowIso,
+    reviewedBy:
+      normalizedStatus === 'PENDING'
+        ? null
+        : params.reviewedBy || `${SUPER_ADMIN_NAME} (Super Admin)`,
+    reviewedAt: normalizedStatus === 'PENDING' ? null : nowIso,
     updatedAt: nowIso,
+    ...(params.notes ? { notes: params.notes } : {}),
   };
 
   // 1. Update matching records in Firestore 'access_requests'
@@ -310,26 +309,9 @@ export async function persistUserRoleToDatabase(params: {
     if (!snap.empty) {
       const updatePromises = snap.docs.map((docSnap) => {
         updatedDocIds.add(docSnap.id);
-        return setDoc(docSnap.ref, updatePayload, { merge: true });
+        return setDoc(docSnap.ref, { id: docSnap.id, uid: docSnap.id, ...updatePayload }, { merge: true });
       });
       await Promise.all(updatePromises);
-    }
-
-    if (!updatedDocIds.has(targetId)) {
-      await setDoc(
-        doc(db, 'access_requests', targetId),
-        {
-          id: targetId,
-          uid: targetId,
-          discipline: params.discipline || 'BIM - ACS',
-          primaryDiscipline: params.discipline || 'BIM - ACS',
-          createdAt: nowIso,
-          timestamp: nowIso,
-          ...updatePayload,
-        },
-        { merge: true }
-      );
-      updatedDocIds.add(targetId);
     }
 
     if (!updatedDocIds.has(deterministicId)) {
@@ -338,8 +320,21 @@ export async function persistUserRoleToDatabase(params: {
         {
           id: deterministicId,
           uid: deterministicId,
-          discipline: params.discipline || 'BIM - ACS',
-          primaryDiscipline: params.discipline || 'BIM - ACS',
+          createdAt: nowIso,
+          timestamp: nowIso,
+          ...updatePayload,
+        },
+        { merge: true }
+      );
+      updatedDocIds.add(deterministicId);
+    }
+
+    if (targetId !== deterministicId && !updatedDocIds.has(targetId)) {
+      await setDoc(
+        doc(db, 'access_requests', targetId),
+        {
+          id: targetId,
+          uid: targetId,
           createdAt: nowIso,
           timestamp: nowIso,
           ...updatePayload,
@@ -355,7 +350,7 @@ export async function persistUserRoleToDatabase(params: {
   // 2. Update Firestore 'users' collection
   try {
     const userPayload = {
-      id: targetId,
+      id: deterministicId,
       email: cleanEmail,
       name: params.name || cleanEmail.split('@')[0],
       role: validatedRole,
@@ -365,11 +360,11 @@ export async function persistUserRoleToDatabase(params: {
       discipline: params.discipline || 'BIM - ACS',
       updatedAt: nowIso,
     };
-    await setDoc(doc(db, 'users', targetId), userPayload, { merge: true });
-    if (deterministicId !== targetId) {
+    await setDoc(doc(db, 'users', deterministicId), userPayload, { merge: true });
+    if (targetId !== deterministicId) {
       await setDoc(
-        doc(db, 'users', deterministicId),
-        { ...userPayload, id: deterministicId },
+        doc(db, 'users', targetId),
+        { ...userPayload, id: targetId },
         { merge: true }
       );
     }
