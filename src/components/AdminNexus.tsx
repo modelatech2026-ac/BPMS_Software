@@ -33,6 +33,7 @@ import {
 import {
   SUPER_ADMIN_EMAIL,
   SUPER_ADMIN_NAME,
+  isSuperAdminEmail,
   mapAppRoleToAccessLevel,
   mapAppRoleToDisplayRole,
   normalizeUserRole,
@@ -57,6 +58,7 @@ export const AdminNexus: React.FC = () => {
     rejectOnboardingRequest,
     reopenOnboardingRequest,
     deleteOnboardingRequest,
+    registerAccessRequest,
     signInWithGoogle,
     theme,
     currentUser,
@@ -123,21 +125,21 @@ export const AdminNexus: React.FC = () => {
   const mapDocToRequest = (d: any): OnboardingRequest | null => {
     const data = d.data();
     if (!data || !data.email) return null;
-    const rawStatus = (data.status || 'pending').toLowerCase();
+    const rawStatus = (data.status || 'Pending').toLowerCase();
     const mappedStatus =
-      rawStatus === 'approved'
+      rawStatus === 'approved' || rawStatus === 'active'
         ? 'APPROVED'
         : rawStatus === 'rejected'
         ? 'REJECTED'
-        : 'pending';
+        : 'Pending';
     const fullName = data.fullName || data.name || data.email.split('@')[0];
     const discipline = data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS';
     const reasonForAccess = data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
     const createdAt = data.createdAt || data.requestedAt || data.timestamp || new Date().toISOString();
 
     const normalizedRole = normalizeUserRole(
-      data.assignedRole || data.role || data.appRole,
-      data.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
+      data.assignedRole || data.role || data.appRole || data.requestedRole,
+      isSuperAdminEmail(data.email)
     );
     const calculatedAccessLevel = (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
 
@@ -160,20 +162,54 @@ export const AdminNexus: React.FC = () => {
       createdAt: createdAt,
       requestedAt: createdAt,
       requestTimestamp: createdAt,
-      timestamp: createdAt,
-      status: rawStatus === 'pending' ? 'pending' : (mappedStatus as any),
+      timestamp: data.updatedAt || data.reviewedAt || createdAt,
+      status: mappedStatus as any,
+      reviewedBy: data.reviewedBy,
+      reviewedAt: data.reviewedAt,
       notes: data.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
     };
+  };
+
+  const deduplicateAndSortRequests = (rawList: OnboardingRequest[]): OnboardingRequest[] => {
+    const byEmail = new Map<string, OnboardingRequest>();
+    const sorted = [...rawList].sort((a, b) => {
+      const rank = (s?: string) => {
+        const u = (s || '').toUpperCase();
+        if (u === 'APPROVED' || u === 'ACTIVE') return 3;
+        if (u === 'REJECTED') return 2;
+        return 1;
+      };
+      const rDiff = rank(b.status) - rank(a.status);
+      if (rDiff !== 0) return rDiff;
+      const tA = new Date(a.timestamp || a.createdAt || 0).getTime() || 0;
+      const tB = new Date(b.timestamp || b.createdAt || 0).getTime() || 0;
+      return tB - tA;
+    });
+
+    for (const req of sorted) {
+      const key = (req.email || '').trim().toLowerCase();
+      if (!key) continue;
+      if (!byEmail.has(key)) {
+        byEmail.set(key, req);
+      }
+    }
+
+    return Array.from(byEmail.values()).sort((a, b) => {
+      const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
+      const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
+      return tB - tA;
+    });
   };
 
   // Active Real-Time Hook / Query for Pending Access Requests from Firestore
   const fetchPendingRequests = async () => {
     setIsSyncing(true);
     try {
-      // 1. Fetch from Firestore collection access_requests (No LocalStorage)
+      // 1. Fetch from Firestore collection access_requests
       const colRef = collection(db, 'access_requests');
       const snapshot = await getDocs(colRef);
-      const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+      const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+      const list = deduplicateAndSortRequests(rawList);
       setOnboardingRequests(list);
     } catch (err) {
       console.warn('Admin Nexus pending fetch notice:', err);
@@ -194,7 +230,8 @@ export const AdminNexus: React.FC = () => {
       unsubscribe = onSnapshot(
         colRef,
         (snapshot) => {
-          const list = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+          const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+          const list = deduplicateAndSortRequests(rawList);
           setOnboardingRequests(list);
           setLastSyncTime(new Date().toLocaleTimeString());
         },
@@ -245,6 +282,7 @@ export const AdminNexus: React.FC = () => {
 
       const accessLevel = customPerm.accessLevel || defaultAccessLevel;
       const isSuper = accessLevel === 'Super Admin';
+      const isDirector = accessLevel === 'Director';
       const isAdmin = accessLevel === 'BIM Admin';
       const isEditor = accessLevel === 'Editor';
       const isPM = accessLevel === 'Project Manager';
@@ -255,10 +293,10 @@ export const AdminNexus: React.FC = () => {
         email: emp.email,
         role: emp.role,
         accessLevel,
-        canEditProjects: customPerm.canEditProjects ?? (isSuper || isAdmin || isEditor || isPM),
+        canEditProjects: customPerm.canEditProjects ?? (isSuper || isDirector || isAdmin || isEditor || isPM),
         canEditHours: customPerm.canEditHours ?? true,
-        canManageTeam: customPerm.canManageTeam ?? (isSuper || isAdmin),
-        canDeleteRecords: customPerm.canDeleteRecords ?? isSuper,
+        canManageTeam: customPerm.canManageTeam ?? (isSuper || isDirector || isAdmin),
+        canDeleteRecords: customPerm.canDeleteRecords ?? (isSuper || isDirector),
         canExportReports: customPerm.canExportReports ?? true,
         assignedProjectIds: ['all'],
         status: matchedReq && isReqPending(matchedReq.status) ? 'Pending Approval' : emp.status === 'Suspended' ? 'Suspended' : 'Active',
@@ -275,6 +313,7 @@ export const AdminNexus: React.FC = () => {
       if (!alreadyInList) {
         const customPerm = permissionsMap[req.id] || {};
         const isSuper = (customPerm.accessLevel || req.assignedAccessLevel) === 'Super Admin';
+        const isDirector = (customPerm.accessLevel || req.assignedAccessLevel) === 'Director';
         const isAdmin = (customPerm.accessLevel || req.assignedAccessLevel) === 'BIM Admin';
         const isEditor = (customPerm.accessLevel || req.assignedAccessLevel) === 'Editor';
         const isPM = (customPerm.accessLevel || req.assignedAccessLevel) === 'Project Manager';
@@ -289,10 +328,10 @@ export const AdminNexus: React.FC = () => {
           email: req.email,
           role: req.requestedRole || 'External Partner (Google SSO)',
           accessLevel,
-          canEditProjects: customPerm.canEditProjects ?? (isSuper || isAdmin || isEditor || isPM),
+          canEditProjects: customPerm.canEditProjects ?? (isSuper || isDirector || isAdmin || isEditor || isPM),
           canEditHours: customPerm.canEditHours ?? true,
-          canManageTeam: customPerm.canManageTeam ?? (isSuper || isAdmin),
-          canDeleteRecords: customPerm.canDeleteRecords ?? isSuper,
+          canManageTeam: customPerm.canManageTeam ?? (isSuper || isDirector || isAdmin),
+          canDeleteRecords: customPerm.canDeleteRecords ?? (isSuper || isDirector),
           canExportReports: customPerm.canExportReports ?? true,
           assignedProjectIds: ['all'],
           status: isReqPending(req.status) ? 'Pending Approval' : 'Active',
@@ -329,6 +368,7 @@ export const AdminNexus: React.FC = () => {
 
   const handleUpdateAccessLevel = (userId: string, newLevel: AccessLevel) => {
     const isSuper = newLevel === 'Super Admin';
+    const isDirector = newLevel === 'Director';
     const isAdmin = newLevel === 'BIM Admin';
     const isEditor = newLevel === 'Editor';
     const isPM = newLevel === 'Project Manager';
@@ -344,11 +384,11 @@ export const AdminNexus: React.FC = () => {
       [userId]: {
         ...prev[userId],
         accessLevel: newLevel,
-        canEditProjects: isSuper || isAdmin || isEditor || isPM,
+        canEditProjects: isSuper || isDirector || isAdmin || isEditor || isPM,
         canEditHours: true,
-        canManageTeam: isSuper || isAdmin,
-        canDeleteRecords: isSuper,
-        canExportReports: isSuper || isAdmin || isEditor || isPM,
+        canManageTeam: isSuper || isDirector || isAdmin,
+        canDeleteRecords: isSuper || isDirector,
+        canExportReports: isSuper || isDirector || isAdmin || isEditor || isPM,
       },
     }));
 
@@ -361,6 +401,8 @@ export const AdminNexus: React.FC = () => {
         updateEmployee(matchedEmp.id, {
           role: isSuper
             ? 'Super Administrator'
+            : isDirector
+            ? 'Director'
             : isAdmin
             ? 'BIM Administrator'
             : isPM
@@ -381,6 +423,8 @@ export const AdminNexus: React.FC = () => {
               assignedAccessLevel: newLevel,
               assignedRole: isSuper
                 ? 'SUPER_ADMIN'
+                : isDirector
+                ? 'DIRECTOR'
                 : isPM
                 ? 'PROJECT_MANAGER'
                 : isViewer
@@ -412,6 +456,8 @@ export const AdminNexus: React.FC = () => {
       // 5. Update session if active
       const roleToSet: UserRole = isSuper
         ? 'SUPER_ADMIN'
+        : isDirector
+        ? 'DIRECTOR'
         : isPM
         ? 'PROJECT_MANAGER'
         : isViewer
@@ -432,7 +478,7 @@ export const AdminNexus: React.FC = () => {
           ...currentUser,
           accessLevel: newLevel,
           appRole: roleToSet,
-          isAdmin: isSuper,
+          isAdmin: isSuper || isDirector,
           status: 'APPROVED',
         });
       }
@@ -542,20 +588,25 @@ export const AdminNexus: React.FC = () => {
     showNotification(`Added ${newEmp.name} to Team Efficiency and Admin Nexus`);
   };
 
-  const handleSimulateRegistration = (e: React.FormEvent) => {
+  const handleSimulateRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!simEmail.trim()) return;
-    signInWithGoogle({
-      googleId: `google_sim_${Date.now()}`,
-      email: simEmail.trim().toLowerCase(),
-      name: simName.trim(),
-      discipline: simDiscipline as any,
-      organization: 'External Contractor / Modeling Partner',
-      accessReason: simReason.trim(),
-    });
-    setIsSimulateModalOpen(false);
-    setActiveSubTab('pending-onboarding');
-    showNotification(`Google access request registered for ${simEmail}`);
+    try {
+      await registerAccessRequest({
+        email: simEmail.trim().toLowerCase(),
+        name: simName.trim() || simEmail.trim().split('@')[0],
+        fullName: simName.trim() || simEmail.trim().split('@')[0],
+        discipline: simDiscipline,
+        organization: 'External Contractor / Modeling Partner',
+        reasonForAccess: simReason.trim(),
+        accessReason: simReason.trim(),
+      });
+      setIsSimulateModalOpen(false);
+      setActiveSubTab('pending-onboarding');
+      showNotification(`Access request registered in Firestore for ${simEmail}`);
+    } catch (err: any) {
+      showNotification(`Failed to register access request: ${err?.message || 'Permission error'}`);
+    }
   };
 
   const handleToggleAccessRequest = (
@@ -871,6 +922,7 @@ export const AdminNexus: React.FC = () => {
               >
                 <option value="all">All Roles ({users.length})</option>
                 <option value="Super Admin">Super Admin</option>
+                <option value="Director">Director</option>
                 <option value="BIM Admin">BIM Admin</option>
                 <option value="Project Manager">Project Manager</option>
                 <option value="Editor">Editor</option>
@@ -899,6 +951,7 @@ export const AdminNexus: React.FC = () => {
                 <tbody className="divide-y divide-slate-800/60">
                   {filteredUsers.map((user) => {
                     const isSuper = user.accessLevel === 'Super Admin';
+                    const isDirector = user.accessLevel === 'Director';
                     const isAdmin = user.accessLevel === 'BIM Admin';
                     const isEditor = user.accessLevel === 'Editor';
                     const isPM = user.accessLevel === 'Project Manager';
@@ -915,6 +968,11 @@ export const AdminNexus: React.FC = () => {
                             {isSuper && (
                               <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
                                 SUPER ADMIN
+                              </span>
+                            )}
+                            {isDirector && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                DIRECTOR
                               </span>
                             )}
                             {isAdmin && (
@@ -996,6 +1054,8 @@ export const AdminNexus: React.FC = () => {
                               className={`text-xs font-semibold px-2.5 py-1.5 rounded-xl border cursor-pointer focus:outline-none transition w-full ${
                                 isSuper
                                   ? 'bg-indigo-950/80 text-indigo-300 border-indigo-700'
+                                  : isDirector
+                                  ? 'bg-amber-950/80 text-amber-300 border-amber-700'
                                   : isAdmin
                                   ? 'bg-blue-950/80 text-blue-300 border-blue-700'
                                   : isPM
@@ -1006,6 +1066,7 @@ export const AdminNexus: React.FC = () => {
                               }`}
                             >
                               <option value="Super Admin" className="bg-slate-900 text-indigo-300">👑 Super Admin</option>
+                              <option value="Director" className="bg-slate-900 text-amber-300">⭐ Director</option>
                               <option value="BIM Admin" className="bg-slate-900 text-blue-300">🛡️ BIM Admin</option>
                               <option value="Project Manager" className="bg-slate-900 text-purple-300">💼 Project Manager</option>
                               <option value="Editor" className="bg-slate-900 text-cyan-300">✏️ Editor (Edit Access)</option>
@@ -1269,6 +1330,7 @@ export const AdminNexus: React.FC = () => {
                                 title={isApproved ? 'Change assigned role' : 'Role to assign upon acceptance'}
                               >
                                 <option value="SUPER_ADMIN">Role: Super Admin</option>
+                                <option value="DIRECTOR">Role: Director</option>
                                 <option value="PROJECT_MANAGER">Role: Project Manager</option>
                                 <option value="EDITOR">Role: Editor</option>
                                 <option value="VIEWER">Role: Viewer (Read-only)</option>
@@ -1736,6 +1798,7 @@ export const AdminNexus: React.FC = () => {
                     className="w-full text-xs bg-slate-800 border border-slate-700 text-white rounded-xl px-3 py-2.5 focus:outline-none focus:border-blue-500"
                   >
                     <option value="Super Admin">Super Admin</option>
+                    <option value="Director">Director</option>
                     <option value="BIM Admin">BIM Admin</option>
                     <option value="Project Manager">Project Manager</option>
                     <option value="Editor">Editor (Edit Access)</option>

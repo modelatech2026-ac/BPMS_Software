@@ -38,11 +38,33 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
   const isSuperAdmin = useMemo(() => {
     if (!currentUser) return false;
+    if (
+      currentUser.securityRole === 'Super Admin' ||
+      currentUser.securityRole === 'Director' ||
+      currentUser.appRole === 'SUPER_ADMIN' ||
+      currentUser.appRole === 'DIRECTOR' ||
+      currentUser.accessLevel === 'Super Admin' ||
+      currentUser.accessLevel === 'Director' ||
+      currentUser.role === 'Super Admin' ||
+      currentUser.role === 'Director'
+    ) {
+      return true;
+    }
+    if (
+      currentUser.securityRole === 'Project Manager' ||
+      currentUser.securityRole === 'BIM Specialist' ||
+      currentUser.securityRole === 'Lead Coordinator' ||
+      currentUser.securityRole === 'Editor' ||
+      currentUser.securityRole === 'Viewer' ||
+      currentUser.appRole === 'PROJECT_MANAGER' ||
+      currentUser.appRole === 'EDITOR' ||
+      currentUser.appRole === 'VIEWER'
+    ) {
+      return false;
+    }
     const cleanEmail = (currentUser.email || '').toLowerCase().trim();
     if (cleanEmail === 'modelatech2026@gmail.com' || cleanEmail === 'sushoovandas@gmail.com') return true;
-    if (currentUser.role === 'Super Admin' || currentUser.securityRole === 'Super Admin') return true;
-    if (currentUser.appRole === 'SUPER_ADMIN') return true;
-    if (currentUser.isAdmin && (currentUser.role?.toLowerCase().includes('admin') || currentUser.securityRole?.toLowerCase().includes('admin'))) return true;
+    if (currentUser.isAdmin && (currentUser.role?.toLowerCase().includes('admin') || currentUser.role?.toLowerCase().includes('director'))) return true;
     return false;
   }, [currentUser]);
 

@@ -117,10 +117,11 @@ function BimAppContent() {
   const [currentPath, setCurrentPath] = useState<string>(() => getNormalizedPath());
 
   // Check if session is truly active and approved
+  const userStatusUpper = (currentUser?.status || '').toUpperCase();
   const hasActiveSession = Boolean(
     isAuthenticated &&
     currentUser &&
-    (currentUser.status === 'APPROVED' || currentUser.status === 'active')
+    (userStatusUpper === 'APPROVED' || userStatusUpper === 'ACTIVE')
   );
 
   // 1. Automatic Unauthenticated Redirect:
@@ -167,15 +168,22 @@ function BimAppContent() {
     };
   }, [setCurrentTab]);
 
-  // Sync initial path with ViewTab if authenticated
+  // Sync initial path with ViewTab if authenticated and approved; redirect root / or /login directly to dashboard
   useEffect(() => {
     if (hasActiveSession) {
       const path = getNormalizedPath();
-      if (ROUTE_TAB_MAP[path]) {
+      if (path === '/' || path === '/login') {
+        const defaultRoute = isViewer ? '/daily-tracker' : '/dashboard';
+        if (typeof window !== 'undefined') {
+          window.history.replaceState(null, '', defaultRoute);
+        }
+        setCurrentPath(defaultRoute);
+        setCurrentTab(ROUTE_TAB_MAP[defaultRoute]);
+      } else if (ROUTE_TAB_MAP[path]) {
         setCurrentTab(ROUTE_TAB_MAP[path]);
       }
     }
-  }, [hasActiveSession, setCurrentTab]);
+  }, [hasActiveSession, isViewer, setCurrentTab]);
 
   // Automatically enforce viewer view tab constraint
   useEffect(() => {
@@ -287,37 +295,25 @@ function BimAppContent() {
     );
   }
 
-  // 2. Session Gate / Auth Guard:
+  // 2. Pending Approval, Rejected, or Suspended: Render dedicated Access Request Status Screen if user session is in pending/rejected state
+  if (
+    isAuthenticated &&
+    currentUser &&
+    (userStatusUpper === 'PENDING_APPROVAL' ||
+      userStatusUpper === 'PENDING' ||
+      userStatusUpper === 'REJECTED' ||
+      userStatusUpper === 'SUSPENDED')
+  ) {
+    return <PendingApprovalScreen />;
+  }
+
+  // 3. Session Gate / Auth Guard:
   // If user has NO active session, always load the Landing Page / Sign-In screen
   if (!hasActiveSession) {
     return (
       <AuthGateway
         onLoginSuccess={handlePostLoginRouting}
         attemptedRoute={attemptedRoute}
-      />
-    );
-  }
-
-  // 3. Pending Approval, Rejected, or Suspended: Render dedicated Access Request Status Screen
-  if (
-    currentUser &&
-    (currentUser.status === 'pending_approval' ||
-      currentUser.status === 'pending' ||
-      currentUser.status === 'rejected' ||
-      currentUser.status === 'suspended')
-  ) {
-    return <PendingApprovalScreen />;
-  }
-
-  // 4. Default Entry Point (/):
-  // When user visits the root URL (/), render the Landing Page / Sign-In screen by default.
-  // If they already have an active session, they see the active session welcome card with "Enter Dashboard".
-  if (currentPath === '/' || currentPath === '/login') {
-    return (
-      <AuthGateway
-        hasActiveSession={true}
-        onEnterDashboard={() => navigateTo(isViewer ? '/daily-tracker' : '/dashboard')}
-        onLoginSuccess={handlePostLoginRouting}
       />
     );
   }

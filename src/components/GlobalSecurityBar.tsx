@@ -347,6 +347,7 @@ export const GlobalSecurityBar: React.FC<GlobalSecurityBarProps> = ({
                       }`}
                     >
                       <option value="Super Admin">Super Admin (Full Governance)</option>
+                      <option value="Director">Director (Executive Access)</option>
                       <option value="Project Manager">Project Manager</option>
                       <option value="BIM Specialist">BIM Specialist</option>
                       <option value="Lead Coordinator">Lead Coordinator</option>

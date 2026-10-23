@@ -35,9 +35,8 @@ service cloud.firestore {
     }
 
     function isValidAccessRequest(data) {
-      return (('fullName' in data && data.fullName is string) || ('name' in data && data.name is string))
-        && data.email is string && data.email.size() > 0 && data.email.size() <= 150
-        && (data.status in ['pending', 'Pending', 'approved', 'Approved', 'rejected', 'Rejected', 'APPROVED', 'REJECTED']);
+      return (('fullName' in data && data.fullName is string) || ('name' in data && data.name is string) || ('email' in data && data.email is string))
+        && data.email is string && data.email.size() > 0 && data.email.size() <= 200;
     }
 
     // Access Requests Collection
@@ -85,10 +84,13 @@ service cloud.firestore {
       return isAdmin() || (
         isSignedIn() && (
           (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'SUPER_ADMIN') ||
+           (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'SUPER_ADMIN' ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'DIRECTOR')) ||
           (exists(/databases/$(database)/documents/access_requests/$(request.auth.uid)) &&
            (get(/databases/$(database)/documents/access_requests/$(request.auth.uid)).data.assignedRole == 'SUPER_ADMIN' ||
-            get(/databases/$(database)/documents/access_requests/$(request.auth.uid)).data.role == 'Super Admin'))
+            get(/databases/$(database)/documents/access_requests/$(request.auth.uid)).data.assignedRole == 'DIRECTOR' ||
+            get(/databases/$(database)/documents/access_requests/$(request.auth.uid)).data.role == 'Super Admin' ||
+            get(/databases/$(database)/documents/access_requests/$(request.auth.uid)).data.role == 'Director'))
         )
       );
     }

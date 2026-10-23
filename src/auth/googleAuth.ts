@@ -125,16 +125,18 @@ export function toAuthUser(user: UserDatabaseModel): AuthUser {
     role: mapAppRoleToDisplayRole(user.role),
     appRole: user.role,
     status: user.status,
-    isAdmin: isSuper || user.role === 'PROJECT_MANAGER',
+    isAdmin: isSuper || user.role === 'DIRECTOR' || user.role === 'PROJECT_MANAGER',
     accessLevel: mapAppRoleToAccessLevel(user.role),
     requestTimestamp: user.createdAt,
   };
 }
 
-export function mapAppRoleToAccessLevel(role: UserRole) {
+export function mapAppRoleToAccessLevel(role: UserRole): import('../types').AccessLevel {
   switch (role) {
     case 'SUPER_ADMIN':
       return 'Super Admin';
+    case 'DIRECTOR':
+      return 'Director';
     case 'PROJECT_MANAGER':
       return 'Project Manager';
     case 'EDITOR':
@@ -149,6 +151,8 @@ export function mapAppRoleToDisplayRole(role: UserRole): string {
   switch (role) {
     case 'SUPER_ADMIN':
       return 'Super Administrator & Lead Architect';
+    case 'DIRECTOR':
+      return 'Director';
     case 'PROJECT_MANAGER':
       return 'BIM Project Manager';
     case 'EDITOR':
@@ -173,6 +177,14 @@ export function normalizeUserRole(rawRole: any, isSuperAdmin: boolean = false): 
     return 'SUPER_ADMIN';
   }
   if (
+    str === 'DIRECTOR' ||
+    str === 'BIM DIRECTOR' ||
+    str === 'EXECUTIVE DIRECTOR' ||
+    str.includes('DIRECTOR')
+  ) {
+    return 'DIRECTOR';
+  }
+  if (
     str === 'PROJECT_MANAGER' ||
     str === 'PROJECT MANAGER' ||
     str === 'PM' ||
@@ -187,6 +199,7 @@ export function normalizeUserRole(rawRole: any, isSuperAdmin: boolean = false): 
     str === 'GUEST VIEWER' ||
     str === 'READ ONLY' ||
     str === 'VIEWER (READ ONLY)' ||
+    str === 'VIEWER (READ-ONLY)' ||
     str.includes('VIEWER')
   ) {
     return 'VIEWER';
@@ -209,6 +222,8 @@ export function mapUserRoleToSecurityRole(role: UserRole): SecurityRole {
   switch (role) {
     case 'SUPER_ADMIN':
       return 'Super Admin';
+    case 'DIRECTOR':
+      return 'Director';
     case 'PROJECT_MANAGER':
       return 'Project Manager';
     case 'VIEWER':
@@ -218,3 +233,4 @@ export function mapUserRoleToSecurityRole(role: UserRole): SecurityRole {
       return 'BIM Specialist';
   }
 }
+

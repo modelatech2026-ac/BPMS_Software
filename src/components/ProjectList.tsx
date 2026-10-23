@@ -24,7 +24,7 @@ import {
   X,
   Check
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
 import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 
@@ -39,13 +39,55 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onOpenNewProjectModal,
   onOpenReportModalWithProject,
 }) => {
-  const { projects, getProjectCompletedHours, employees, updateProjectStatus, updateProject } = useBimData();
+  const { projects, workLogs, getProjectCompletedHours, employees, updateProjectStatus, updateProject, currentUser } = useBimData();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [disciplineFilter, setDisciplineFilter] = useState<string>('all');
-  const [isSuperAdmin, setIsSuperAdmin] = useState(true); // Super Admin role switcher
+  const [adminEditUnlocked, setAdminEditUnlocked] = useState(true);
   const [editingActualDateProject, setEditingActualDateProject] = useState<BimProject | null>(null);
   const [newActualDateValue, setNewActualDateValue] = useState('');
+
+  // Inline hours editing draft state keyed by `${projectId}:logged` or `${projectId}:estimated`
+  const [inlineDrafts, setInlineDrafts] = useState<Record<string, string>>({});
+  const [activeInlineKey, setActiveInlineKey] = useState<string | null>(null);
+
+  const hasSuperAdminOrDirectorRole = isUserSuperAdmin(currentUser);
+  const isSuperAdmin = hasSuperAdminOrDirectorRole && adminEditUnlocked;
+
+  const commitLoggedHours = (project: BimProject, rawValue: string) => {
+    const parsed = parseFloat(rawValue);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      const currentLoggedFromWorkLogs = (workLogs || [])
+        .filter((w) => w.projectId === project.id)
+        .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+      updateProject(project.id, {
+        totalCompletedHours: parsed,
+        manualHoursOverride: parsed,
+        manualHoursBaseLogged: currentLoggedFromWorkLogs,
+      });
+    }
+    setActiveInlineKey(null);
+    setInlineDrafts((prev) => {
+      const next = { ...prev };
+      delete next[`${project.id}:logged`];
+      return next;
+    });
+  };
+
+  const commitEstimatedHours = (project: BimProject, rawValue: string) => {
+    const parsed = parseFloat(rawValue);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      updateProject(project.id, {
+        totalEstimatedHours: parsed,
+      });
+    }
+    setActiveInlineKey(null);
+    setInlineDrafts((prev) => {
+      const next = { ...prev };
+      delete next[`${project.id}:estimated`];
+      return next;
+    });
+  };
 
   const filterOptions = [
     { id: 'all', label: 'All Projects' },
@@ -98,18 +140,31 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         <div className="flex items-center gap-2">
           {/* Super Admin Status Badge & Switcher */}
           <button
-            onClick={() => setIsSuperAdmin(!isSuperAdmin)}
+            onClick={() => {
+              if (hasSuperAdminOrDirectorRole) {
+                setAdminEditUnlocked(!adminEditUnlocked);
+              }
+            }}
+            disabled={!hasSuperAdminOrDirectorRole}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition ${
               isSuperAdmin
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20 cursor-pointer'
+                : 'bg-slate-800 border-slate-700 text-slate-400 cursor-default'
             }`}
-            title="Click to toggle Super Admin elevation for testing Actual Delivered Date lock"
+            title={
+              hasSuperAdminOrDirectorRole
+                ? 'Super Admin / Director inline editing active (click to toggle lock)'
+                : 'Read-only mode: Super Admin or Director role required to edit hours inline'
+            }
           >
             {isSuperAdmin ? (
               <>
                 <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                <span>Super Admin: Active</span>
+                <span>
+                  {currentUser?.appRole === 'DIRECTOR' || currentUser?.accessLevel === 'Director' || currentUser?.securityRole === 'Director'
+                    ? 'Director: Active'
+                    : 'Super Admin: Active'}
+                </span>
               </>
             ) : (
               <>
@@ -239,14 +294,21 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 ) : (
                   filteredProjects.map((project) => {
                     const completed = getProjectCompletedHours(project.id);
-                    const pct = project.totalEstimatedHours > 0
-                      ? Math.round((completed / project.totalEstimatedHours) * 100)
+                    const estimated = Number(project.totalEstimatedHours) || 0;
+                    const remainingHours = estimated - completed;
+                    const pct = estimated > 0
+                      ? Math.round((completed / estimated) * 100)
                       : completed > 0 ? 100 : 0;
-                    const isOver = completed > project.totalEstimatedHours && project.totalEstimatedHours > 0;
-                    const isZeroEstOver = project.totalEstimatedHours === 0 && completed > 0;
+                    const isOver = completed > estimated && estimated > 0;
+                    const isZeroEstOver = estimated === 0 && completed > 0;
                     const plannedDate = project.plannedDeliveryDate || project.targetCompletionDate;
                     const actualDate = project.actualDeliveredDate;
                     const varianceInfo = calculateDeliveryVariance(plannedDate, actualDate, project.status);
+
+                    const loggedKey = `${project.id}:logged`;
+                    const estimatedKey = `${project.id}:estimated`;
+                    const isEditingLogged = activeInlineKey === loggedKey;
+                    const isEditingEstimated = activeInlineKey === estimatedKey;
 
                     return (
                       <tr
@@ -285,24 +347,155 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                         </td>
 
                         {/* Total Hours Logged */}
-                        <td className="py-2.5 px-3">
-                          <div className="flex items-center gap-1.5">
-                            <Clock className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                            <span className="font-bold text-slate-100 text-[12px] font-mono">
-                              {completed.toFixed(1)}
-                            </span>
-                            <span className="text-slate-500 text-[10px]">hrs</span>
-                          </div>
+                        <td
+                          className="py-2.5 px-3"
+                          onClick={(e) => {
+                            if (isSuperAdmin) e.stopPropagation();
+                          }}
+                          onDoubleClick={(e) => {
+                            if (isSuperAdmin) {
+                              e.stopPropagation();
+                              setActiveInlineKey(loggedKey);
+                              setInlineDrafts((prev) => ({
+                                ...prev,
+                                [loggedKey]: String(Number(completed.toFixed(1))),
+                              }));
+                            }
+                          }}
+                        >
+                          {isSuperAdmin ? (
+                            <div className="flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                              <input
+                                type="number"
+                                step="0.5"
+                                min="0"
+                                aria-label={`Total Hours Logged for ${project.name}`}
+                                value={
+                                  isEditingLogged && inlineDrafts[loggedKey] !== undefined
+                                    ? inlineDrafts[loggedKey]
+                                    : Number(completed.toFixed(1))
+                                }
+                                onFocus={(e) => {
+                                  setActiveInlineKey(loggedKey);
+                                  setInlineDrafts((prev) => ({
+                                    ...prev,
+                                    [loggedKey]: String(Number(completed.toFixed(1))),
+                                  }));
+                                  e.currentTarget.select();
+                                }}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setInlineDrafts((prev) => ({
+                                    ...prev,
+                                    [loggedKey]: val,
+                                  }));
+                                }}
+                                onBlur={(e) => commitLoggedHours(project, e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitLoggedHours(project, e.currentTarget.value);
+                                    e.currentTarget.blur();
+                                  } else if (e.key === 'Escape') {
+                                    setActiveInlineKey(null);
+                                    setInlineDrafts((prev) => {
+                                      const next = { ...prev };
+                                      delete next[loggedKey];
+                                      return next;
+                                    });
+                                    e.currentTarget.blur();
+                                  }
+                                }}
+                                className="w-20 bg-slate-800/90 hover:bg-slate-800 focus:bg-slate-950 text-slate-100 font-bold text-[12px] font-mono px-2 py-1 rounded border border-slate-700 hover:border-amber-500/50 focus:border-amber-400 focus:outline-none transition"
+                                title="Super Admin / Director: Click or double-click to edit Total Hours Logged (Enter or blur to save)"
+                              />
+                              <span className="text-slate-500 text-[10px]">hrs</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                              <span className="font-bold text-slate-100 text-[12px] font-mono">
+                                {completed.toFixed(1)}
+                              </span>
+                              <span className="text-slate-500 text-[10px]">hrs</span>
+                            </div>
+                          )}
                         </td>
 
                         {/* Estimated Hours */}
-                        <td className="py-2.5 px-3">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-semibold text-slate-300 text-[12px] font-mono">
-                              {project.totalEstimatedHours.toFixed(1)}
-                            </span>
-                            <span className="text-slate-500 text-[10px]">hrs</span>
-                          </div>
+                        <td
+                          className="py-2.5 px-3"
+                          onClick={(e) => {
+                            if (isSuperAdmin) e.stopPropagation();
+                          }}
+                          onDoubleClick={(e) => {
+                            if (isSuperAdmin) {
+                              e.stopPropagation();
+                              setActiveInlineKey(estimatedKey);
+                              setInlineDrafts((prev) => ({
+                                ...prev,
+                                [estimatedKey]: String(Number(estimated.toFixed(1))),
+                              }));
+                            }
+                          }}
+                        >
+                          {isSuperAdmin ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                step="0.5"
+                                min="0"
+                                aria-label={`Estimated Hours for ${project.name}`}
+                                value={
+                                  isEditingEstimated && inlineDrafts[estimatedKey] !== undefined
+                                    ? inlineDrafts[estimatedKey]
+                                    : Number(estimated.toFixed(1))
+                                }
+                                onFocus={(e) => {
+                                  setActiveInlineKey(estimatedKey);
+                                  setInlineDrafts((prev) => ({
+                                    ...prev,
+                                    [estimatedKey]: String(Number(estimated.toFixed(1))),
+                                  }));
+                                  e.currentTarget.select();
+                                }}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setInlineDrafts((prev) => ({
+                                    ...prev,
+                                    [estimatedKey]: val,
+                                  }));
+                                }}
+                                onBlur={(e) => commitEstimatedHours(project, e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitEstimatedHours(project, e.currentTarget.value);
+                                    e.currentTarget.blur();
+                                  } else if (e.key === 'Escape') {
+                                    setActiveInlineKey(null);
+                                    setInlineDrafts((prev) => {
+                                      const next = { ...prev };
+                                      delete next[estimatedKey];
+                                      return next;
+                                    });
+                                    e.currentTarget.blur();
+                                  }
+                                }}
+                                className="w-20 bg-slate-800/90 hover:bg-slate-800 focus:bg-slate-950 text-slate-200 font-semibold text-[12px] font-mono px-2 py-1 rounded border border-slate-700 hover:border-amber-500/50 focus:border-amber-400 focus:outline-none transition"
+                                title="Super Admin / Director: Click or double-click to edit Estimated Hours (Enter or blur to save)"
+                              />
+                              <span className="text-slate-500 text-[10px]">hrs</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-slate-300 text-[12px] font-mono">
+                                {estimated.toFixed(1)}
+                              </span>
+                              <span className="text-slate-500 text-[10px]">hrs</span>
+                            </div>
+                          )}
                         </td>
 
                         {/* Planned Delivery Date */}
@@ -355,18 +548,26 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                           </span>
                         </td>
 
-                        {/* Hours Burn % & Progress */}
+                        {/* Hours Burn % & Remaining Hours */}
                         <td className="py-2.5 px-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-14 bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full ${isOver || isZeroEstOver ? 'bg-amber-500' : 'bg-blue-500'}`}
-                                style={{ width: `${Math.min(100, pct)}%` }}
-                              />
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <div className="w-14 bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full ${isOver || isZeroEstOver ? 'bg-amber-500' : 'bg-blue-500'}`}
+                                  style={{ width: `${Math.min(100, pct)}%` }}
+                                />
+                              </div>
+                              <span className={`text-[11px] font-bold ${isOver || isZeroEstOver ? 'text-amber-400' : 'text-slate-300'}`}>
+                                {pct}%
+                              </span>
                             </div>
-                            <span className={`text-[11px] font-bold ${isOver || isZeroEstOver ? 'text-amber-400' : 'text-slate-300'}`}>
-                              {pct}%
-                            </span>
+                            <div className="text-[10px] font-mono text-slate-400 whitespace-nowrap">
+                              Rem:{' '}
+                              <span className={remainingHours < 0 ? 'text-amber-400 font-semibold' : 'text-slate-300 font-semibold'}>
+                                {remainingHours.toFixed(1)}h
+                              </span>
+                            </div>
                           </div>
                         </td>
 

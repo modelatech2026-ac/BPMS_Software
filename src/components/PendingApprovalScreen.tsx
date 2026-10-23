@@ -2,11 +2,13 @@ import React, { useEffect } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useBimData } from '../context/BimDataContext';
 import { db } from '../firebase/config';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
+  isSuperAdminEmail,
   normalizeUserRole,
   mapAppRoleToAccessLevel,
   mapAppRoleToDisplayRole,
+  mapUserRoleToSecurityRole,
 } from '../auth/googleAuth';
 import { AccessLevel } from '../types';
 
@@ -15,39 +17,53 @@ export const PendingApprovalScreen: React.FC = () => {
   const { currentUser, signOut } = useBimData();
 
   const activeUser = user || currentUser;
-  const uid = activeUser?.googleId || activeUser?.id;
+  const cleanEmail = (activeUser?.email || '').trim().toLowerCase();
 
   // Real-time Firestore listener for live Super Admin approval
   useEffect(() => {
-    if (!uid) return;
+    if (!cleanEmail) return;
 
     let unsubscribe: (() => void) | undefined;
     try {
-      const docRef = doc(db, 'access_requests', uid);
+      const reqQuery = query(collection(db, 'access_requests'), where('email', '==', cleanEmail));
       unsubscribe = onSnapshot(
-        docRef,
+        reqQuery,
         (snapshot) => {
-          if (snapshot.exists()) {
-            const data = snapshot.data();
-            const firestoreStatus = (data?.status || '').toLowerCase();
+          if (!snapshot.empty) {
+            const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as any));
+            docs.sort((a, b) => {
+              const aStatus = String(a.status || '').toLowerCase();
+              const bStatus = String(b.status || '').toLowerCase();
+              const aWeight = aStatus === 'approved' ? 3 : aStatus === 'rejected' ? 2 : 1;
+              const bWeight = bStatus === 'approved' ? 3 : bStatus === 'rejected' ? 2 : 1;
+              if (aWeight !== bWeight) return bWeight - aWeight;
+              const aTime = new Date(a.updatedAt || a.reviewedAt || a.timestamp || a.createdAt || 0).getTime() || 0;
+              const bTime = new Date(b.updatedAt || b.reviewedAt || b.timestamp || b.createdAt || 0).getTime() || 0;
+              return bTime - aTime;
+            });
+            const data = docs[0];
+            const firestoreStatus = String(data?.status || '').trim().toLowerCase();
 
-            if (firestoreStatus === 'approved') {
-              const assignedAppRole = normalizeUserRole(data?.assignedRole || data?.role || data?.appRole);
+            if (firestoreStatus === 'approved' || firestoreStatus === 'active') {
+              const assignedAppRole = normalizeUserRole(
+                data?.assignedRole || data?.role || data?.appRole,
+                isSuperAdminEmail(cleanEmail)
+              );
               const calculatedAccessLevel = (data?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(assignedAppRole);
               const displayRole = mapAppRoleToDisplayRole(assignedAppRole);
+              const securityRole = mapUserRoleToSecurityRole(assignedAppRole);
 
-              setTimeout(() => {
-                updateCurrentUser({
-                  status: 'APPROVED',
-                  appRole: assignedAppRole,
-                  accessLevel: calculatedAccessLevel,
-                  role: displayRole,
-                  isAdmin: assignedAppRole === 'SUPER_ADMIN' || assignedAppRole === 'PROJECT_MANAGER',
-                  name: data?.fullName || data?.name || activeUser?.name,
-                });
-              }, 400);
+              updateCurrentUser({
+                status: 'APPROVED',
+                appRole: assignedAppRole,
+                accessLevel: calculatedAccessLevel,
+                role: displayRole,
+                securityRole,
+                isAdmin: assignedAppRole === 'SUPER_ADMIN' || assignedAppRole === 'DIRECTOR' || assignedAppRole === 'PROJECT_MANAGER',
+                name: data?.fullName || data?.name || activeUser?.name,
+              });
             } else if (firestoreStatus === 'rejected') {
-              updateCurrentUser({ status: 'rejected' });
+              updateCurrentUser({ status: 'REJECTED' });
             }
           }
         },
@@ -62,7 +78,7 @@ export const PendingApprovalScreen: React.FC = () => {
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [uid, updateCurrentUser, activeUser]);
+  }, [cleanEmail, updateCurrentUser, activeUser?.name]);
 
   const handleBackToLogin = () => {
     logout();

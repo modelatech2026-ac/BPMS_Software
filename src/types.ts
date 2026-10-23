@@ -186,6 +186,8 @@ export interface BimProject {
   status: ProjectStatus;
   totalEstimatedHours: number;
   totalCompletedHours?: number;
+  manualHoursOverride?: number;
+  manualHoursBaseLogged?: number;
   currentLOD: LODLevel;
   targetLOD: LODLevel;
   budgetAmount: number;
@@ -245,7 +247,7 @@ export interface GeneratedStakeholderReport {
   nextPeriodPriorities: string[];
 }
 
-export type AccessLevel = 'Super Admin' | 'BIM Admin' | 'Project Manager' | 'Editor' | 'Viewer';
+export type AccessLevel = 'Super Admin' | 'Director' | 'BIM Admin' | 'Project Manager' | 'Editor' | 'Viewer';
 
 export interface UserAccessRecord {
   id: string;
@@ -339,6 +341,9 @@ export type UserApprovalStatus =
   | 'PENDING'
   | 'APPROVED'
   | 'REJECTED'
+  | 'Pending'
+  | 'Approved'
+  | 'Rejected'
   | 'pending_approval'
   | 'pending'
   | 'active'
@@ -346,7 +351,7 @@ export type UserApprovalStatus =
   | 'rejected'
   | 'suspended';
 
-export type UserRole = 'SUPER_ADMIN' | 'PROJECT_MANAGER' | 'EDITOR' | 'VIEWER';
+export type UserRole = 'SUPER_ADMIN' | 'DIRECTOR' | 'PROJECT_MANAGER' | 'EDITOR' | 'VIEWER';
 
 export interface UserDatabaseModel {
   id: string;
@@ -391,6 +396,7 @@ export interface OnboardingRequest {
 
 export type SecurityRole =
   | 'Super Admin'
+  | 'Director'
   | 'Project Manager'
   | 'BIM Specialist'
   | 'Lead Coordinator'
