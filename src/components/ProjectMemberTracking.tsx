@@ -108,22 +108,15 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
     .reduce((sum, log) => sum + (log.hoursLogged || 0), 0);
   const totalWeeklyCapacity = (activeMembers || []).reduce((sum, emp) => sum + (emp.weeklyCapacityHours || 40), 0);
   
-  // Hours logged in past 7 days across active members
-  const recent7DaysHours = (workLogs || [])
-    .filter((w) => {
-      if (!activeEmpIds.has(w.employeeId) && !activeEmpNames.has((w.employeeName || '').toLowerCase().trim())) {
-        return false;
-      }
-      const d = new Date(w.date + 'T00:00:00');
-      const now = new Date('2026-08-18T00:00:00');
-      const diff = (now.getTime() - d.getTime()) / (1000 * 3600 * 24);
-      return diff >= 0 && diff <= 7;
-    })
-    .reduce((sum, w) => sum + (w.hoursLogged || 0), 0);
+  // Hours assigned or logged in current week across active members
+  const recent7DaysHours = (activeMembers || []).reduce(
+    (sum, emp) => sum + getEmployeeLoggedHours(emp.id, 'this-week'),
+    0
+  );
 
   const avgUtilization = totalWeeklyCapacity > 0
     ? Math.round((recent7DaysHours / totalWeeklyCapacity) * 100)
-    : 85;
+    : 0;
 
   // Export CSV of member-project hours
   const exportMemberMatrixCSV = () => {
@@ -461,7 +454,7 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
               if (!activeMembers.some((m) => m.id === emp.id || m.email.toLowerCase() === emp.email.toLowerCase())) return null;
 
               const weeklyHours = getEmployeeLoggedHours(emp.id, 'this-week');
-              const totalHours = getEmployeeLoggedHours(emp.id, 'all');
+              const totalHours = Math.max(getEmployeeLoggedHours(emp.id, 'all'), weeklyHours);
               const capacityPct = Math.round((weeklyHours / (emp.weeklyCapacityHours || 40)) * 100);
               const isOverCapacity = capacityPct > 100;
 
@@ -532,7 +525,7 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                     {/* Weekly Capacity Meter */}
                     <div className="mt-3 bg-slate-800/60 border border-slate-700/60 rounded-lg p-2.5">
                       <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-slate-400">Weekly Workload</span>
+                        <span className="text-slate-400">Weekly Capacity Load:</span>
                         <span
                           className={`font-semibold ${
                             isOverCapacity ? 'text-rose-400' : 'text-slate-200'
@@ -776,7 +769,7 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
 
                         <td className="py-3 px-3 font-mono">
                           <span className="font-bold text-white">{loggedHours.toFixed(1)}h</span>
-                          <span className="text-slate-500 text-[11px]"> / {emp.capacityHoursPerWeek}h</span>
+                          <span className="text-slate-500 text-[11px]"> / {emp.weeklyCapacityHours || (emp as any).capacityHoursPerWeek || 40}h</span>
                         </td>
 
                         <td className="py-3 px-3">

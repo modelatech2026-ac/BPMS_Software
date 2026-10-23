@@ -24,7 +24,7 @@ import {
   Building,
   Briefcase
 } from 'lucide-react';
-import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin, getCurrentWeekRange } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import {
   collection,
@@ -100,6 +100,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     return [];
   });
 
+  const hasInitialSeededRef = React.useRef(false);
+
   // Real-time Firestore listener on project_assignments collection
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -126,8 +128,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
               assignedHours: Number(data.assignedHours) || 0,
               viewFrequency: data.viewFrequency || 'Weekly',
-              startDate: data.startDate || '2026-08-17',
-              dueDate: data.dueDate || '2026-08-21',
+              startDate: data.startDate || getCurrentWeekRange().startIso,
+              dueDate: data.dueDate || getCurrentWeekRange().endIso,
               priority: data.priority || 'High',
               status: data.status || 'Allocated',
               notes: data.notes || '',
@@ -136,13 +138,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
           if (remoteAllocations.length > 0 || !snapshot.metadata.fromCache) {
             setAllocations((prev) => {
-              if (remoteAllocations.length === 0 && prev.length > 0) {
-                // Seed existing local allocations to Firestore so they are synced across users
-                prev.forEach((item) => {
-                  const sanitized = JSON.parse(JSON.stringify(item));
-                  setDoc(doc(db, 'project_assignments', item.id), sanitized, { merge: true }).catch(() => {});
-                });
-                return prev;
+              if (!hasInitialSeededRef.current) {
+                hasInitialSeededRef.current = true;
+                if (remoteAllocations.length === 0 && prev.length > 0) {
+                  // Seed existing local allocations once on initial load
+                  prev.forEach((item) => {
+                    const sanitized = JSON.parse(JSON.stringify(item));
+                    setDoc(doc(db, 'project_assignments', item.id), sanitized, { merge: true }).catch(() => {});
+                  });
+                  return prev;
+                }
               }
               return remoteAllocations;
             });
@@ -199,6 +204,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   // Modal / Add Form State
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [allocationToDelete, setAllocationToDelete] = useState<ResourceAllocationItem | null>(null);
 
   // Form Inputs
   const [formProject, setFormProject] = useState(projects[0]?.id || 'p1');
@@ -222,8 +228,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const [formTaskType, setFormTaskType] = useState<BimTaskType>('3D Modeling');
   const [formTargetZone, setFormTargetZone] = useState('MOD-AR-LVL01-ZONE-A');
   const [formHours, setFormHours] = useState<number>(20);
-  const [formStartDate, setFormStartDate] = useState('2026-08-17');
-  const [formDueDate, setFormDueDate] = useState('2026-08-21');
+  const [formStartDate, setFormStartDate] = useState(() => getCurrentWeekRange().startIso);
+  const [formDueDate, setFormDueDate] = useState(() => getCurrentWeekRange().endIso);
   const [formPriority, setFormPriority] = useState<AllocationPriority>('High');
   const [formNotes, setFormNotes] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -232,6 +238,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const saveAllocations = (newAllocations: ResourceAllocationItem[], changedItem?: ResourceAllocationItem) => {
     setAllocations(newAllocations);
     localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(newAllocations));
+    window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: newAllocations }));
     if (changedItem) {
       try {
         const sanitized = JSON.parse(JSON.stringify(changedItem));
@@ -496,13 +503,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     saveAllocations(updated, updatedItem);
   };
 
-  // Delete Allocation
-  const handleDeleteAllocation = (id: string) => {
+  // Delete Allocation with Firestore deleteDoc
+  const handleDeleteAllocation = async (id: string) => {
     const updated = allocations.filter((a) => a.id !== id);
     saveAllocations(updated);
+    setAllocationToDelete(null);
     try {
-      deleteDoc(doc(db, 'project_assignments', id)).catch(() => {});
-    } catch {}
+      await deleteDoc(doc(db, 'project_assignments', id));
+    } catch (err) {
+      console.warn('Firestore deleteAllocation notice:', err);
+    }
   };
 
   // Discipline Badge Styles
@@ -754,12 +764,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                 <th className="py-3 px-3 min-w-[130px]">Assigned Hours</th>
                 <th className="py-3 px-3 min-w-[130px]">Logged Hours</th>
                 <th className="py-3 px-3 min-w-[160px]">Timeline (Start - Due)</th>
+                <th className="py-3 px-3.5 text-right min-w-[90px]">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 font-normal">
               {filteredAllocations.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-slate-500">
+                  <td colSpan={6} className="py-12 text-center text-slate-500">
                     <p className="text-sm font-semibold text-slate-400">No resource hour allocations found.</p>
                     <p className="text-xs text-slate-500 mt-1">Click "Assign Hours" above to allocate hours to project members.</p>
                   </td>
@@ -773,7 +784,22 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   const resolvedProjectName = matchedProject?.name || alloc.projectName || 'Unassigned Project';
 
                   const loggedHours = workLogs
-                    .filter((w) => w.employeeId === alloc.employeeId && matchProjectId(w.projectId, alloc.projectId))
+                    .filter((w) => {
+                      const sameProj = matchProjectId(w.projectId, alloc.projectId);
+                      if (!sameProj) return false;
+                      const matchId =
+                        w.employeeId === alloc.employeeId ||
+                        (w.employeeId || '').replace(/^emp-/, '') === (alloc.employeeId || '').replace(/^emp-/, '');
+                      const matchEmail =
+                        Boolean(alloc.memberEmail) &&
+                        ((w.memberEmail || (w as any).userEmail || '').toLowerCase().trim() ===
+                          alloc.memberEmail!.toLowerCase().trim());
+                      const matchName =
+                        Boolean(alloc.employeeName) &&
+                        (w.employeeName || '').toLowerCase().trim() ===
+                          alloc.employeeName.toLowerCase().trim();
+                      return matchId || matchEmail || matchName;
+                    })
                     .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
 
                   return (
@@ -860,6 +886,19 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                           <span>{alloc.dueDate}</span>
                         </div>
                       </td>
+
+                      {/* Action (Delete Allocation with Confirmation Prompt) */}
+                      <td className="py-3 px-3.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setAllocationToDelete(alloc)}
+                          className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition inline-flex items-center justify-center"
+                          title={`Delete allocation for ${alloc.employeeName}`}
+                          aria-label={`Delete allocation for ${alloc.employeeName}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
                     </tr>
                   );
                 })
@@ -868,6 +907,75 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           </table>
         </div>
       </div>
+
+      {/* DELETE ALLOCATION CONFIRMATION PROMPT MODAL */}
+      {allocationToDelete && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full text-slate-100 shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/15 border border-red-500/30 text-red-400 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Delete Hour Allocation</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    This action removes the assignment from Firestore in real time.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAllocationToDelete(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700/70 text-xs space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Team Member:</span>
+                <span className="font-semibold text-white">{allocationToDelete.employeeName}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Project:</span>
+                <span className="font-semibold text-blue-300">
+                  {projects.find((p) => matchProjectId(p.id, allocationToDelete.projectId))?.name ||
+                    allocationToDelete.projectName ||
+                    'Unassigned Project'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Assigned Hours:</span>
+                <span className="font-mono font-bold text-white">{allocationToDelete.assignedHours} hrs</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Are you sure you want to delete this hour allocation?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setAllocationToDelete(null)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteAllocation(allocationToDelete.id)}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold transition flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Allocation</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ADD ALLOCATION MODAL */}
       {showAddModal && (

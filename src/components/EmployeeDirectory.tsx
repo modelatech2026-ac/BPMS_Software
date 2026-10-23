@@ -126,9 +126,10 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         ) : (
           filteredEmployees.map((emp) => {
           const loggedThisWeek = getEmployeeLoggedHours(emp.id, 'this-week');
-          const totalAllTime = workLogs
-            .filter((w) => w.employeeId === emp.id)
-            .reduce((sum, w) => sum + w.hoursLogged, 0);
+          const totalAllTime = Math.max(
+            getEmployeeLoggedHours(emp.id, 'all'),
+            loggedThisWeek
+          );
 
           const capacityPct = Math.round((loggedThisWeek / (emp.weeklyCapacityHours || 40)) * 100);
           const isOverloaded = loggedThisWeek > (emp.weeklyCapacityHours || 40);

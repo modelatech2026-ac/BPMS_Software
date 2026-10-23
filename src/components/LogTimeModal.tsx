@@ -10,7 +10,7 @@ import {
   FileText
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin, toLocalIsoDate } from '../context/BimDataContext';
 import { generateRequestDocId } from '../auth/roleSync';
 import { Discipline, ActivityType, LODLevel } from '../types';
 
@@ -34,7 +34,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   const [employeeId, setEmployeeId] = useState<string>(
     employees[0]?.id || currentUser?.id || ''
   );
-  const [date, setDate] = useState<string>('2026-08-18');
+  const [date, setDate] = useState<string>(() => toLocalIsoDate(new Date()));
   const [hours, setHours] = useState<number>(4);
   const [discipline, setDiscipline] = useState<Discipline>('MEP - HVAC');
   const [activityType, setActivityType] = useState<ActivityType>(

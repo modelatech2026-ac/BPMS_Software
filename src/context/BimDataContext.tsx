@@ -18,6 +18,7 @@ import {
   AccessLevel,
   AdminAuditLog,
   UserRole,
+  ResourceAllocationItem,
 } from '../types';
 import {
   INITIAL_PROJECTS,
@@ -237,6 +238,96 @@ const DEFAULT_AUDIT_LOGS: AdminAuditLog[] = [
   },
 ];
 
+export interface WeekDayColumn {
+  date: string;
+  label: string;
+  dayNum: string;
+}
+
+export interface WeekRangeResult {
+  startDate: Date;
+  endDate: Date;
+  startIso: string;
+  endIso: string;
+  label: string;
+  days: WeekDayColumn[];
+}
+
+export const toLocalIsoDate = (d: Date): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const getCurrentWeekRange = (referenceDate: Date = new Date()): WeekRangeResult => {
+  const now = new Date(referenceDate);
+  const dayOfWeek = now.getDay(); // 0 (Sun) - 6 (Sat)
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(now.getDate() + diffToMonday);
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+
+  const todayIso = toLocalIsoDate(new Date());
+  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  const days: WeekDayColumn[] = Array.from({ length: 7 }, (_, idx) => {
+    const cur = new Date(monday);
+    cur.setDate(monday.getDate() + idx);
+    const iso = toLocalIsoDate(cur);
+    const dayNum = String(cur.getDate()).padStart(2, '0');
+    return {
+      date: iso,
+      label: iso === todayIso ? `${dayNames[idx]} (Today)` : dayNames[idx],
+      dayNum,
+    };
+  });
+
+  const startFormatted = monday.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+  const endFormatted = sunday.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  return {
+    startDate: monday,
+    endDate: sunday,
+    startIso: toLocalIsoDate(monday),
+    endIso: toLocalIsoDate(sunday),
+    label: `${startFormatted} - ${endFormatted}`,
+    days,
+  };
+};
+
+export const getEffectiveLogDate = (
+  log: DailyWorkLog,
+  weekRange: WeekRangeResult = getCurrentWeekRange()
+): string => {
+  const rawDate = (log.date || '').trim();
+  if (rawDate >= weekRange.startIso && rawDate <= weekRange.endIso) {
+    return rawDate;
+  }
+  if ((!rawDate || rawDate === '2026-08-18') && log.timestamp) {
+    const tsDate = new Date(log.timestamp);
+    if (!Number.isNaN(tsDate.getTime())) {
+      const tsIso = toLocalIsoDate(tsDate);
+      if (tsIso >= weekRange.startIso && tsIso <= weekRange.endIso) {
+        return tsIso;
+      }
+    }
+  }
+  return rawDate;
+};
+
 export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
   if (!u) return false;
   if (
@@ -381,6 +472,19 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const [allWorkLogs, setAllWorkLogs] = useState<DailyWorkLog[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.WORK_LOGS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return [];
+  });
+
+  const [resourceAllocations, setResourceAllocations] = useState<ResourceAllocationItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('bim_resource_allocations_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
@@ -943,6 +1047,66 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     currentUser?.appRole,
     currentUser?.accessLevel,
   ]);
+
+  // Synchronize Firestore project_assignments collection into resourceAllocations in real-time
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    const handleLocalAllocUpdate = (e: any) => {
+      if (e?.detail && Array.isArray(e.detail)) {
+        setResourceAllocations(e.detail);
+      }
+    };
+    window.addEventListener('bim_resource_allocations_updated', handleLocalAllocUpdate);
+
+    try {
+      const colRef = collection(db, 'project_assignments');
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          const remoteAllocations: ResourceAllocationItem[] = snapshot.docs.map((docSnap) => {
+            const data = docSnap.data();
+            return {
+              id: docSnap.id,
+              projectId: data.projectId || '',
+              projectName: data.projectName || 'Unassigned Project',
+              employeeId: data.employeeId || '',
+              employeeName: data.employeeName || '',
+              employeeRole: data.employeeRole || 'Editor',
+              memberEmail: data.memberEmail || '',
+              discipline: data.discipline || 'BIM - ACS',
+              lod: data.lod || 'LOD 350',
+              projectPhase: data.projectPhase || 'Design Development',
+              taskType: data.taskType || '3D Modeling',
+              targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
+              assignedHours: Number(data.assignedHours) || 0,
+              viewFrequency: data.viewFrequency || 'Weekly',
+              startDate: data.startDate || toLocalIsoDate(new Date()),
+              dueDate: data.dueDate || toLocalIsoDate(new Date()),
+              priority: data.priority || 'High',
+              status: data.status || 'Allocated',
+              notes: data.notes || '',
+            };
+          });
+
+          setResourceAllocations(remoteAllocations);
+          try {
+            localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(remoteAllocations));
+          } catch {}
+        },
+        (err) => {
+          console.warn('Firestore project_assignments context listener notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Firestore project_assignments context setup error:', e);
+    }
+
+    return () => {
+      window.removeEventListener('bim_resource_allocations_updated', handleLocalAllocUpdate);
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
@@ -1853,41 +2017,129 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     employeeId: string,
     filterRange: string = 'this-week'
   ): number => {
-    const emp = employees.find((e) => e.id === employeeId || e.id.replace(/^emp-/, '') === employeeId.replace(/^emp-/, ''));
+    const strippedEmpId = (employeeId || '').trim().replace(/^emp-/, '');
+    const emp = employees.find(
+      (e) =>
+        e.id === employeeId ||
+        (e.id || '').replace(/^emp-/, '') === strippedEmpId
+    );
     const empName = (emp?.name || '').toLowerCase().trim();
     const empEmail = (emp?.email || '').toLowerCase().trim();
-    const strippedEmpId = employeeId.replace(/^emp-/, '');
+    const detEmailId = empEmail ? generateRequestDocId(empEmail) : '';
 
-    const today = new Date('2026-08-18');
-    const logs = (allWorkLogs || []).filter((w) => {
-      const wEmpId = (w.employeeId || '').trim();
-      const wUserId = ((w as any).userId || '').trim();
-      const wEmail = ((w as any).memberEmail || (w as any).userEmail || '').toLowerCase().trim();
-      const isMatch =
-        wEmpId === employeeId ||
-        wEmpId.replace(/^emp-/, '') === strippedEmpId ||
-        (wUserId && (wUserId === employeeId || wUserId.replace(/^emp-/, '') === strippedEmpId)) ||
-        (empName && (w.employeeName || '').toLowerCase().trim() === empName) ||
-        (empEmail && wEmail === empEmail);
-      if (!isMatch) return false;
-      if (filterRange === 'all' || filterRange === 'this-week') return true;
+    const matchesMember = (item: {
+      employeeId?: string;
+      userId?: string;
+      employeeName?: string;
+      memberEmail?: string;
+      userEmail?: string;
+    }): boolean => {
+      const itemEmpId = (item.employeeId || '').trim();
+      const itemEmpIdStripped = itemEmpId.replace(/^emp-/, '');
+      const itemUserId = (item.userId || '').trim();
+      const itemUserIdStripped = itemUserId.replace(/^emp-/, '');
+      const itemEmail = (item.memberEmail || item.userEmail || '').toLowerCase().trim();
+      const itemName = (item.employeeName || '').toLowerCase().trim();
 
-      const logDate = new Date(w.date);
-      if (filterRange === 'today') {
-        const todayIso = new Date().toISOString().slice(0, 10);
-        return w.date === '2026-08-18' || w.date === todayIso;
+      if (
+        (employeeId && (itemEmpId === employeeId || itemUserId === employeeId)) ||
+        (strippedEmpId &&
+          (itemEmpIdStripped === strippedEmpId || itemUserIdStripped === strippedEmpId)) ||
+        (detEmailId &&
+          (itemEmpIdStripped === detEmailId || itemUserIdStripped === detEmailId))
+      ) {
+        return true;
       }
-      if (filterRange === 'this-month') {
-        const now = new Date();
-        return (
-          (logDate.getMonth() === today.getMonth() && logDate.getFullYear() === today.getFullYear()) ||
-          (logDate.getMonth() === now.getMonth() && logDate.getFullYear() === now.getFullYear())
-        );
+      if (empEmail && itemEmail && empEmail === itemEmail) {
+        return true;
       }
-      return true;
+      if (empName && itemName && empName === itemName) {
+        return true;
+      }
+      return false;
+    };
+
+    const weekRange = getCurrentWeekRange();
+    const todayIso = toLocalIsoDate(new Date());
+
+    const matchingLogs = (allWorkLogs || []).filter((w) => matchesMember(w));
+
+    if (filterRange === 'all') {
+      return matchingLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
+    }
+
+    if (filterRange === 'today') {
+      return matchingLogs
+        .filter((w) => getEffectiveLogDate(w, weekRange) === todayIso)
+        .reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
+    }
+
+    if (filterRange === 'this-month') {
+      const now = new Date();
+      return matchingLogs
+        .filter((w) => {
+          const effDate = getEffectiveLogDate(w, weekRange);
+          const logDate = new Date(`${effDate}T00:00:00`);
+          return (
+            !Number.isNaN(logDate.getTime()) &&
+            logDate.getMonth() === now.getMonth() &&
+            logDate.getFullYear() === now.getFullYear()
+          );
+        })
+        .reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
+    }
+
+    // Default: 'this-week' -> Global Real-Time Weekly Capacity Load calculation
+    // Dynamically aggregate and sum the user's assigned hours (from project_assignments)
+    // and/or logged hours for the current week (from work_logs).
+    const currentWeekLogs = matchingLogs.filter((w) => {
+      const effDate = getEffectiveLogDate(w, weekRange);
+      return effDate >= weekRange.startIso && effDate <= weekRange.endIso;
     });
 
-    return logs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
+    const weeklyLoggedHours = (currentWeekLogs.length > 0 ? currentWeekLogs : matchingLogs).reduce(
+      (sum, l) => sum + (Number(l.hoursLogged) || 0),
+      0
+    );
+
+    const matchingAllocations = (resourceAllocations || []).filter(
+      (a) => a.status !== 'Completed' && matchesMember(a)
+    );
+
+    const weeklyAssignedHours = matchingAllocations.reduce(
+      (sum, a) => sum + (Number(a.assignedHours) || 0),
+      0
+    );
+
+    if (weeklyAssignedHours > 0 && weeklyLoggedHours > 0) {
+      // Aggregate per-project maximum of assigned vs logged hours so unallocated project logs add onto assigned capacity
+      const normProj = (pid?: string) =>
+        (pid || '').startsWith('proj-') ? (pid || '') : (pid || '').replace(/^p(\d+)$/, 'proj-$1');
+      const byProject = new Map<string, { assigned: number; logged: number }>();
+
+      matchingAllocations.forEach((a) => {
+        const key = normProj(a.projectId) || '__unassigned__';
+        const cur = byProject.get(key) || { assigned: 0, logged: 0 };
+        cur.assigned += Number(a.assignedHours) || 0;
+        byProject.set(key, cur);
+      });
+
+      const activeLogsForWeek = currentWeekLogs.length > 0 ? currentWeekLogs : matchingLogs;
+      activeLogsForWeek.forEach((l) => {
+        const key = normProj(l.projectId) || '__unassigned__';
+        const cur = byProject.get(key) || { assigned: 0, logged: 0 };
+        cur.logged += Number(l.hoursLogged) || 0;
+        byProject.set(key, cur);
+      });
+
+      let combinedTotal = 0;
+      byProject.forEach(({ assigned, logged }) => {
+        combinedTotal += Math.max(assigned, logged);
+      });
+      return combinedTotal;
+    }
+
+    return weeklyAssignedHours > 0 ? weeklyAssignedHours : weeklyLoggedHours;
   };
 
   // Actions
@@ -2336,7 +2588,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       resolvedClashesCount: resolvedClashes,
       avgUtilizationRate,
     };
-  }, [projects, employees, workLogs, allWorkLogs, selectedProjectId]);
+  }, [projects, employees, workLogs, allWorkLogs, resourceAllocations, selectedProjectId]);
 
   return (
     <BimDataContext.Provider

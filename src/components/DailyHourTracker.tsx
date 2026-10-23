@@ -17,7 +17,12 @@ import {
   TrendingUp,
   FileSpreadsheet
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import {
+  useBimData,
+  getCurrentWeekRange,
+  getEffectiveLogDate,
+  toLocalIsoDate,
+} from '../context/BimDataContext';
 import { DailyWorkLog, Discipline, ActivityType } from '../types';
 
 interface DailyHourTrackerProps {
@@ -82,7 +87,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const [selectedEmployeeFilter, setSelectedEmployeeFilter] = useState('all');
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('all');
   const [selectedDisciplineFilter, setSelectedDisciplineFilter] = useState('all');
-  const [selectedDate, setSelectedDate] = useState('2026-08-18');
+  const [selectedDate, setSelectedDate] = useState(() => toLocalIsoDate(new Date()));
   const [activeView, setActiveView] = useState<'matrix' | 'logs'>('matrix');
 
   // Helper to match a work log to an employee record across all identifiers
@@ -119,64 +124,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     return false;
   };
 
-  // Days for the current week (defaults to Aug 12 - Aug 18, 2026, and dynamically incorporates any active log dates)
-  const weekDays = useMemo(() => {
-    const defaultDays = [
-      { date: '2026-08-12', label: 'Wed', dayNum: '12' },
-      { date: '2026-08-13', label: 'Thu', dayNum: '13' },
-      { date: '2026-08-14', label: 'Fri', dayNum: '14' },
-      { date: '2026-08-15', label: 'Sat', dayNum: '15' },
-      { date: '2026-08-16', label: 'Sun', dayNum: '16' },
-      { date: '2026-08-17', label: 'Mon', dayNum: '17' },
-      { date: '2026-08-18', label: 'Tue (Today)', dayNum: '18' },
-    ];
-
-    const defaultDateSet = new Set(defaultDays.map((d) => d.date));
-    const extraDates = Array.from<string>(
-      new Set(
-        (workLogs || [])
-          .map((l) => (l.date || '').trim())
-          .filter((d): d is string => Boolean(d && !defaultDateSet.has(d)))
-      )
-    ).sort();
-
-    if (extraDates.length === 0) {
-      return defaultDays;
-    }
-
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const formatDateEntry = (dateStr: string) => {
-      const parsed = new Date(`${dateStr}T00:00:00`);
-      const label = !Number.isNaN(parsed.getTime())
-        ? dayNames[parsed.getDay()]
-        : dateStr.slice(5);
-      const dayNum = dateStr.slice(8, 10) || dateStr;
-      return {
-        date: dateStr,
-        label: dateStr === '2026-08-18' ? 'Tue (Today)' : label,
-        dayNum,
-      };
-    };
-
-    // Keep all dates that have logs, plus fill up to 7 columns from defaultDays
-    const activeDefaultDates = defaultDays
-      .filter((d) => (workLogs || []).some((l) => l.date === d.date))
-      .map((d) => d.date);
-    const combinedSet = new Set<string>([...activeDefaultDates, ...extraDates]);
-    for (const d of defaultDays) {
-      if (combinedSet.size >= Math.max(7, combinedSet.size)) break;
-      combinedSet.add(d.date);
-    }
-    // Ensure at least 7 columns
-    for (const d of defaultDays) {
-      if (combinedSet.size >= 7) break;
-      combinedSet.add(d.date);
-    }
-
-    return Array.from(combinedSet)
-      .sort()
-      .map(formatDateEntry);
-  }, [workLogs]);
+  // Dynamic current week range (Monday - Sunday) based on new Date()
+  const currentWeekRange = useMemo(() => getCurrentWeekRange(new Date()), []);
+  const weekDays = useMemo(() => currentWeekRange.days, [currentWeekRange]);
 
   // Super Admin & Director track all team members; Submitting Member tracks only their own timesheet
   const allTrackedEmployees = useMemo(() => {
@@ -435,8 +385,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
           <div className="p-4 border-b border-slate-800 flex items-center justify-between text-xs text-slate-300 bg-slate-800/40">
             <span className="font-semibold text-white">
               {isSuperAdmin
-                ? 'Weekly Team Timesheet Matrix (Aug 12 - Aug 18, 2026)'
-                : 'My Weekly Timesheet Matrix (Aug 12 - Aug 18, 2026)'}
+                ? `Weekly Team Timesheet Matrix (${currentWeekRange.label})`
+                : `My Weekly Timesheet Matrix (${currentWeekRange.label})`}
             </span>
             <span className="text-slate-400">Standard Target: 40.0 hrs / week</span>
           </div>
@@ -461,15 +411,22 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   let weekSum = 0;
                   const dailyHours = weekDays.map((d) => {
                     const dayLogs = workLogs.filter(
-                      (w) => doesLogMatchEmployee(w, emp) && w.date === d.date
+                      (w) =>
+                        doesLogMatchEmployee(w, emp) &&
+                        getEffectiveLogDate(w, currentWeekRange) === d.date
                     );
                     const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
                     weekSum += hours;
                     return { date: d.date, hours };
                   });
 
-                  const capPct = Math.round((weekSum / emp.weeklyCapacityHours) * 100);
-                  const isOver = weekSum > emp.weeklyCapacityHours;
+                  const effectiveWeeklyLoad = Math.max(
+                    weekSum,
+                    getEmployeeLoggedHours(emp.id, 'this-week')
+                  );
+                  const capHours = emp.weeklyCapacityHours || 40;
+                  const capPct = Math.round((effectiveWeeklyLoad / capHours) * 100);
+                  const isOver = effectiveWeeklyLoad > capHours;
 
                   return (
                     <tr key={emp.id} className="hover:bg-slate-800/40 transition">
