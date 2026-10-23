@@ -123,68 +123,103 @@ export const AdminNexus: React.FC = () => {
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
-  const mapDocToRequest = (d: any): OnboardingRequest | null => {
-    const data = d.data();
-    if (!data || !data.email) return null;
-    const rawStatus = (data.status || 'Pending').toLowerCase();
-    const mappedStatus =
-      rawStatus === 'approved' || rawStatus === 'active'
-        ? 'APPROVED'
-        : rawStatus === 'rejected'
-        ? 'REJECTED'
-        : 'Pending';
-    const fullName = data.fullName || data.name || data.email.split('@')[0];
-    const discipline = data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS';
-    const reasonForAccess = data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
-    const createdAt = data.createdAt || data.requestedAt || data.timestamp || new Date().toISOString();
+  const formatFirestoreTimestamp = (val: any): string => {
+    if (!val) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val?.toDate === 'function') {
+      try {
+        return val.toDate().toISOString();
+      } catch {
+        return '';
+      }
+    }
+    if (typeof val?.seconds === 'number') {
+      return new Date(val.seconds * 1000).toISOString();
+    }
+    if (val instanceof Date) {
+      return val.toISOString();
+    }
+    return String(val);
+  };
+
+  const normalizeRawRequest = (raw: any): OnboardingRequest | null => {
+    if (!raw) return null;
+    const cleanEmail = String(raw.email || raw.userEmail || raw.memberEmail || '').trim().toLowerCase();
+    if (!cleanEmail) return null;
+
+    const isSuper = isSuperAdminEmail(cleanEmail);
+    const rawStatus = String(raw.status || 'pending').trim().toLowerCase();
+    const mappedStatus = isSuper
+      ? 'APPROVED'
+      : rawStatus === 'approved' || rawStatus === 'active'
+      ? 'APPROVED'
+      : rawStatus === 'rejected' || rawStatus === 'declined'
+      ? 'REJECTED'
+      : 'pending';
+
+    const fullName = String(raw.fullName || raw.name || cleanEmail.split('@')[0]).trim();
+    const discipline = String(raw.discipline || raw.primaryDiscipline || raw.organization || 'BIM - ACS');
+    const reasonForAccess = String(
+      raw.reasonForAccess || raw.accessReason || 'Sign-in Access Request for ProductionPulse BPMS'
+    );
+    const createdAt =
+      formatFirestoreTimestamp(raw.createdAt) ||
+      formatFirestoreTimestamp(raw.requestedAt) ||
+      formatFirestoreTimestamp(raw.timestamp) ||
+      new Date().toISOString();
+    const updatedAt =
+      formatFirestoreTimestamp(raw.updatedAt) ||
+      formatFirestoreTimestamp(raw.reviewedAt) ||
+      createdAt;
 
     const normalizedRole = normalizeUserRole(
-      data.assignedRole || data.role || data.appRole || data.requestedRole,
-      isSuperAdminEmail(data.email)
+      raw.assignedRole || raw.role || raw.appRole || raw.requestedRole,
+      isSuper
     );
-    const calculatedAccessLevel = (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
+    const calculatedAccessLevel =
+      (raw.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
 
     return {
-      id: d.id,
-      googleId: data.uid || d.id,
-      email: data.email,
+      id: raw.id,
+      googleId: raw.uid || raw.id,
+      email: cleanEmail,
       name: fullName,
       fullName: fullName,
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
-      role: data.role || mapAppRoleToDisplayRole(normalizedRole),
-      requestedRole: data.requestedRole || data.role || mapAppRoleToDisplayRole(normalizedRole),
+      role: raw.role || mapAppRoleToDisplayRole(normalizedRole),
+      requestedRole: raw.requestedRole || raw.role || mapAppRoleToDisplayRole(normalizedRole),
       assignedRole: normalizedRole,
       assignedAccessLevel: calculatedAccessLevel,
       primaryDiscipline: discipline,
       discipline: discipline,
-      organization: data.organization || discipline,
+      organization: raw.organization || discipline,
       reasonForAccess: reasonForAccess,
       accessReason: reasonForAccess,
       createdAt: createdAt,
       requestedAt: createdAt,
       requestTimestamp: createdAt,
-      timestamp: data.updatedAt || data.reviewedAt || createdAt,
+      timestamp: updatedAt,
       status: mappedStatus as any,
-      reviewedBy: data.reviewedBy,
-      reviewedAt: data.reviewedAt,
-      notes: data.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+      reviewedBy: raw.reviewedBy,
+      reviewedAt: formatFirestoreTimestamp(raw.reviewedAt) || undefined,
+      notes: raw.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
     };
   };
 
   const deduplicateAndSortRequests = (rawList: OnboardingRequest[]): OnboardingRequest[] => {
     const byEmail = new Map<string, OnboardingRequest>();
+    // Sort by newest timestamp first so the latest submission or admin decision for an email always wins
     const sorted = [...rawList].sort((a, b) => {
-      const rank = (s?: string) => {
-        const u = (s || '').toUpperCase();
-        if (u === 'APPROVED' || u === 'ACTIVE') return 3;
-        if (u === 'REJECTED') return 2;
-        return 1;
-      };
-      const rDiff = rank(b.status) - rank(a.status);
-      if (rDiff !== 0) return rDiff;
       const tA = new Date(a.timestamp || a.createdAt || 0).getTime() || 0;
       const tB = new Date(b.timestamp || b.createdAt || 0).getTime() || 0;
-      return tB - tA;
+      if (tB !== tA) return tB - tA;
+      const rank = (s?: string) => {
+        const u = (s || '').toUpperCase();
+        if (u === 'PENDING') return 3;
+        if (u === 'APPROVED' || u === 'ACTIVE') return 2;
+        return 1;
+      };
+      return rank(b.status) - rank(a.status);
     });
 
     for (const req of sorted) {
@@ -202,62 +237,51 @@ export const AdminNexus: React.FC = () => {
     });
   };
 
-  // Active Real-Time Hook / Query for Pending Access Requests from Firestore
+  const setAccessRequests = (rawRequests: any[]) => {
+    const mapped = rawRequests.map(normalizeRawRequest).filter(Boolean) as OnboardingRequest[];
+    const list = deduplicateAndSortRequests(mapped);
+    setOnboardingRequests(list);
+  };
+
+  // Manual Live Sync fallback button handler
   const fetchPendingRequests = async () => {
     setIsSyncing(true);
     setSyncError(null);
     try {
-      // 1. Fetch from Firestore collection access_requests
-      const colRef = collection(db, 'access_requests');
-      const snapshot = await getDocs(colRef);
-      const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
-      const list = deduplicateAndSortRequests(rawList);
-      setOnboardingRequests(list);
+      const snapshot = await getDocs(collection(db, 'access_requests'));
+      const requests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      setAccessRequests(requests);
     } catch (err: any) {
-      console.warn('Admin Nexus pending fetch notice:', err);
+      console.error('Admin Nexus pending fetch error:', err);
       setSyncError(err?.message || 'Failed to fetch access requests from Firestore.');
     }
     setIsSyncing(false);
     setLastSyncTime(new Date().toLocaleTimeString());
   };
 
-  // Real-time Firestore listener in Admin Nexus
+  // Global real-time unfiltered onSnapshot listener on access_requests
   useEffect(() => {
-    // Attach Firestore onSnapshot listener for instant updates in Pending Queue
-    let unsubscribe: (() => void) | undefined;
-    try {
-      const colRef = collection(db, 'access_requests');
-      unsubscribe = onSnapshot(
-        colRef,
-        (snapshot) => {
-          setSyncError(null);
-          const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
-          const list = deduplicateAndSortRequests(rawList);
-          setOnboardingRequests(list);
-          setLastSyncTime(new Date().toLocaleTimeString());
-        },
-        (err: any) => {
-          console.warn('Admin Nexus onSnapshot notice:', err);
-          setSyncError(err?.message || 'Real-time synchronization error on access_requests collection.');
-        }
-      );
-    } catch (err: any) {
-      console.warn('Failed to attach onSnapshot listener in Admin Nexus:', err);
-      setSyncError(err?.message || 'Failed to initialize real-time listener.');
-    }
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
+    const unsubscribe = onSnapshot(
+      collection(db, 'access_requests'),
+      (snapshot) => {
+        setSyncError(null);
+        const requests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setAccessRequests(requests);
+        setLastSyncTime(new Date().toLocaleTimeString());
+      },
+      (err: any) => {
+        console.error('Admin Nexus onSnapshot error:', err);
+        setSyncError(err?.message || 'Real-time synchronization error on access_requests collection.');
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
-  const isReqPending = (status?: string) =>
-    !status ||
-    status === 'pending' ||
-    status.toUpperCase() === 'PENDING' ||
-    status.toLowerCase() === 'pending' ||
-    status.toLowerCase() === 'pending_approval' ||
-    status.toLowerCase().includes('pending');
+  const isReqPending = (status?: string) => {
+    if (!status) return true;
+    const s = String(status).trim().toLowerCase();
+    return s === 'pending' || s === 'pending_approval' || s.includes('pending');
+  };
 
   // Dynamic Team Efficiency reference
   const members = employees;

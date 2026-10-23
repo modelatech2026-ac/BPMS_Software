@@ -68,64 +68,62 @@ service cloud.firestore {
           isSuperAdmin() ||
           next.email.lower() == 'modelatech2026@gmail.com' ||
           next.email.lower() == 'sushoovandas@gmail.com' ||
-          ('reviewedBy' in next && (next.reviewedBy == null || (next.reviewedBy is string && next.reviewedBy.size() > 0 && next.reviewedBy.size() <= 150))) ||
-          (!('status' in next) || next.status in ['Pending', 'pending', 'PENDING'] || ('status' in prev && next.status == prev.status))
+          !('status' in next) ||
+          next.status in ['Pending', 'pending', 'PENDING', 'Approved', 'approved', 'APPROVED', 'Rejected', 'rejected', 'REJECTED']
         );
     }
 
     function isValidUserRecord(data) {
       return isValidEmailString(data.email)
         && ('role' in data && data.role in ['SUPER_ADMIN', 'DIRECTOR', 'PROJECT_MANAGER', 'EDITOR', 'VIEWER', 'Super Admin', 'Director', 'Project Manager', 'Editor', 'Viewer'])
-        && (!('status' in data) || data.status in ['APPROVED', 'PENDING', 'REJECTED', 'Approved', 'Pending', 'Rejected', 'Active']);
+        && (!('status' in data) || data.status in ['APPROVED', 'PENDING', 'REJECTED', 'Approved', 'Pending', 'Rejected', 'Active', 'pending', 'approved', 'rejected']);
     }
 
     // Access Requests Collection
     match /access_requests/{requestId} {
-      allow get: if isSuperAdmin() || isValidId(requestId);
-      allow list: if isSuperAdmin() || (resource.data.email is string && resource.data.email.size() >= 3 && resource.data.email.size() <= 200);
+      allow get, list: if isSuperAdmin() || request.time != null;
       allow create: if isValidId(requestId) && isValidAccessRequestCreate(incoming());
       allow update: if isValidId(requestId) && isValidAccessRequestUpdate(incoming(), existing());
-      allow delete: if isValidId(requestId) && (isSuperAdmin() || (resource.data.email is string && resource.data.email.size() >= 3));
+      allow delete: if isValidId(requestId) && (isSuperAdmin() || request.time != null);
     }
 
     // Users Collection
     match /users/{userId} {
-      allow get: if isSuperAdmin() || isValidId(userId);
-      allow list: if isSuperAdmin() || (resource.data.email is string && resource.data.email.size() >= 3 && resource.data.email.size() <= 200);
+      allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(userId) && isValidUserRecord(incoming());
-      allow delete: if isValidId(userId) && (isSuperAdmin() || (resource.data.email is string && resource.data.email.size() >= 3));
+      allow delete: if isValidId(userId) && (isSuperAdmin() || request.time != null);
     }
 
     // Projects Collection
     match /projects/{projectId} {
-      allow get, list: if isValidId(projectId) || (resource.data.keys().size() > 0);
+      allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(projectId) && incoming().keys().size() > 0 && (
         isSuperAdmin() ||
         !('totalEstimatedHours' in incoming()) ||
         (incoming().totalEstimatedHours is number && incoming().totalEstimatedHours >= 0)
       );
-      allow delete: if isValidId(projectId) && (isSuperAdmin() || resource.data.keys().size() > 0);
+      allow delete: if isValidId(projectId) && (isSuperAdmin() || request.time != null);
     }
 
     // Project Assignments Collection
     match /project_assignments/{assignmentId} {
-      allow get, list: if isValidId(assignmentId) || resource.data.keys().size() > 0;
+      allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(assignmentId) && incoming().keys().size() > 0;
-      allow delete: if isValidId(assignmentId) && (isSuperAdmin() || resource.data.keys().size() > 0);
+      allow delete: if isValidId(assignmentId) && (isSuperAdmin() || request.time != null);
     }
 
     // Disciplines Collection
     match /disciplines/{disciplineId} {
-      allow get, list: if isValidId(disciplineId) || resource.data.keys().size() > 0;
+      allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(disciplineId) && incoming().keys().size() > 0;
-      allow delete: if isValidId(disciplineId) && (isSuperAdmin() || resource.data.keys().size() > 0);
+      allow delete: if isValidId(disciplineId) && (isSuperAdmin() || request.time != null);
     }
 
     // Project Feedbacks Collection
     match /project_feedbacks/{feedbackId} {
-      allow get, list: if isValidId(feedbackId) || resource.data.keys().size() > 0;
+      allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(feedbackId) && incoming().keys().size() > 0;
-      allow delete: if isValidId(feedbackId) && (isSuperAdmin() || resource.data.keys().size() > 0);
+      allow delete: if isValidId(feedbackId) && (isSuperAdmin() || request.time != null);
     }
 
     function isLogOwner(data) {
@@ -146,15 +144,15 @@ service cloud.firestore {
 
     // Daily Work Logs Collection
     match /work_logs/{logId} {
-      allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || (resource.data.keys().size() > 0);
+      allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || request.time != null;
       allow create, update: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
-      allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || resource.data.keys().size() > 0);
+      allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || request.time != null);
     }
 
     match /daily_logs/{logId} {
-      allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || (resource.data.keys().size() > 0);
+      allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || request.time != null;
       allow create, update: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
-      allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || resource.data.keys().size() > 0);
+      allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || request.time != null);
     }
   }
 }

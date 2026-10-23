@@ -41,6 +41,7 @@ import {
 import { useOptionalAuth } from '../auth/AuthContext';
 import { db } from '../firebase/config';
 import {
+  addDoc,
   collection,
   doc,
   onSnapshot,
@@ -532,24 +533,59 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
 
+    const formatFirestoreTimestamp = (val: any): string => {
+      if (!val) return '';
+      if (typeof val === 'string') return val;
+      if (typeof val?.toDate === 'function') {
+        try {
+          return val.toDate().toISOString();
+        } catch {
+          return '';
+        }
+      }
+      if (typeof val?.seconds === 'number') {
+        return new Date(val.seconds * 1000).toISOString();
+      }
+      if (val instanceof Date) {
+        return val.toISOString();
+      }
+      return String(val);
+    };
+
     const mapDocToRequest = (d: any): OnboardingRequest | null => {
-      const data = d.data();
-      if (!data || !data.email) return null;
-      const rawStatus = (data.status || 'Pending').toLowerCase();
-      const mappedStatus: UserApprovalStatus =
-        rawStatus === 'approved' || rawStatus === 'active'
-          ? 'APPROVED'
-          : rawStatus === 'rejected'
-          ? 'REJECTED'
-          : 'Pending';
-      const fullName = data.fullName || data.name || data.email.split('@')[0];
-      const discipline = data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS';
-      const reasonForAccess = data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
-      const createdAt = data.createdAt || data.requestedAt || data.timestamp || new Date().toISOString();
+      const data = typeof d.data === 'function' ? d.data() : d;
+      if (!data) return null;
+      const cleanEmail = String(data.email || data.userEmail || data.memberEmail || '').trim().toLowerCase();
+      if (!cleanEmail) return null;
+
+      const isSuper = isSuperAdminEmail(cleanEmail);
+      const rawStatus = String(data.status || 'pending').trim().toLowerCase();
+      const mappedStatus: UserApprovalStatus = isSuper
+        ? 'APPROVED'
+        : rawStatus === 'approved' || rawStatus === 'active'
+        ? 'APPROVED'
+        : rawStatus === 'rejected' || rawStatus === 'declined'
+        ? 'REJECTED'
+        : 'Pending';
+
+      const fullName = String(data.fullName || data.name || cleanEmail.split('@')[0]).trim();
+      const discipline = String(data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS');
+      const reasonForAccess = String(
+        data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS'
+      );
+      const createdAt =
+        formatFirestoreTimestamp(data.createdAt) ||
+        formatFirestoreTimestamp(data.requestedAt) ||
+        formatFirestoreTimestamp(data.timestamp) ||
+        new Date().toISOString();
+      const updatedAt =
+        formatFirestoreTimestamp(data.updatedAt) ||
+        formatFirestoreTimestamp(data.reviewedAt) ||
+        createdAt;
 
       const normalizedRole: UserRole = normalizeUserRole(
         data.assignedRole || data.role || data.appRole || data.requestedRole,
-        isSuperAdminEmail(data.email)
+        isSuper
       );
       const calculatedAccessLevel: AccessLevel =
         (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
@@ -557,7 +593,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       return {
         id: d.id,
         googleId: data.uid || d.id,
-        email: data.email,
+        email: cleanEmail,
         name: fullName,
         fullName: fullName,
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
@@ -567,35 +603,34 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         assignedAccessLevel: calculatedAccessLevel,
         primaryDiscipline: discipline,
         discipline: discipline,
-        organization: discipline,
+        organization: data.organization || discipline,
         reasonForAccess: reasonForAccess,
         accessReason: reasonForAccess,
         createdAt: createdAt,
         requestedAt: createdAt,
         requestTimestamp: createdAt,
-        timestamp: data.updatedAt || data.reviewedAt || createdAt,
+        timestamp: updatedAt,
         status: mappedStatus,
         reviewedBy: data.reviewedBy,
-        reviewedAt: data.reviewedAt,
+        reviewedAt: formatFirestoreTimestamp(data.reviewedAt) || undefined,
         notes: data.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
       };
     };
 
     const deduplicateAndSortRequests = (rawList: OnboardingRequest[]): OnboardingRequest[] => {
       const byEmail = new Map<string, OnboardingRequest>();
-      // Sort raw list so APPROVED or most recently updated takes precedence for duplicate email records
+      // Sort by newest timestamp first so latest submission or admin review for an email wins
       const sorted = [...rawList].sort((a, b) => {
-        const rank = (s?: string) => {
-          const u = (s || '').toUpperCase();
-          if (u === 'APPROVED' || u === 'ACTIVE') return 3;
-          if (u === 'REJECTED') return 2;
-          return 1;
-        };
-        const rDiff = rank(b.status) - rank(a.status);
-        if (rDiff !== 0) return rDiff;
         const tA = new Date(a.timestamp || a.createdAt || 0).getTime() || 0;
         const tB = new Date(b.timestamp || b.createdAt || 0).getTime() || 0;
-        return tB - tA;
+        if (tB !== tA) return tB - tA;
+        const rank = (s?: string) => {
+          const u = (s || '').toUpperCase();
+          if (u === 'PENDING') return 3;
+          if (u === 'APPROVED' || u === 'ACTIVE') return 2;
+          return 1;
+        };
+        return rank(b.status) - rank(a.status);
       });
 
       for (const req of sorted) {
@@ -1342,8 +1377,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     // 3. Save to central database collection Firestore access_requests unless caller already wrote it
     if (!params.skipFirestoreWrite) {
-      const reqDoc = doc(db, 'access_requests', effectiveDocId);
       if (isExistingUser && preservedStatus === 'APPROVED') {
+        const reqDoc = doc(db, 'access_requests', effectiveDocId);
         await setDoc(
           reqDoc,
           {
@@ -1359,31 +1394,26 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           { merge: true }
         );
       } else {
-        await setDoc(
-          reqDoc,
-          {
-            id: effectiveDocId,
-            uid: effectiveDocId,
-            name: formattedName,
-            fullName: formattedName,
-            email: trimmedEmail,
-            discipline,
-            primaryDiscipline: discipline,
-            organization: discipline,
-            reasonForAccess,
-            accessReason: reasonForAccess,
-            status: 'Pending',
-            role: 'Editor',
-            assignedRole: 'EDITOR',
-            requestedRole: 'Editor',
-            createdAt: isoTimestamp,
-            requestedAt: isoTimestamp,
-            timestamp: isoTimestamp,
-            requestTimestamp: timestamp,
-            updatedAt: isoTimestamp,
-          },
-          { merge: true }
-        );
+        const docRef = await addDoc(collection(db, 'access_requests'), {
+          name: formattedName,
+          fullName: formattedName,
+          email: trimmedEmail,
+          discipline,
+          primaryDiscipline: discipline,
+          organization: discipline,
+          reasonForAccess,
+          accessReason: reasonForAccess,
+          status: 'pending',
+          role: 'Editor',
+          assignedRole: 'EDITOR',
+          requestedRole: 'Editor',
+          createdAt: isoTimestamp,
+          requestedAt: isoTimestamp,
+          timestamp: isoTimestamp,
+          requestTimestamp: timestamp,
+          updatedAt: isoTimestamp,
+        });
+        newRequest.id = docRef.id;
       }
     }
 

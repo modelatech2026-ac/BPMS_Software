@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { TwoFactorChallengeModal } from './TwoFactorChallengeModal';
 import { db } from '../firebase/config';
-import { collection, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore';
+import { addDoc, collection, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore';
 import {
   isSuperAdminEmail,
   normalizeUserRole,
@@ -208,23 +208,29 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     const userReason = 'Sign-in Access Request for ProductionPulse BPMS';
 
     try {
-      // 1. Authoritative database check from Firestore ('access_requests' and 'users')
-      const existingRecord = await fetchUserRoleFromDatabase(cleanEmail, generatedUid);
-      const isExistingUser = existingRecord && existingRecord.source !== 'default';
+      // 1. Check if user is already an approved user or Super Admin in Firestore
+      let existingRecord: Awaited<ReturnType<typeof fetchUserRoleFromDatabase>> | undefined;
+      try {
+        existingRecord = await fetchUserRoleFromDatabase(cleanEmail, generatedUid);
+      } catch (lookupErr) {
+        console.warn('Role lookup notice prior to submission:', lookupErr);
+      }
+
+      const isExistingUser = Boolean(existingRecord && existingRecord.source !== 'default');
       const isApprovedUser =
         isSuperAdminEmail(cleanEmail) ||
-        (isExistingUser && existingRecord.status === 'APPROVED');
+        Boolean(isExistingUser && existingRecord?.status === 'APPROVED');
 
-      const docId = existingRecord?.id || generatedUid;
-      const reqDoc = doc(db, 'access_requests', docId);
+      let finalDocId = existingRecord?.id || generatedUid;
 
-      if (isApprovedUser) {
+      if (isApprovedUser && existingRecord) {
         // Approved user or Super Admin: update login activity without overwriting assigned role or status
+        const reqDoc = doc(db, 'access_requests', finalDocId);
         await setDoc(
           reqDoc,
           {
-            id: docId,
-            uid: docId,
+            id: finalDocId,
+            uid: finalDocId,
             name: cleanName,
             fullName: cleanName,
             email: cleanEmail,
@@ -239,15 +245,21 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
           { merge: true }
         );
       } else {
-        // Unknown user or Pending user: save access request to Firestore with name, email, requested role, timestamp, and Pending status
-        const preservedRole = isExistingUser && existingRecord.role ? existingRecord.role : 'EDITOR';
-        const preservedAccessLevel = isExistingUser && existingRecord.accessLevel ? existingRecord.accessLevel : 'Editor';
+        // Unknown user or Pending user: strictly await addDoc to "access_requests" before showing "Request Sent"
+        const preservedRole = isExistingUser && existingRecord?.role ? existingRecord.role : 'EDITOR';
+        const preservedAccessLevel =
+          isExistingUser && existingRecord?.accessLevel ? existingRecord.accessLevel : 'Editor';
+
         const requestPayload = {
-          id: docId,
-          uid: docId,
-          name: cleanName,
           fullName: cleanName,
+          name: cleanName,
           email: cleanEmail,
+          status: 'pending',
+          createdAt: isoTimestamp,
+          requestedAt: isoTimestamp,
+          timestamp: isoTimestamp,
+          requestTimestamp: isoTimestamp,
+          updatedAt: isoTimestamp,
           requestedRole: 'Editor',
           role: preservedRole === 'EDITOR' ? 'Editor' : preservedRole,
           assignedRole: preservedRole,
@@ -257,15 +269,11 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
           organization: userDiscipline,
           reasonForAccess: userReason,
           accessReason: userReason,
-          status: 'Pending',
-          timestamp: isoTimestamp,
-          createdAt: isoTimestamp,
-          requestedAt: isoTimestamp,
-          requestTimestamp: isoTimestamp,
-          updatedAt: isoTimestamp,
           notes: userReason,
         };
-        await setDoc(reqDoc, requestPayload, { merge: true });
+
+        const docRef = await addDoc(collection(db, 'access_requests'), requestPayload);
+        finalDocId = docRef.id;
       }
 
       // 2. Register in memory and notify listeners without repeating Firestore write
@@ -275,27 +283,31 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         email: cleanEmail,
         discipline: userDiscipline,
         reasonForAccess: userReason,
-        uid: docId,
+        uid: finalDocId,
         organization: userDiscipline,
         accessReason: userReason,
-        existingDbRecord: existingRecord,
+        existingDbRecord: isApprovedUser ? existingRecord : undefined,
         skipFirestoreWrite: true,
       });
 
       // 3. Submit through AuthContext to establish session without repeating Firestore write
-      const effectiveRecordForSession = isApprovedUser
+      const effectiveRecordForSession = isApprovedUser && existingRecord
         ? existingRecord
         : {
-            ...existingRecord,
+            role: 'EDITOR' as const,
             status: 'PENDING' as const,
+            accessLevel: 'Editor' as const,
+            displayRole: 'BIM Modeler / Editor',
+            securityRole: 'BIM Specialist' as const,
+            source: 'database_access_requests' as const,
             isApproved: false,
-            id: docId,
+            id: finalDocId,
           };
 
       const result = await submitAccessRequest({
         name: cleanName,
         email: cleanEmail,
-        uid: docId,
+        uid: finalDocId,
         existingDbRecord: effectiveRecordForSession,
         skipFirestoreWrite: true,
       });
@@ -303,7 +315,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
       const record: SubmittedRequestData = {
         name: cleanName,
         email: cleanEmail,
-        uid: docId,
+        uid: finalDocId,
       };
       setSubmittedRecord(record);
       setIsLoading(false);
@@ -319,11 +331,11 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
           onClose();
         }
       } else {
-        // Show "Request Sent" only after Firestore submission succeeds
+        // Show "Request Sent" ONLY after await addDoc(collection(db, "access_requests"), ...) completes
         setViewStep('pending');
       }
     } catch (err: any) {
-      console.error('Access request submission error:', err);
+      console.error('Access request Firestore write error:', err);
       setIsLoading(false);
       const rawMsg = String(err?.message || '');
       if (err?.code === 'permission-denied' || rawMsg.includes('Missing or insufficient permissions')) {

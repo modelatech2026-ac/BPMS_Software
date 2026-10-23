@@ -99,6 +99,16 @@ export async function fetchUserRoleFromDatabase(
   const parseTimestampMs = (data: any): number => {
     const raw = data?.updatedAt || data?.reviewedAt || data?.timestamp || data?.requestedAt || data?.createdAt;
     if (!raw) return 0;
+    if (typeof raw?.toDate === 'function') {
+      try {
+        return raw.toDate().getTime();
+      } catch {
+        return 0;
+      }
+    }
+    if (typeof raw?.seconds === 'number') {
+      return raw.seconds * 1000;
+    }
     const ms = new Date(raw).getTime();
     return Number.isNaN(ms) ? 0 : ms;
   };
@@ -156,7 +166,7 @@ export async function fetchUserRoleFromDatabase(
       }
     }
 
-    // 3. Fallback query by email only if no approved record was found via deterministic ID
+    // 3. Query by normalized email across access_requests and users
     if (!candidates.some((c) => c.isApproved)) {
       const [reqQuerySnap, userQuerySnap] = await Promise.all([
         getDocs(query(collection(db, 'access_requests'), where('email', '==', cleanEmail))),
@@ -210,11 +220,11 @@ export async function fetchUserRoleFromDatabase(
   }
 
   if (candidates.length > 0) {
-    // Sort candidates: APPROVED first, then REJECTED, then PENDING; break ties by newest timestamp
-    const statusWeight = (s: UserApprovalStatus) => (s === 'APPROVED' ? 3 : s === 'REJECTED' ? 2 : 1);
+    // Prioritize APPROVED records first, otherwise sort by newest timestamp so fresh pending requests override stale rejections
     candidates.sort((a, b) => {
-      const wDiff = statusWeight(b.status) - statusWeight(a.status);
-      if (wDiff !== 0) return wDiff;
+      if (a.isApproved !== b.isApproved) {
+        return a.isApproved ? -1 : 1;
+      }
       return b.updatedAtMs - a.updatedAtMs;
     });
     const best = candidates[0];
