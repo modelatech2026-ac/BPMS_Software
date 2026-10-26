@@ -41,7 +41,7 @@ import {
 import { persistUserRoleToDatabase } from '../auth/roleSync';
 import { SecuritySettingsModal } from './SecuritySettingsModal';
 import { db } from '../firebase/config';
-import { collection, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDocs, onSnapshot, updateDoc } from 'firebase/firestore';
 
 export const AdminNexus: React.FC = () => {
   const {

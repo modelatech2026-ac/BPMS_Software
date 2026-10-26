@@ -29,6 +29,7 @@ import { PendingApprovalScreen } from './components/PendingApprovalScreen';
 import { AuthGateway } from './components/AuthGateway';
 import { TwoFactorChallengeModal } from './components/TwoFactorChallengeModal';
 import { PublicClientFeedback } from './components/PublicClientFeedback';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { BimProject, ViewTab } from './types';
 
 export const ROUTE_TAB_MAP: Record<string, ViewTab> = {
@@ -59,11 +60,11 @@ export const TAB_ROUTE_MAP: Record<ViewTab, string> = {
 
 export function isFeedbackRoute(path?: string): boolean {
   if (typeof window !== 'undefined') {
-    const pathname = window.location.pathname || '';
+    const pathname = window.location?.pathname || '';
     if (pathname === '/feedback' || pathname.startsWith('/feedback')) {
       return true;
     }
-    const hash = window.location.hash || '';
+    const hash = window.location?.hash || '';
     if (
       hash === '#feedback' ||
       hash === '#/feedback' ||
@@ -73,23 +74,24 @@ export function isFeedbackRoute(path?: string): boolean {
       return true;
     }
   }
-  if (!path) return false;
-  const clean = path.split('?')[0].split('#')[0].replace(/\/+$/, '');
+  if (!path || typeof path !== 'string') return false;
+  const clean = (path.split('?')[0] || '').split('#')[0]?.replace(/\/+$/, '') || '';
   return clean === '/feedback' || clean.startsWith('/feedback');
 }
 
 function getNormalizedPath(): string {
-  if (typeof window === 'undefined') return '/';
+  if (typeof window === 'undefined' || !window.location) return '/';
   // Check if current route is public feedback portal
   if (isFeedbackRoute()) return '/feedback';
 
   // Check hash first (e.g. #/dashboard or #dashboard or #feedback)
-  const hash = window.location.hash.replace(/^#\/?/, '/');
+  const rawHash = window.location?.hash || '';
+  const hash = rawHash.replace(/^#\/?/, '/');
   if (isFeedbackRoute(hash)) return '/feedback';
   if (hash && hash !== '/' && ROUTE_TAB_MAP[hash]) {
     return hash;
   }
-  const pathname = window.location.pathname;
+  const pathname = window.location?.pathname || '';
   if (!pathname || pathname === '' || pathname === '/') return '/';
   if (isFeedbackRoute(pathname)) return '/feedback';
   const clean = pathname.replace(/\/+$/, '');
@@ -103,7 +105,7 @@ function BimAppContent() {
 
   const effectiveSecurityRole = resolveSecurityRole(
     currentUser,
-    isAuthenticated,
+    Boolean(isAuthenticated),
     securityRole
   );
   const defaultAllowedTab = getDefaultTabForRole(effectiveSecurityRole);
@@ -111,9 +113,10 @@ function BimAppContent() {
 
   // Active Browser Route State
   const [currentPath, setCurrentPath] = useState<string>(() => getNormalizedPath());
+  const [isRouteReady, setIsRouteReady] = useState<boolean>(true);
 
   // Check if session is truly active and approved
-  const userStatusUpper = (currentUser?.status || '').toUpperCase();
+  const userStatusUpper = String(currentUser?.status || '').toUpperCase();
   const hasActiveSession = Boolean(
     isAuthenticated &&
     currentUser &&
@@ -174,7 +177,7 @@ function BimAppContent() {
     if (hasActiveSession) {
       const path = getNormalizedPath();
       if (path === '/' || path === '/login') {
-        if (typeof window !== 'undefined') {
+        if (typeof window !== 'undefined' && window.history) {
           window.history.replaceState(null, '', defaultAllowedRoute);
         }
         setCurrentPath(defaultAllowedRoute);
@@ -184,13 +187,21 @@ function BimAppContent() {
         if (isTabAllowedForRole(requestedTab, effectiveSecurityRole)) {
           setCurrentTab(requestedTab);
         } else {
-          if (typeof window !== 'undefined') {
+          if (typeof window !== 'undefined' && window.history) {
             window.history.replaceState(null, '', defaultAllowedRoute);
           }
           setCurrentPath(defaultAllowedRoute);
           setCurrentTab(defaultAllowedTab);
         }
+      } else {
+        // Fallback for unrecognized sub-routes
+        if (typeof window !== 'undefined' && window.history) {
+          window.history.replaceState(null, '', defaultAllowedRoute);
+        }
+        setCurrentPath(defaultAllowedRoute);
+        setCurrentTab(defaultAllowedTab);
       }
+      setIsRouteReady(true);
     }
   }, [hasActiveSession, setCurrentTab, effectiveSecurityRole, defaultAllowedTab, defaultAllowedRoute]);
 
@@ -198,7 +209,7 @@ function BimAppContent() {
   useEffect(() => {
     if (!isTabAllowedForRole(currentTab, effectiveSecurityRole)) {
       setCurrentTab(defaultAllowedTab);
-      if (typeof window !== 'undefined' && hasActiveSession) {
+      if (typeof window !== 'undefined' && window.history && hasActiveSession) {
         window.history.replaceState(null, '', defaultAllowedRoute);
         setCurrentPath(defaultAllowedRoute);
       }
@@ -368,56 +379,67 @@ function BimAppContent() {
         />
 
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {isTabAllowedForRole('dashboard', effectiveSecurityRole) && currentTab === 'dashboard' && (
-            <DashboardOverview
-              onOpenReportModal={handleOpenReportModal}
-              onOpenLogModal={() => handleOpenLogModal()}
-              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-            />
-          )}
+          <ErrorBoundary>
+            {!isRouteReady ? (
+              <div className="min-h-[50vh] flex flex-col items-center justify-center gap-3 text-slate-400">
+                <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs font-medium">Loading workspace...</span>
+              </div>
+            ) : (
+              <>
+                {isTabAllowedForRole('dashboard', effectiveSecurityRole) && currentTab === 'dashboard' && (
+                  <DashboardOverview
+                    onOpenReportModal={handleOpenReportModal}
+                    onOpenLogModal={() => handleOpenLogModal()}
+                    onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+                  />
+                )}
 
-          {isTabAllowedForRole('projects', effectiveSecurityRole) && currentTab === 'projects' && (
-            <ProjectList
-              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-              onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
-              onOpenReportModalWithProject={(id) => handleOpenReportModal(id)}
-            />
-          )}
+                {isTabAllowedForRole('projects', effectiveSecurityRole) && currentTab === 'projects' && (
+                  <ProjectList
+                    onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+                    onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
+                    onOpenReportModalWithProject={(id) => handleOpenReportModal(id)}
+                  />
+                )}
 
-          {isTabAllowedForRole('daily-tracker', effectiveSecurityRole) && currentTab === 'daily-tracker' && (
-            <DailyHourTracker onOpenLogModal={() => handleOpenLogModal()} />
-          )}
+                {isTabAllowedForRole('daily-tracker', effectiveSecurityRole) && currentTab === 'daily-tracker' && (
+                  <DailyHourTracker onOpenLogModal={() => handleOpenLogModal()} />
+                )}
 
-          {isTabAllowedForRole('employees', effectiveSecurityRole) && currentTab === 'employees' && (
-            <EmployeeDirectory
-              onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
-              onOpenLogModalForEmployee={(empId) => handleOpenLogModal()}
-              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-            />
-          )}
+                {isTabAllowedForRole('employees', effectiveSecurityRole) && currentTab === 'employees' && (
+                  <EmployeeDirectory
+                    onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
+                    onOpenLogModalForEmployee={() => handleOpenLogModal()}
+                    onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+                  />
+                )}
 
-          {isTabAllowedForRole('assign-hours', effectiveSecurityRole) &&
-            (currentTab === 'assign-hours' || currentTab === 'clash-lod' || currentTab === 'project-members') && (
-              <AssignHoursSystem
-                onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-              />
+                {isTabAllowedForRole('assign-hours', effectiveSecurityRole) &&
+                  (currentTab === 'assign-hours' || currentTab === 'clash-lod' || currentTab === 'project-members') && (
+                    <AssignHoursSystem
+                      onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+                    />
+                  )}
+
+                {isTabAllowedForRole('project-feedback', effectiveSecurityRole) && currentTab === 'project-feedback' && (
+                  <ProjectFeedback
+                    onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+                  />
+                )}
+
+                {isTabAllowedForRole('stakeholder-reports', effectiveSecurityRole) && currentTab === 'stakeholder-reports' && (
+                  <StakeholderReportsArchive
+                    onOpenReportModal={() => handleOpenReportModal()}
+                  />
+                )}
+
+                {isTabAllowedForRole('admin-nexus', effectiveSecurityRole) && currentTab === 'admin-nexus' && (
+                  <AdminNexus />
+                )}
+              </>
             )}
-
-          {isTabAllowedForRole('project-feedback', effectiveSecurityRole) && currentTab === 'project-feedback' && (
-            <ProjectFeedback
-              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-            />
-          )}
-
-          {isTabAllowedForRole('stakeholder-reports', effectiveSecurityRole) && currentTab === 'stakeholder-reports' && (
-            <StakeholderReportsArchive
-              onOpenReportModal={() => handleOpenReportModal()}
-            />
-          )}
-
-          {isTabAllowedForRole('admin-nexus', effectiveSecurityRole) && currentTab === 'admin-nexus' && (
-            <AdminNexus />
-          )}
+          </ErrorBoundary>
         </main>
 
         {/* Global Footer */}
@@ -489,11 +511,13 @@ function BimAppContent() {
 
 export function App() {
   return (
-    <AuthProvider>
-      <BimDataProvider>
-        <BimAppContent />
-      </BimDataProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BimDataProvider>
+          <BimAppContent />
+        </BimDataProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 
