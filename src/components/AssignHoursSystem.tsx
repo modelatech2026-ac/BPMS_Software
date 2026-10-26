@@ -872,9 +872,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         {/* Primary Top Metrics */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 mt-5 pt-5 border-t border-slate-800">
           <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-              Assigned / Allocated Hours
-            </span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                Assigned / Allocated Hours
+              </span>
+              {workspaceMetrics.allocatedHours > 0 && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                  {canManageAllocations ? 'Work Assigned to Team' : 'Work Assigned to You'}
+                </span>
+              )}
+            </div>
             <div className="flex items-baseline justify-between mt-1">
               <div className="text-xl font-bold text-blue-400 font-mono">
                 {workspaceMetrics.allocatedHours.toFixed(1)} <span className="text-xs font-normal text-slate-400">hrs</span>
@@ -890,12 +897,14 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           </div>
 
           <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
                 Available Remaining Hours
               </span>
-              <span className="text-[9px] font-semibold text-slate-400 font-mono bg-slate-750 px-1.5 py-0.5 rounded border border-slate-700/50">
-                Assigned − Logged
+              <span className="text-[10px] font-semibold font-mono bg-emerald-500/15 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30">
+                {workspaceMetrics.loggedHours > 0
+                  ? `Daily Hours Logged • Hours Logged: ${workspaceMetrics.loggedHours.toFixed(1)}h`
+                  : `Hours Logged: 0.0h`}
               </span>
             </div>
             <div className="flex items-baseline justify-between mt-1">
@@ -1188,9 +1197,21 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
                       {/* Logged Hours */}
                       <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-emerald-400">
-                          <Clock className="w-3.5 h-3.5 text-emerald-500" />
-                          <span>{loggedHours.toFixed(1)} hrs</span>
+                        <div className="flex flex-col items-start gap-1">
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-emerald-400">
+                            <Clock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                            <span>Hours Logged: {loggedHours.toFixed(1)}h</span>
+                          </div>
+                          {loggedHours > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              <span>Daily Hours Logged</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/80">
+                              Awaiting Daily Log
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -1204,21 +1225,26 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         </div>
                       </td>
 
-                      {/* Action (Delete Allocation with Confirmation Prompt for Admins) */}
+                      {/* Action (Status Label + Delete Allocation with Confirmation Prompt for Admins) */}
                       <td className="py-3 px-3.5 text-right">
                         {canManageAllocations ? (
-                          <button
-                            type="button"
-                            onClick={() => setAllocationToDelete(alloc)}
-                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition inline-flex items-center justify-center"
-                            title={`Delete allocation for ${alloc.employeeName}`}
-                            aria-label={`Delete allocation for ${alloc.employeeName}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-2">
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30 whitespace-nowrap">
+                              Work Assigned to {employees.find((emp) => emp.id === alloc.employeeId)?.name || alloc.employeeName || 'Team Member'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setAllocationToDelete(alloc)}
+                              className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition inline-flex items-center justify-center shrink-0"
+                              title={`Delete allocation for ${alloc.employeeName}`}
+                              aria-label={`Delete allocation for ${alloc.employeeName}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         ) : (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                            Assigned
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30 whitespace-nowrap">
+                            Work Assigned to You
                           </span>
                         )}
                       </td>

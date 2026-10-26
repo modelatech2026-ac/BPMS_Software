@@ -727,11 +727,21 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
-            <span className="text-xs text-slate-400 font-semibold uppercase">
-              {logTypeFilter === 'test' ? 'Total Logged (Test Only)' : 'Total Logged (Operational)'}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-semibold uppercase">
+                {logTypeFilter === 'test' ? 'Total Logged (Test Only)' : 'Total Logged (Operational)'}
+              </span>
+              {totalFilteredHours > 0 && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  Daily Hours Logged
+                </span>
+              )}
+            </div>
             <div className="flex items-baseline gap-2 mt-1">
               <p className="text-2xl font-bold text-white">{totalFilteredHours.toFixed(1)} hrs</p>
+              <span className="text-[11px] font-mono font-semibold text-emerald-400">
+                (Hours Logged: {totalFilteredHours.toFixed(1)}h)
+              </span>
               {logTypeFilter === 'all' && testFilteredHours > 0 && (
                 <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
                   +{testFilteredHours.toFixed(1)}h [TEST] excluded
@@ -746,7 +756,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
-            <span className="text-xs text-slate-400 font-semibold uppercase">Logged Entries</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-semibold uppercase">Logged Entries</span>
+              {filteredLogs.length > 0 && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  Daily Hours Logged
+                </span>
+              )}
+            </div>
             <div className="flex items-baseline gap-2 mt-1">
               <p className="text-2xl font-bold text-white">{filteredLogs.length} Records</p>
               {testCount > 0 && logTypeFilter === 'all' && (
@@ -977,7 +994,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                       ))}
 
                       <td className="p-3.5 text-right font-bold text-sm text-white">
-                        {weekSum.toFixed(1)}h
+                        <div className="flex flex-col items-end gap-0.5">
+                          <span>Hours Logged: {weekSum.toFixed(1)}h</span>
+                          {weekSum > 0 && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 whitespace-nowrap">
+                              Daily Hours Logged
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="p-3.5 text-center">
@@ -1233,9 +1257,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                             <div className="text-[11px] text-slate-400">{log.taskName}</div>
                           </td>
                           <td className="p-3.5 font-bold text-sm whitespace-nowrap">
-                            <span className={log.isTestEntry ? 'text-amber-300' : 'text-blue-400'}>
-                              {log.hoursLogged} hrs
-                            </span>
+                            <div className="flex flex-col items-start gap-1">
+                              <span className={log.isTestEntry ? 'text-amber-300' : 'text-blue-400'}>
+                                Hours Logged: {Number(log.hoursLogged || 0).toFixed(1)}h
+                              </span>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                Daily Hours Logged
+                              </span>
+                            </div>
                           </td>
                           <td className="p-3.5 text-slate-400 text-[11px] max-w-xs truncate" title={log.notes}>
                             {log.notes}
@@ -1266,7 +1295,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                                 </button>
                               </div>
                             ) : (
-                              <span className="text-[11px] text-slate-500 font-mono">—</span>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                Daily Hours Logged
+                              </span>
                             )}
                           </td>
                         </tr>
