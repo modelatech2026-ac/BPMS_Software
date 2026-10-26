@@ -14,7 +14,7 @@ import {
   TrendingUp,
   ShieldCheck
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
 import { BimProject, Milestone, TaskItem, LODLevel } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 
@@ -39,8 +39,10 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     addTask,
     addMilestone,
     updateProjectStatus,
+    currentUser,
   } = useBimData();
 
+  const isSuperAdmin = isUserSuperAdmin(currentUser);
   const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'milestones' | 'clashes'>('overview');
   const [showAddTask, setShowAddTask] = useState(false);
 
@@ -98,22 +100,32 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-blue-400 font-mono">{project.code}</span>
-              <div className="relative inline-block">
-                <select
-                  value={project.status}
-                  onChange={(e) => updateProjectStatus(project.id, e.target.value as any)}
-                  className={`font-semibold text-[11px] px-2.5 py-0.5 rounded-full border cursor-pointer focus:outline-none transition ${getProjectStatusStyle(
+              {isSuperAdmin ? (
+                <div className="relative inline-block">
+                  <select
+                    value={project.status}
+                    onChange={(e) => updateProjectStatus(project.id, e.target.value as any)}
+                    className={`font-semibold text-[11px] px-2.5 py-0.5 rounded-full border cursor-pointer focus:outline-none transition ${getProjectStatusStyle(
+                      project.status
+                    )}`}
+                  >
+                    <option value="WIP" className="bg-slate-900 text-cyan-300">WIP</option>
+                    <option value="On Track" className="bg-slate-900 text-emerald-300">On Track</option>
+                    <option value="At Risk" className="bg-slate-900 text-amber-300">At Risk</option>
+                    <option value="HOLD" className="bg-slate-900 text-orange-300">HOLD</option>
+                    <option value="CLOSED" className="bg-slate-900 text-slate-300">CLOSED</option>
+                    <option value="Completed" className="bg-slate-900 text-emerald-300">Completed</option>
+                  </select>
+                </div>
+              ) : (
+                <span
+                  className={`font-semibold text-[11px] px-2.5 py-0.5 rounded-full border ${getProjectStatusStyle(
                     project.status
                   )}`}
                 >
-                  <option value="WIP" className="bg-slate-900 text-cyan-300">WIP</option>
-                  <option value="On Track" className="bg-slate-900 text-emerald-300">On Track</option>
-                  <option value="At Risk" className="bg-slate-900 text-amber-300">At Risk</option>
-                  <option value="HOLD" className="bg-slate-900 text-orange-300">HOLD</option>
-                  <option value="CLOSED" className="bg-slate-900 text-slate-300">CLOSED</option>
-                  <option value="Completed" className="bg-slate-900 text-emerald-300">Completed</option>
-                </select>
-              </div>
+                  {project.status}
+                </span>
+              )}
             </div>
             <h2 className="text-lg font-bold text-white mt-1">{project.name}</h2>
             <p className="text-xs text-slate-400">
@@ -312,13 +324,15 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider">
                   Work Breakdown Tasks & Estimated Hours
                 </h4>
-                <button
-                  onClick={() => setShowAddTask(true)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Task</span>
-                </button>
+                {isSuperAdmin && (
+                  <button
+                    onClick={() => setShowAddTask(true)}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Task</span>
+                  </button>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -350,21 +364,27 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                           </div>
                         </div>
 
-                        <select
-                          aria-label="Change task status"
-                          value={task.status}
-                          onChange={(e) =>
-                            updateTask(project.id, task.id, {
-                              status: e.target.value as TaskItem['status'],
-                            })
-                          }
-                          className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 cursor-pointer"
-                        >
-                          <option value="Not Started">Not Started</option>
-                          <option value="In Progress">In Progress</option>
-                          <option value="Under Review">Under Review</option>
-                          <option value="Completed">Completed</option>
-                        </select>
+                        {isSuperAdmin ? (
+                          <select
+                            aria-label="Change task status"
+                            value={task.status}
+                            onChange={(e) =>
+                              updateTask(project.id, task.id, {
+                                status: e.target.value as TaskItem['status'],
+                              })
+                            }
+                            className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 cursor-pointer"
+                          >
+                            <option value="Not Started">Not Started</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Under Review">Under Review</option>
+                            <option value="Completed">Completed</option>
+                          </select>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 text-[11px] font-medium border border-slate-700">
+                            {task.status}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex justify-between items-center text-[11px] text-slate-400">
@@ -503,23 +523,29 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                           {ms.deliverableDescription}
                         </p>
                       </div>
-                      <select
-                        aria-label="Change milestone status"
-                        value={ms.status}
-                        onChange={(e) =>
-                          updateMilestoneStatus(
-                            project.id,
-                            ms.id,
-                            e.target.value as Milestone['status']
-                          )
-                        }
-                        className="bg-slate-800 text-slate-200 text-xs rounded px-2.5 py-1 border border-slate-700 cursor-pointer"
-                      >
-                        <option value="upcoming">Upcoming</option>
-                        <option value="in-progress">In Progress</option>
-                        <option value="completed">Completed</option>
-                        <option value="delayed">Delayed</option>
-                      </select>
+                      {isSuperAdmin ? (
+                        <select
+                          aria-label="Change milestone status"
+                          value={ms.status}
+                          onChange={(e) =>
+                            updateMilestoneStatus(
+                              project.id,
+                              ms.id,
+                              e.target.value as Milestone['status']
+                            )
+                          }
+                          className="bg-slate-800 text-slate-200 text-xs rounded px-2.5 py-1 border border-slate-700 cursor-pointer"
+                        >
+                          <option value="upcoming">Upcoming</option>
+                          <option value="in-progress">In Progress</option>
+                          <option value="completed">Completed</option>
+                          <option value="delayed">Delayed</option>
+                        </select>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 text-[11px] font-medium border border-slate-700 capitalize">
+                          {ms.status}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-4 text-[11px] text-slate-400 pt-1 border-t border-slate-700/60">
                       <span>Target Date: <strong className="text-slate-200">{ms.targetDate}</strong></span>

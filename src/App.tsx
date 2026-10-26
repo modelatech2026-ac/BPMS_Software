@@ -2,6 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   BimDataProvider,
   useBimData,
+  resolveSecurityRole,
+  isTabAllowedForRole,
+  getDefaultTabForRole,
 } from './context/BimDataContext';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { SidebarNav } from './components/SidebarNav';
@@ -98,20 +101,13 @@ function BimAppContent() {
   const { isAuthenticated, is2FAPending, securityRole } = useAuth();
   const isLight = theme === 'light';
 
-  const isSuperAdmin =
-    securityRole === 'Super Admin' ||
-    currentUser?.isAdmin ||
-    currentUser?.appRole === 'SUPER_ADMIN' ||
-    currentUser?.accessLevel === 'Super Admin' ||
-    (currentUser?.email && (
-      currentUser.email.toLowerCase() === 'modelatech2026@gmail.com' ||
-      currentUser.email.toLowerCase() === 'sushoovandas@gmail.com'
-    ));
-
-  const isViewer =
-    securityRole === 'Viewer' ||
-    currentUser?.appRole === 'VIEWER' ||
-    (currentUser?.accessLevel === 'Viewer' && !isSuperAdmin);
+  const effectiveSecurityRole = resolveSecurityRole(
+    currentUser,
+    isAuthenticated,
+    securityRole
+  );
+  const defaultAllowedTab = getDefaultTabForRole(effectiveSecurityRole);
+  const defaultAllowedRoute = TAB_ROUTE_MAP[defaultAllowedTab] || '/daily-tracker';
 
   // Active Browser Route State
   const [currentPath, setCurrentPath] = useState<string>(() => getNormalizedPath());
@@ -156,7 +152,12 @@ function BimAppContent() {
       const path = getNormalizedPath();
       setCurrentPath(path);
       if (ROUTE_TAB_MAP[path]) {
-        setCurrentTab(ROUTE_TAB_MAP[path]);
+        const targetTab = ROUTE_TAB_MAP[path];
+        if (isTabAllowedForRole(targetTab, effectiveSecurityRole)) {
+          setCurrentTab(targetTab);
+        } else {
+          setCurrentTab(defaultAllowedTab);
+        }
       }
     };
 
@@ -166,35 +167,43 @@ function BimAppContent() {
       window.removeEventListener('popstate', handleLocationChange);
       window.removeEventListener('hashchange', handleLocationChange);
     };
-  }, [setCurrentTab]);
+  }, [setCurrentTab, effectiveSecurityRole, defaultAllowedTab]);
 
-  // Sync initial path with ViewTab if authenticated and approved; redirect root / or /login directly to dashboard
+  // Sync initial path with ViewTab if authenticated and approved; redirect root / or /login directly to allowed default tab
   useEffect(() => {
     if (hasActiveSession) {
       const path = getNormalizedPath();
       if (path === '/' || path === '/login') {
-        const defaultRoute = isViewer ? '/daily-tracker' : '/dashboard';
         if (typeof window !== 'undefined') {
-          window.history.replaceState(null, '', defaultRoute);
+          window.history.replaceState(null, '', defaultAllowedRoute);
         }
-        setCurrentPath(defaultRoute);
-        setCurrentTab(ROUTE_TAB_MAP[defaultRoute]);
+        setCurrentPath(defaultAllowedRoute);
+        setCurrentTab(defaultAllowedTab);
       } else if (ROUTE_TAB_MAP[path]) {
-        setCurrentTab(ROUTE_TAB_MAP[path]);
+        const requestedTab = ROUTE_TAB_MAP[path];
+        if (isTabAllowedForRole(requestedTab, effectiveSecurityRole)) {
+          setCurrentTab(requestedTab);
+        } else {
+          if (typeof window !== 'undefined') {
+            window.history.replaceState(null, '', defaultAllowedRoute);
+          }
+          setCurrentPath(defaultAllowedRoute);
+          setCurrentTab(defaultAllowedTab);
+        }
       }
     }
-  }, [hasActiveSession, isViewer, setCurrentTab]);
+  }, [hasActiveSession, setCurrentTab, effectiveSecurityRole, defaultAllowedTab, defaultAllowedRoute]);
 
-  // Automatically enforce viewer view tab constraint
+  // Automatically enforce role-based view tab constraint when securityRole changes or restricted tab is active
   useEffect(() => {
-    if (isViewer && currentTab !== 'daily-tracker') {
-      setCurrentTab('daily-tracker');
-      if (typeof window !== 'undefined' && currentPath !== '/' && currentPath !== '/daily-tracker') {
-        window.history.replaceState(null, '', '/daily-tracker');
-        setCurrentPath('/daily-tracker');
+    if (!isTabAllowedForRole(currentTab, effectiveSecurityRole)) {
+      setCurrentTab(defaultAllowedTab);
+      if (typeof window !== 'undefined' && hasActiveSession) {
+        window.history.replaceState(null, '', defaultAllowedRoute);
+        setCurrentPath(defaultAllowedRoute);
       }
     }
-  }, [isViewer, currentTab, setCurrentTab, currentPath]);
+  }, [effectiveSecurityRole, currentTab, setCurrentTab, defaultAllowedTab, defaultAllowedRoute, hasActiveSession]);
 
   // Modal states
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
@@ -230,10 +239,14 @@ function BimAppContent() {
    */
   const handleTabChange = useCallback(
     (tabId: ViewTab) => {
-      const targetRoute = TAB_ROUTE_MAP[tabId] || '/dashboard';
+      if (!isTabAllowedForRole(tabId, effectiveSecurityRole)) {
+        navigateTo(defaultAllowedRoute);
+        return;
+      }
+      const targetRoute = TAB_ROUTE_MAP[tabId] || defaultAllowedRoute;
       navigateTo(targetRoute);
     },
-    [navigateTo]
+    [navigateTo, effectiveSecurityRole, defaultAllowedRoute]
   );
 
   /**
@@ -245,21 +258,21 @@ function BimAppContent() {
       let target = explicitTarget;
       if (!target) {
         try {
-          target = sessionStorage.getItem('bpms_redirect_target') || '/dashboard';
+          target = sessionStorage.getItem('bpms_redirect_target') || defaultAllowedRoute;
           sessionStorage.removeItem('bpms_redirect_target');
         } catch {
-          target = '/dashboard';
+          target = defaultAllowedRoute;
         }
       }
 
-      // Restrict viewer to daily-tracker
-      if (isViewer && target !== '/daily-tracker') {
-        target = '/daily-tracker';
+      const targetTab = ROUTE_TAB_MAP[target];
+      if (!targetTab || !isTabAllowedForRole(targetTab, effectiveSecurityRole)) {
+        target = defaultAllowedRoute;
       }
 
       navigateTo(target);
     },
-    [isViewer, navigateTo]
+    [effectiveSecurityRole, defaultAllowedRoute, navigateTo]
   );
 
   // Retrieve any pending attempted route for display on login screen
@@ -355,66 +368,63 @@ function BimAppContent() {
         />
 
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {isViewer ? (
+          {isTabAllowedForRole('dashboard', effectiveSecurityRole) && currentTab === 'dashboard' && (
+            <DashboardOverview
+              onOpenReportModal={handleOpenReportModal}
+              onOpenLogModal={() => handleOpenLogModal()}
+              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+            />
+          )}
+
+          {isTabAllowedForRole('projects', effectiveSecurityRole) && currentTab === 'projects' && (
+            <ProjectList
+              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+              onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
+              onOpenReportModalWithProject={(id) => handleOpenReportModal(id)}
+            />
+          )}
+
+          {isTabAllowedForRole('daily-tracker', effectiveSecurityRole) && currentTab === 'daily-tracker' && (
             <DailyHourTracker onOpenLogModal={() => handleOpenLogModal()} />
-          ) : (
-            <>
-              {currentTab === 'dashboard' && (
-                <DashboardOverview
-                  onOpenReportModal={handleOpenReportModal}
-                  onOpenLogModal={() => handleOpenLogModal()}
-                  onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-                />
-              )}
+          )}
 
-              {currentTab === 'projects' && (
-                <ProjectList
-                  onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-                  onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
-                  onOpenReportModalWithProject={(id) => handleOpenReportModal(id)}
-                />
-              )}
+          {isTabAllowedForRole('project-members', effectiveSecurityRole) && currentTab === 'project-members' && (
+            <ProjectMemberTracking
+              onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
+              onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
+              onOpenLogModalForMember={(empId) => handleOpenLogModal()}
+              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+            />
+          )}
 
-              {currentTab === 'daily-tracker' && (
-                <DailyHourTracker onOpenLogModal={() => handleOpenLogModal()} />
-              )}
+          {isTabAllowedForRole('employees', effectiveSecurityRole) && currentTab === 'employees' && (
+            <EmployeeDirectory
+              onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
+              onOpenLogModalForEmployee={(empId) => handleOpenLogModal()}
+            />
+          )}
 
-              {currentTab === 'project-members' && (
-                <ProjectMemberTracking
-                  onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
-                  onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
-                  onOpenLogModalForMember={(empId) => handleOpenLogModal()}
-                  onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-                />
-              )}
+          {isTabAllowedForRole('assign-hours', effectiveSecurityRole) &&
+            (currentTab === 'assign-hours' || currentTab === 'clash-lod') && (
+              <AssignHoursSystem
+                onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+              />
+            )}
 
-              {currentTab === 'employees' && (
-                <EmployeeDirectory
-                  onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
-                  onOpenLogModalForEmployee={(empId) => handleOpenLogModal()}
-                />
-              )}
+          {isTabAllowedForRole('project-feedback', effectiveSecurityRole) && currentTab === 'project-feedback' && (
+            <ProjectFeedback
+              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
+            />
+          )}
 
-              {(currentTab === 'assign-hours' || currentTab === 'clash-lod') && (
-                <AssignHoursSystem
-                  onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-                />
-              )}
+          {isTabAllowedForRole('stakeholder-reports', effectiveSecurityRole) && currentTab === 'stakeholder-reports' && (
+            <StakeholderReportsArchive
+              onOpenReportModal={() => handleOpenReportModal()}
+            />
+          )}
 
-              {currentTab === 'project-feedback' && (
-                <ProjectFeedback
-                  onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-                />
-              )}
-
-              {currentTab === 'stakeholder-reports' && (
-                <StakeholderReportsArchive
-                  onOpenReportModal={() => handleOpenReportModal()}
-                />
-              )}
-
-              {currentTab === 'admin-nexus' && <AdminNexus />}
-            </>
+          {isTabAllowedForRole('admin-nexus', effectiveSecurityRole) && currentTab === 'admin-nexus' && (
+            <AdminNexus />
           )}
         </main>
 

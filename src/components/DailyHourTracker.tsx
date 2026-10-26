@@ -25,6 +25,7 @@ import {
   getCurrentWeekRange,
   getEffectiveLogDate,
   toLocalIsoDate,
+  isUserSuperAdmin,
 } from '../context/BimDataContext';
 import { DailyWorkLog, Discipline, ActivityType, LODLevel } from '../types';
 
@@ -39,6 +40,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     workLogs,
     employees,
     projects,
+    addWorkLog,
     updateWorkLog,
     deleteWorkLog,
     getEmployeeLoggedHours,
@@ -55,37 +57,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     );
   }, [currentUser]);
 
-  const isSuperAdmin = useMemo(() => {
-    if (!currentUser) return false;
-    if (
-      currentUser.securityRole === 'Super Admin' ||
-      currentUser.securityRole === 'Director' ||
-      currentUser.appRole === 'SUPER_ADMIN' ||
-      currentUser.appRole === 'DIRECTOR' ||
-      currentUser.accessLevel === 'Super Admin' ||
-      currentUser.accessLevel === 'Director' ||
-      currentUser.role === 'Super Admin' ||
-      currentUser.role === 'Director'
-    ) {
-      return true;
-    }
-    if (
-      currentUser.securityRole === 'Project Manager' ||
-      currentUser.securityRole === 'BIM Specialist' ||
-      currentUser.securityRole === 'Lead Coordinator' ||
-      currentUser.securityRole === 'Editor' ||
-      currentUser.securityRole === 'Viewer' ||
-      currentUser.appRole === 'PROJECT_MANAGER' ||
-      currentUser.appRole === 'EDITOR' ||
-      currentUser.appRole === 'VIEWER'
-    ) {
-      return false;
-    }
-    const cleanEmail = (currentUser.email || '').toLowerCase().trim();
-    if (cleanEmail === 'modelatech2026@gmail.com' || cleanEmail === 'sushoovandas@gmail.com') return true;
-    if (currentUser.isAdmin && (currentUser.role?.toLowerCase().includes('admin') || currentUser.role?.toLowerCase().includes('director'))) return true;
-    return false;
-  }, [currentUser]);
+  const isSuperAdmin = useMemo(() => isUserSuperAdmin(currentUser), [currentUser]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployeeFilter, setSelectedEmployeeFilter] = useState('all');
@@ -96,7 +68,10 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
   // Edit & Delete confirmation states
   const [logToDelete, setLogToDelete] = useState<DailyWorkLog | null>(null);
+  const [deleteCandidateLogs, setDeleteCandidateLogs] = useState<DailyWorkLog[]>([]);
   const [editingLog, setEditingLog] = useState<DailyWorkLog | null>(null);
+  const [editCandidateLogs, setEditCandidateLogs] = useState<DailyWorkLog[]>([]);
+  const [modifiedMatrixEmpIds, setModifiedMatrixEmpIds] = useState<string[]>([]);
 
   // Edit form fields
   const [editEmployeeId, setEditEmployeeId] = useState('');
@@ -111,8 +86,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const [editBillable, setEditBillable] = useState<boolean>(true);
   const [editIsTestEntry, setEditIsTestEntry] = useState<boolean>(false);
 
-  const openEditLogModal = (log: DailyWorkLog) => {
+  const openEditLogModal = (log: DailyWorkLog, candidates: DailyWorkLog[] = []) => {
     setEditingLog(log);
+    setEditCandidateLogs(candidates);
     setEditEmployeeId(log.employeeId || '');
     setEditProjectId(log.projectId || projects[0]?.id || '');
     setEditDate(log.date || toLocalIsoDate(new Date()));
@@ -120,10 +96,55 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     setEditLodStage(log.lodStage || 'LOD 350');
     setEditDiscipline(log.discipline || 'BIM - ACS');
     setEditActivityType(log.activityType || '3D Detailed Modeling');
-    setEditTaskName(log.taskName || '');
+    setEditTaskName(log.taskName || 'BIM Modeling & Coordination');
     setEditNotes(log.notes || '');
     setEditBillable(log.billable !== undefined ? Boolean(log.billable) : true);
     setEditIsTestEntry(Boolean(log.isTestEntry));
+  };
+
+  const openMatrixRowEditModal = (
+    emp: { id: string; name: string; email?: string; discipline?: Discipline },
+    empLogs: DailyWorkLog[],
+    preferredDate?: string
+  ) => {
+    const targetLog = preferredDate
+      ? empLogs.find((w) => getEffectiveLogDate(w, currentWeekRange) === preferredDate) ||
+        empLogs.find((w) => w.date === preferredDate)
+      : empLogs[0];
+
+    if (targetLog) {
+      openEditLogModal(targetLog, empLogs);
+      return;
+    }
+
+    const defaultProj = projects[0];
+    const draftDate = preferredDate || toLocalIsoDate(new Date());
+    const draftLog: DailyWorkLog = {
+      id: '__new_matrix_log__',
+      employeeId: emp.id,
+      employeeName: emp.name,
+      memberEmail: emp.email || '',
+      userEmail: emp.email || '',
+      projectId: defaultProj?.id || '',
+      projectName: defaultProj?.name || 'BIM Project',
+      date: draftDate,
+      hoursLogged: 8,
+      discipline: emp.discipline || 'BIM - ACS',
+      activityType: '3D Detailed Modeling',
+      taskName: defaultProj?.tasks?.[0]?.name || 'BIM Modeling & Coordination',
+      lodStage: defaultProj?.currentLOD || 'LOD 350',
+      notes: 'Updated via Weekly Timesheet Matrix',
+      billable: true,
+      timestamp: new Date().toISOString(),
+      isTestEntry: logTypeFilter === 'test',
+    };
+    openEditLogModal(draftLog, empLogs);
+  };
+
+  const openMatrixRowDeleteModal = (empLogs: DailyWorkLog[]) => {
+    if (empLogs.length === 0) return;
+    setDeleteCandidateLogs(empLogs);
+    setLogToDelete(empLogs[0]);
   };
 
   const handleSaveEditedLog = (e: React.FormEvent) => {
@@ -137,31 +158,70 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         emp.id.replace(/^emp-/, '') === editEmployeeId.replace(/^emp-/, '')
     );
 
-    updateWorkLog(editingLog.id, {
-      employeeId: matchedEmp?.id || editEmployeeId || editingLog.employeeId,
-      employeeName: matchedEmp?.name || editingLog.employeeName,
-      memberEmail: matchedEmp?.email || editingLog.memberEmail,
-      userEmail: matchedEmp?.email || editingLog.userEmail,
-      projectId: matchedProj?.id || editProjectId || editingLog.projectId,
-      projectName: matchedProj?.name || editingLog.projectName,
-      date: editDate,
-      hoursLogged: Number(editHours) || 0,
-      lodStage: editLodStage,
-      discipline: editDiscipline,
-      activityType: editActivityType,
-      taskName: editTaskName,
-      notes: editNotes,
-      billable: Boolean(editBillable),
-      isTestEntry: Boolean(editIsTestEntry),
-    });
+    const targetEmpId = matchedEmp?.id || editEmployeeId || editingLog.employeeId;
+    if (targetEmpId) {
+      setModifiedMatrixEmpIds((prev) =>
+        prev.includes(targetEmpId) ? prev : [...prev, targetEmpId]
+      );
+    }
+
+    if (editingLog.id === '__new_matrix_log__') {
+      addWorkLog({
+        employeeId: targetEmpId,
+        employeeName: matchedEmp?.name || editingLog.employeeName,
+        memberEmail: matchedEmp?.email || editingLog.memberEmail,
+        userEmail: matchedEmp?.email || editingLog.userEmail,
+        projectId: matchedProj?.id || editProjectId || editingLog.projectId,
+        projectName: matchedProj?.name || editingLog.projectName,
+        date: editDate,
+        hoursLogged: Number(editHours) || 0,
+        lodStage: editLodStage,
+        discipline: editDiscipline,
+        activityType: editActivityType,
+        taskName: editTaskName || 'BIM Modeling & Coordination',
+        notes: editNotes,
+        billable: Boolean(editBillable),
+        isTestEntry: Boolean(editIsTestEntry),
+      });
+    } else {
+      updateWorkLog(editingLog.id, {
+        employeeId: targetEmpId,
+        employeeName: matchedEmp?.name || editingLog.employeeName,
+        memberEmail: matchedEmp?.email || editingLog.memberEmail,
+        userEmail: matchedEmp?.email || editingLog.userEmail,
+        projectId: matchedProj?.id || editProjectId || editingLog.projectId,
+        projectName: matchedProj?.name || editingLog.projectName,
+        date: editDate,
+        hoursLogged: Number(editHours) || 0,
+        lodStage: editLodStage,
+        discipline: editDiscipline,
+        activityType: editActivityType,
+        taskName: editTaskName,
+        notes: editNotes,
+        billable: Boolean(editBillable),
+        isTestEntry: Boolean(editIsTestEntry),
+      });
+    }
 
     setEditingLog(null);
+    setEditCandidateLogs([]);
   };
 
   const handleConfirmDeleteLog = () => {
     if (!logToDelete) return;
+    if (logToDelete.employeeId) {
+      const empId = logToDelete.employeeId;
+      setModifiedMatrixEmpIds((prev) => (prev.includes(empId) ? prev : [...prev, empId]));
+    }
+    const matchedEmp = allTrackedEmployees.find((emp) => doesLogMatchEmployee(logToDelete, emp));
+    if (matchedEmp) {
+      setModifiedMatrixEmpIds((prev) =>
+        prev.includes(matchedEmp.id) ? prev : [...prev, matchedEmp.id]
+      );
+    }
     deleteWorkLog(logToDelete.id);
     setLogToDelete(null);
+    setDeleteCandidateLogs([]);
   };
 
   // Helper to match a work log to an employee record across all identifiers
@@ -405,13 +465,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     document.body.removeChild(link);
   };
 
-  const canModifyLog = (log: DailyWorkLog): boolean => {
-    if (isSuperAdmin && !isDirector) return true;
-    const myEmail = (currentUser?.email || '').toLowerCase().trim();
-    const logEmail = (log.memberEmail || (log as any).userEmail || '').toLowerCase().trim();
-    if (myEmail && logEmail && myEmail === logEmail) return true;
-    if (currentUser?.id && (log.employeeId === currentUser.id || (log as any).userId === currentUser.id)) return true;
-    return false;
+  const canModifyLog = (_log: DailyWorkLog): boolean => {
+    return isSuperAdmin;
   };
 
   return (
@@ -598,10 +653,27 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   ))}
                   <th className="p-3.5 text-right font-bold min-w-[100px]">Weekly Total</th>
                   <th className="p-3.5 text-center min-w-[100px]">Capacity</th>
+                  {isSuperAdmin && (
+                    <th className="p-3.5 text-right min-w-[90px]">Action</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {allTrackedEmployees.map((emp) => {
+                  const empAllLogs = workLogs.filter(
+                    (w) =>
+                      (logTypeFilter === 'test'
+                        ? Boolean(w.isTestEntry)
+                        : logTypeFilter === 'operational'
+                        ? !w.isTestEntry
+                        : true) && doesLogMatchEmployee(w, emp)
+                  );
+                  const empWeekLogs = empAllLogs.filter((w) => {
+                    const effDate = getEffectiveLogDate(w, currentWeekRange);
+                    return effDate >= currentWeekRange.startIso && effDate <= currentWeekRange.endIso;
+                  });
+                  const empActionLogs = empWeekLogs.length > 0 ? empWeekLogs : empAllLogs;
+
                   let weekSum = 0;
                   const dailyHours = weekDays.map((d) => {
                     const dayLogs = workLogs.filter(
@@ -612,13 +684,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     );
                     const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
                     weekSum += hours;
-                    return { date: d.date, hours };
+                    return { date: d.date, hours, dayLogs };
                   });
 
                   const effectiveWeeklyLoad =
                     logTypeFilter === 'test'
                       ? weekSum
-                      : Math.max(weekSum, getEmployeeLoggedHours(emp.id, 'this-week'));
+                      : weekSum > 0 || modifiedMatrixEmpIds.includes(emp.id)
+                      ? weekSum
+                      : getEmployeeLoggedHours(emp.id, 'this-week');
                   const capHours = emp.weeklyCapacityHours || 40;
                   const capPct = Math.round((effectiveWeeklyLoad / capHours) * 100);
                   const isOver = effectiveWeeklyLoad > capHours;
@@ -636,7 +710,19 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                         <td key={d.date} className="p-3.5 text-center">
                           {d.hours > 0 ? (
                             <span
+                              onClick={
+                                isSuperAdmin
+                                  ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
+                                  : undefined
+                              }
+                              title={
+                                isSuperAdmin
+                                  ? `Click to edit ${emp.name}'s hours for ${d.date}`
+                                  : undefined
+                              }
                               className={`inline-block px-2 py-0.5 rounded font-semibold text-xs ${
+                                isSuperAdmin ? 'cursor-pointer hover:ring-1 hover:ring-blue-400/60 transition' : ''
+                              } ${
                                 logTypeFilter === 'test'
                                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                   : d.hours >= 8
@@ -647,7 +733,23 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                               {d.hours.toFixed(1)}h
                             </span>
                           ) : (
-                            <span className="text-slate-600 font-mono">-</span>
+                            <span
+                              onClick={
+                                isSuperAdmin
+                                  ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
+                                  : undefined
+                              }
+                              title={
+                                isSuperAdmin
+                                  ? `Click to log/edit hours for ${emp.name} on ${d.date}`
+                                  : undefined
+                              }
+                              className={`text-slate-600 font-mono ${
+                                isSuperAdmin ? 'cursor-pointer hover:text-slate-400 transition' : ''
+                              }`}
+                            >
+                              -
+                            </span>
                           )}
                         </td>
                       ))}
@@ -669,6 +771,36 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           {capPct}% {isOver && '⚡'}
                         </span>
                       </td>
+
+                      {isSuperAdmin && (
+                        <td className="p-3.5 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openMatrixRowEditModal(emp, empActionLogs)}
+                              className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition"
+                              title="Edit logged hours for a specific day or project"
+                              aria-label={`Edit matrix hours for ${emp.name}`}
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openMatrixRowDeleteModal(empActionLogs)}
+                              disabled={empActionLogs.length === 0}
+                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={
+                                empActionLogs.length > 0
+                                  ? 'Delete this daily log entry?'
+                                  : 'No daily log entries recorded for this member'
+                              }
+                              aria-label={`Delete daily log entry for ${emp.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -783,13 +915,13 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     <th className="p-3.5">Activity Type</th>
                     <th className="p-3.5">Hours</th>
                     <th className="p-3.5">Notes</th>
-                    <th className="p-3.5 text-right">Action</th>
+                    {isSuperAdmin && <th className="p-3.5 text-right">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
                   {filteredLogs.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-12 text-center text-slate-500">
+                      <td colSpan={isSuperAdmin ? 8 : 7} className="py-12 text-center text-slate-500">
                         <p className="text-sm font-semibold text-slate-400">No daily hour logs recorded.</p>
                         <p className="text-xs text-slate-500 mt-1">Click "Log Daily Hours" above to record hours for projects.</p>
                       </td>
@@ -842,30 +974,35 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           <td className="p-3.5 text-slate-400 text-[11px] max-w-xs truncate" title={log.notes}>
                             {log.notes}
                           </td>
-                          <td className="p-3.5 text-right whitespace-nowrap">
-                            {allowModify && (
-                              <div className="inline-flex items-center justify-end gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => openEditLogModal(log)}
-                                  className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition"
-                                  title="Edit daily log entry"
-                                  aria-label={`Edit log entry for ${log.employeeName}`}
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setLogToDelete(log)}
-                                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
-                                  title="Delete daily log entry"
-                                  aria-label={`Delete log entry for ${log.employeeName}`}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            )}
-                          </td>
+                          {isSuperAdmin && (
+                            <td className="p-3.5 text-right whitespace-nowrap">
+                              {allowModify && (
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditLogModal(log)}
+                                    className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition"
+                                    title="Edit daily log entry"
+                                    aria-label={`Edit log entry for ${log.employeeName}`}
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeleteCandidateLogs([log]);
+                                      setLogToDelete(log);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
+                                    title="Delete daily log entry"
+                                    aria-label={`Delete log entry for ${log.employeeName}`}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       );
                     })
@@ -889,13 +1026,16 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <div>
                   <h3 className="text-base font-bold text-white">Edit Daily Work Log</h3>
                   <p className="text-xs text-slate-400">
-                    Modify hours, project assignment, or test entry status in Firestore
+                    Modify logged hours for a specific day or project in Firestore
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setEditingLog(null)}
+                onClick={() => {
+                  setEditingLog(null);
+                  setEditCandidateLogs([]);
+                }}
                 className="p-1 text-slate-400 hover:text-white rounded-lg transition"
               >
                 <X className="w-5 h-5" />
@@ -903,6 +1043,80 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
             </div>
 
             <form onSubmit={handleSaveEditedLog} className="p-6 space-y-4 text-xs">
+              {editCandidateLogs.length > 1 && (
+                <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/80">
+                  <label className="block text-slate-300 font-semibold mb-1.5">
+                    Select Daily Log Entry to Modify ({editCandidateLogs.length} entries)
+                  </label>
+                  <select
+                    value={editingLog.id}
+                    onChange={(e) => {
+                      const chosen = editCandidateLogs.find((c) => c.id === e.target.value);
+                      if (chosen) {
+                        openEditLogModal(chosen, editCandidateLogs);
+                      }
+                    }}
+                    className="w-full bg-slate-900 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  >
+                    {editCandidateLogs.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.date} — {c.hoursLogged} hrs — {c.projectName} ({c.taskName || c.discipline})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Quick Week Day Selector for Matrix Modification */}
+              <div className="p-3 rounded-xl bg-slate-800/40 border border-slate-800">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                    Current Week Day Selector ({currentWeekRange.label})
+                  </span>
+                  <span className="text-[11px] text-blue-400 font-mono">{editDate}</span>
+                </div>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {weekDays.map((wd) => {
+                    const matchingLogForDay = editCandidateLogs.find(
+                      (l) => getEffectiveLogDate(l, currentWeekRange) === wd.date || l.date === wd.date
+                    );
+                    const isSelectedDay = editDate === wd.date;
+                    return (
+                      <button
+                        key={wd.date}
+                        type="button"
+                        onClick={() => {
+                          if (matchingLogForDay) {
+                            openEditLogModal(matchingLogForDay, editCandidateLogs);
+                          } else {
+                            setEditDate(wd.date);
+                            if (editingLog.id !== '__new_matrix_log__' && editCandidateLogs.length > 0) {
+                              setEditingLog({
+                                ...editingLog,
+                                id: '__new_matrix_log__',
+                                date: wd.date,
+                              });
+                            }
+                          }
+                        }}
+                        className={`py-1.5 px-1 rounded-lg border text-center transition ${
+                          isSelectedDay
+                            ? 'bg-blue-600/30 border-blue-500 text-white font-bold'
+                            : matchingLogForDay
+                            ? 'bg-slate-800 border-slate-700 text-blue-300 hover:border-slate-600'
+                            : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="text-[10px] truncate">{wd.label.replace(' (Today)', '')}</div>
+                        <div className="text-[10px] font-mono mt-0.5">
+                          {matchingLogForDay ? `${matchingLogForDay.hoursLogged}h` : wd.dayNum}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-slate-400 font-medium mb-1">Team Member</label>
@@ -956,7 +1170,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   <input
                     type="number"
                     step="0.5"
-                    min="0.5"
+                    min="0"
                     max="24"
                     value={editHours}
                     onChange={(e) => setEditHours(Number(e.target.value))}
@@ -1084,7 +1298,10 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setEditingLog(null)}
+                  onClick={() => {
+                    setEditingLog(null);
+                    setEditCandidateLogs([]);
+                  }}
                   className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                 >
                   Cancel
@@ -1112,7 +1329,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   <Trash2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white">Delete Daily Work Log</h3>
+                  <h3 className="text-sm font-bold text-white">Delete this daily log entry?</h3>
                   <p className="text-xs text-slate-400 mt-0.5">
                     This permanently deletes the timesheet record from Firestore.
                   </p>
@@ -1120,12 +1337,37 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setLogToDelete(null)}
+                onClick={() => {
+                  setLogToDelete(null);
+                  setDeleteCandidateLogs([]);
+                }}
                 className="p-1 text-slate-400 hover:text-white rounded-lg transition"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {deleteCandidateLogs.length > 1 && (
+              <div className="text-xs">
+                <label className="block text-slate-400 font-medium mb-1">
+                  Select Daily Log Entry ({deleteCandidateLogs.length} entries)
+                </label>
+                <select
+                  value={logToDelete.id}
+                  onChange={(e) => {
+                    const found = deleteCandidateLogs.find((c) => c.id === e.target.value);
+                    if (found) setLogToDelete(found);
+                  }}
+                  className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-rose-500 cursor-pointer"
+                >
+                  {deleteCandidateLogs.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.date} • {c.hoursLogged} hrs • {c.projectName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700/70 text-xs space-y-1.5">
               <div className="flex items-center justify-between">
@@ -1152,13 +1394,16 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
             </div>
 
             <p className="text-xs text-slate-300">
-              Are you sure you want to permanently delete this daily log entry?
+              Delete this daily log entry? This action cannot be undone.
             </p>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800 text-xs">
               <button
                 type="button"
-                onClick={() => setLogToDelete(null)}
+                onClick={() => {
+                  setLogToDelete(null);
+                  setDeleteCandidateLogs([]);
+                }}
                 className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
               >
                 Cancel

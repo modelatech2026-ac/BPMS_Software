@@ -140,51 +140,53 @@ export const ProjectList: React.FC<ProjectListProps> = ({
             Tracking {projects.length} organizational BIM projects • {totalLoggedHours.toFixed(1)}h Total Logged / {totalEstimatedHours.toFixed(1)}h Estimated
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Super Admin Status Badge & Switcher */}
-          <button
-            onClick={() => {
-              if (hasSuperAdminOrDirectorRole) {
-                setAdminEditUnlocked(!adminEditUnlocked);
+        {hasSuperAdminOrDirectorRole && (
+          <div className="flex items-center gap-2">
+            {/* Super Admin Status Badge & Switcher */}
+            <button
+              onClick={() => {
+                if (hasSuperAdminOrDirectorRole) {
+                  setAdminEditUnlocked(!adminEditUnlocked);
+                }
+              }}
+              disabled={!hasSuperAdminOrDirectorRole}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition ${
+                isSuperAdmin
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20 cursor-pointer'
+                  : 'bg-slate-800 border-slate-700 text-slate-400 cursor-default'
+              }`}
+              title={
+                hasSuperAdminOrDirectorRole
+                  ? 'Super Admin / Director inline editing active (click to toggle lock)'
+                  : 'Read-only mode: Super Admin or Director role required to edit hours inline'
               }
-            }}
-            disabled={!hasSuperAdminOrDirectorRole}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition ${
-              isSuperAdmin
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20 cursor-pointer'
-                : 'bg-slate-800 border-slate-700 text-slate-400 cursor-default'
-            }`}
-            title={
-              hasSuperAdminOrDirectorRole
-                ? 'Super Admin / Director inline editing active (click to toggle lock)'
-                : 'Read-only mode: Super Admin or Director role required to edit hours inline'
-            }
-          >
-            {isSuperAdmin ? (
-              <>
-                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                <span>
-                  {currentUser?.appRole === 'DIRECTOR' || currentUser?.accessLevel === 'Director' || currentUser?.securityRole === 'Director'
-                    ? 'Director: Active'
-                    : 'Super Admin: Active'}
-                </span>
-              </>
-            ) : (
-              <>
-                <Lock className="w-3.5 h-3.5 text-slate-400" />
-                <span>Super Admin: Locked</span>
-              </>
-            )}
-          </button>
+            >
+              {isSuperAdmin ? (
+                <>
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                  <span>
+                    {currentUser?.appRole === 'DIRECTOR' || currentUser?.accessLevel === 'Director' || currentUser?.securityRole === 'Director'
+                      ? 'Director: Active'
+                      : 'Super Admin: Active'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Super Admin: Locked</span>
+                </>
+              )}
+            </button>
 
-          <button
-            onClick={onOpenNewProjectModal}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create New BIM Project</span>
-          </button>
-        </div>
+            <button
+              onClick={onOpenNewProjectModal}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create New BIM Project</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Filter toolbar */}
@@ -269,7 +271,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               <thead className="bg-slate-800/90 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-700 text-[11px]">
                 <tr>
                   <th className="py-3 px-4 min-w-[220px]">Project Name</th>
-                  <th className="py-3 px-3 min-w-[140px]">Status (Manual Change)</th>
+                  <th className="py-3 px-3 min-w-[140px]">
+                    {isSuperAdmin ? 'Status (Manual Change)' : 'Status'}
+                  </th>
                   <th className="py-3 px-3 min-w-[130px]">Total Hours Logged</th>
                   <th className="py-3 px-3 min-w-[120px]">Estimated Hours</th>
                   <th className="py-3 px-3 min-w-[130px]">Planned Delivery Date</th>
@@ -326,27 +330,42 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                           </div>
                         </td>
 
-                        {/* Status with Manual Select Dropdown */}
-                        <td className="py-2.5 px-3" onClick={(e) => e.stopPropagation()}>
-                          <div className="relative inline-block">
-                            <select
-                              value={project.status}
-                              onChange={(e) => {
-                                updateProjectStatus(project.id, e.target.value as ProjectStatus);
-                              }}
-                              className={`appearance-none font-semibold text-[11px] px-2.5 py-1 pr-6 rounded-md border cursor-pointer focus:outline-none transition shadow-xs ${getProjectStatusStyle(
+                        {/* Status with Manual Select Dropdown (Super Admin / Director only) */}
+                        <td
+                          className="py-2.5 px-3"
+                          onClick={(e) => {
+                            if (isSuperAdmin) e.stopPropagation();
+                          }}
+                        >
+                          {isSuperAdmin ? (
+                            <div className="relative inline-block">
+                              <select
+                                value={project.status}
+                                onChange={(e) => {
+                                  updateProjectStatus(project.id, e.target.value as ProjectStatus);
+                                }}
+                                className={`appearance-none font-semibold text-[11px] px-2.5 py-1 pr-6 rounded-md border cursor-pointer focus:outline-none transition shadow-xs ${getProjectStatusStyle(
+                                  project.status
+                                )}`}
+                              >
+                                <option value="WIP" className="bg-slate-900 text-cyan-300">WIP</option>
+                                <option value="On Track" className="bg-slate-900 text-emerald-300">On Track</option>
+                                <option value="At Risk" className="bg-slate-900 text-amber-300">At Risk</option>
+                                <option value="HOLD" className="bg-slate-900 text-orange-300">HOLD</option>
+                                <option value="CLOSED" className="bg-slate-900 text-slate-300">CLOSED</option>
+                                <option value="Completed" className="bg-slate-900 text-emerald-300">Completed</option>
+                              </select>
+                              <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          ) : (
+                            <span
+                              className={`inline-block font-semibold text-[11px] px-2.5 py-1 rounded-md border shadow-xs ${getProjectStatusStyle(
                                 project.status
                               )}`}
                             >
-                              <option value="WIP" className="bg-slate-900 text-cyan-300">WIP</option>
-                              <option value="On Track" className="bg-slate-900 text-emerald-300">On Track</option>
-                              <option value="At Risk" className="bg-slate-900 text-amber-300">At Risk</option>
-                              <option value="HOLD" className="bg-slate-900 text-orange-300">HOLD</option>
-                              <option value="CLOSED" className="bg-slate-900 text-slate-300">CLOSED</option>
-                              <option value="Completed" className="bg-slate-900 text-emerald-300">Completed</option>
-                            </select>
-                            <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                          </div>
+                              {project.status}
+                            </span>
+                          )}
                         </td>
 
                         {/* Total Hours Logged */}

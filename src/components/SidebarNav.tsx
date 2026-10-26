@@ -17,7 +17,13 @@ import {
   SlidersHorizontal,
   Star,
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import {
+  useBimData,
+  resolveSecurityRole,
+  getQuickActionPermissions,
+  isTabAllowedForRole,
+} from '../context/BimDataContext';
+import { useOptionalAuth } from '../auth/AuthContext';
 import { ViewTab } from '../types';
 
 interface SidebarNavProps {
@@ -56,20 +62,20 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
     (r.status || '').toLowerCase().includes('pending')
   ).length;
 
-  const isSuperAdmin =
-    currentUser?.isAdmin ||
-    currentUser?.appRole === 'SUPER_ADMIN' ||
-    currentUser?.appRole === 'DIRECTOR' ||
-    currentUser?.accessLevel === 'Super Admin' ||
-    currentUser?.accessLevel === 'Director' ||
-    (currentUser?.email && (
-      currentUser.email.toLowerCase() === 'modelatech2026@gmail.com' ||
-      currentUser.email.toLowerCase() === 'sushoovandas@gmail.com'
-    ));
-
-  const isViewer =
-    currentUser?.appRole === 'VIEWER' ||
-    (currentUser?.accessLevel === 'Viewer' && !isSuperAdmin);
+  const auth = useOptionalAuth();
+  const isAuthenticated = auth ? auth.isAuthenticated : Boolean(currentUser);
+  const effectiveSecurityRole = resolveSecurityRole(
+    currentUser,
+    isAuthenticated,
+    auth?.securityRole
+  );
+  const isViewer = effectiveSecurityRole === 'Viewer';
+  const {
+    canAddProject,
+    canAddMember,
+    canLogHours,
+    canViewAIReport,
+  } = getQuickActionPermissions(effectiveSecurityRole);
 
   const allNavItems: {
     id: ViewTab;
@@ -93,12 +99,9 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
     { id: 'admin-nexus', label: 'Admin Nexus', icon: ShieldCheck },
   ];
 
-  // Viewer role is strictly restricted to Daily Hour Tracking ("Daily Hours Tracking & Organizational Timesheets")
-  const navItems = isViewer
-    ? allNavItems.filter((item) => item.id === 'daily-tracker')
-    : isSuperAdmin
-    ? allNavItems
-    : allNavItems.filter((item) => item.id !== 'admin-nexus');
+  const navItems = allNavItems.filter((item) =>
+    isTabAllowedForRole(item.id, effectiveSecurityRole)
+  );
 
   const handleTabClick = (tabId: ViewTab) => {
     setCurrentTab(tabId);
@@ -186,10 +189,10 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
           Quick Actions
         </div>
 
-        {!isViewer ? (
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              {/* Add Project Button */}
+        {(canAddProject || canAddMember) && (
+          <div className="grid grid-cols-2 gap-2">
+            {/* Add Project Button */}
+            {canAddProject && (
               <button
                 onClick={() => {
                   onOpenNewProjectModal();
@@ -205,8 +208,10 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
                 <Plus className="w-3.5 h-3.5 text-blue-500" />
                 <span>Add Project</span>
               </button>
+            )}
 
-              {/* Add Member Button */}
+            {/* Add Member Button */}
+            {canAddMember && (
               <button
                 onClick={() => {
                   onOpenNewEmployeeModal();
@@ -222,49 +227,41 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
                 <UserPlus className="w-3.5 h-3.5 text-blue-500" />
                 <span>Add Member</span>
               </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              {/* Log Daily Hours */}
-              <button
-                onClick={() => {
-                  onOpenLogModal();
-                  setIsMobileOpen(false);
-                }}
-                className="flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
-                title="Log Daily Hours"
-              >
-                <Clock className="w-3.5 h-3.5" />
-                <span>Log Hours</span>
-              </button>
-
-              {/* AI Stakeholder Report */}
-              <button
-                onClick={() => {
-                  onOpenReportModal();
-                  setIsMobileOpen(false);
-                }}
-                className="flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white transition shadow-sm"
-                title="Generate AI Stakeholder Report"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                <span>AI Report</span>
-              </button>
-            </div>
-          </>
-        ) : (
-          <button
-            onClick={() => {
-              onOpenLogModal();
-              setIsMobileOpen(false);
-            }}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-xl bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
-            title="Log Daily Hours"
-          >
-            <Clock className="w-4 h-4" />
-            <span>Log Daily Hours</span>
-          </button>
+            )}
+          </div>
         )}
+
+        <div className={`grid grid-cols-2 gap-2 ${(canAddProject || canAddMember) ? 'pt-1' : ''}`}>
+          {/* Log Daily Hours */}
+          {canLogHours && (
+            <button
+              onClick={() => {
+                onOpenLogModal();
+                setIsMobileOpen(false);
+              }}
+              className="flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
+              title="Log Daily Hours"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Log Hours</span>
+            </button>
+          )}
+
+          {/* AI Stakeholder Report */}
+          {canViewAIReport && (
+            <button
+              onClick={() => {
+                onOpenReportModal();
+                setIsMobileOpen(false);
+              }}
+              className="flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white transition shadow-sm"
+              title="Generate AI Stakeholder Report"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+              <span>AI Report</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Main Navigation Ribbon (Vertical Left-Hand Side) */}
@@ -362,7 +359,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {!isViewer && (
+          {canAddMember && (
             <button
               onClick={onOpenNewEmployeeModal}
               className="px-2.5 py-1.5 rounded-lg bg-blue-600/20 text-blue-500 border border-blue-500/30 text-xs font-semibold"
@@ -370,12 +367,14 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
               + Member
             </button>
           )}
-          <button
-            onClick={onOpenLogModal}
-            className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold"
-          >
-            Log
-          </button>
+          {canLogHours && (
+            <button
+              onClick={onOpenLogModal}
+              className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold"
+            >
+              Log
+            </button>
+          )}
         </div>
       </header>
 

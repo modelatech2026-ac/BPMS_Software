@@ -18,6 +18,7 @@ import {
   AccessLevel,
   AdminAuditLog,
   UserRole,
+  SecurityRole,
   ResourceAllocationItem,
 } from '../types';
 import {
@@ -331,6 +332,21 @@ export const getEffectiveLogDate = (
 
 export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
   if (!u) return false;
+  // If user has an explicitly assigned non-admin role (e.g., switched role to Viewer/Editor/PM or standard user), respect it first
+  if (
+    u.securityRole === 'Project Manager' ||
+    u.securityRole === 'BIM Specialist' ||
+    u.securityRole === 'Lead Coordinator' ||
+    u.securityRole === 'Editor' ||
+    u.securityRole === 'Viewer' ||
+    u.appRole === 'PROJECT_MANAGER' ||
+    u.appRole === 'EDITOR' ||
+    u.appRole === 'VIEWER' ||
+    u.accessLevel === 'Viewer' ||
+    u.role === 'Viewer'
+  ) {
+    return false;
+  }
   if (
     u.securityRole === 'Super Admin' ||
     u.securityRole === 'Director' ||
@@ -343,24 +359,126 @@ export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
   ) {
     return true;
   }
-  // If user has an explicitly assigned non-admin role (e.g., switched role or standard user), respect it
-  if (
-    u.securityRole === 'Project Manager' ||
-    u.securityRole === 'BIM Specialist' ||
-    u.securityRole === 'Lead Coordinator' ||
-    u.securityRole === 'Editor' ||
-    u.securityRole === 'Viewer' ||
-    u.appRole === 'PROJECT_MANAGER' ||
-    u.appRole === 'EDITOR' ||
-    u.appRole === 'VIEWER'
-  ) {
-    return false;
-  }
   const email = (u.email || '').trim().toLowerCase();
   if (isSuperAdminEmail(email)) return true;
   if (u.appRole && (normalizeUserRole(u.appRole) === 'SUPER_ADMIN' || normalizeUserRole(u.appRole) === 'DIRECTOR')) return true;
   if (u.isAdmin && (u.role?.toLowerCase().includes('admin') || u.role?.toLowerCase().includes('director'))) return true;
   return false;
+};
+
+export const isUserViewer = (
+  u: AuthUser | null | undefined,
+  isAuthenticated: boolean = true,
+  securityRole?: string
+): boolean => {
+  if (!isAuthenticated || !u) return true;
+  if (
+    securityRole === 'Viewer' ||
+    u.securityRole === 'Viewer' ||
+    u.appRole === 'VIEWER' ||
+    u.accessLevel === 'Viewer' ||
+    u.role === 'Viewer'
+  ) {
+    return true;
+  }
+  return false;
+};
+
+export const resolveSecurityRole = (
+  u: AuthUser | null | undefined,
+  isAuthenticated: boolean = true,
+  explicitSecurityRole?: SecurityRole | string
+): SecurityRole => {
+  if (!isAuthenticated && !u && !explicitSecurityRole) return 'Viewer';
+
+  const candidate = (explicitSecurityRole || u?.securityRole || '').trim();
+  if (
+    candidate === 'Super Admin' ||
+    candidate === 'Director' ||
+    candidate === 'Project Manager' ||
+    candidate === 'BIM Specialist' ||
+    candidate === 'Lead Coordinator' ||
+    candidate === 'Editor' ||
+    candidate === 'Viewer'
+  ) {
+    return candidate;
+  }
+
+  if (candidate.startsWith('Super Admin')) return 'Super Admin';
+  if (candidate.startsWith('Director')) return 'Director';
+  if (candidate.startsWith('Viewer')) return 'Viewer';
+
+  if (!u) return 'Viewer';
+  if (u.appRole === 'SUPER_ADMIN' || u.accessLevel === 'Super Admin' || isSuperAdminEmail(u.email)) {
+    return 'Super Admin';
+  }
+  if (u.appRole === 'DIRECTOR' || u.accessLevel === 'Director') {
+    return 'Director';
+  }
+  if (u.appRole === 'PROJECT_MANAGER' || u.accessLevel === 'Project Manager') {
+    return 'Project Manager';
+  }
+  if (u.appRole === 'VIEWER' || u.accessLevel === 'Viewer') {
+    return 'Viewer';
+  }
+  if (u.role?.toLowerCase().includes('lead coordinator')) {
+    return 'Lead Coordinator';
+  }
+  if (u.role?.toLowerCase().includes('specialist')) {
+    return 'BIM Specialist';
+  }
+  if (u.appRole === 'EDITOR' || u.accessLevel === 'Editor') {
+    return 'Editor';
+  }
+  return 'Viewer';
+};
+
+export const getQuickActionPermissions = (role: SecurityRole) => {
+  return {
+    canAddProject:
+      role === 'Super Admin' || role === 'Director' || role === 'Project Manager',
+    canAddMember: role === 'Super Admin' || role === 'Director',
+    canLogHours: true,
+    canViewAIReport: role !== 'Viewer',
+  };
+};
+
+export const isTabAllowedForRole = (tab: ViewTab, role: SecurityRole): boolean => {
+  switch (tab) {
+    case 'admin-nexus':
+      return role === 'Super Admin';
+    case 'dashboard':
+    case 'stakeholder-reports':
+    case 'assign-hours':
+    case 'clash-lod':
+      return (
+        role === 'Super Admin' ||
+        role === 'Director' ||
+        role === 'Project Manager'
+      );
+    case 'project-members':
+    case 'employees':
+      return (
+        role === 'Super Admin' ||
+        role === 'Director' ||
+        role === 'Project Manager' ||
+        role === 'BIM Specialist' ||
+        role === 'Lead Coordinator'
+      );
+    case 'projects':
+    case 'project-feedback':
+      return role !== 'Viewer';
+    case 'daily-tracker':
+      return true;
+    default:
+      return false;
+  }
+};
+
+export const getDefaultTabForRole = (role: SecurityRole): ViewTab => {
+  if (isTabAllowedForRole('dashboard', role)) return 'dashboard';
+  if (isTabAllowedForRole('projects', role)) return 'projects';
+  return 'daily-tracker';
 };
 
 export const isRecordOwnedByMember = (
@@ -2558,10 +2676,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const updateWorkLog = (id: string, updates: Partial<DailyWorkLog>) => {
+    let previousLog: DailyWorkLog | undefined;
     let fullUpdated: DailyWorkLog | undefined;
     setAllWorkLogs((prev) =>
       prev.map((w) => {
         if (w.id === id) {
+          previousLog = w;
           fullUpdated = { ...w, ...updates };
           return fullUpdated;
         }
@@ -2577,16 +2697,110 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch (e) {
       console.warn('Firestore updateWorkLog notice:', e);
     }
+
+    if (previousLog && fullUpdated) {
+      const prevOperationalHours = previousLog.isTestEntry ? 0 : Number(previousLog.hoursLogged) || 0;
+      const nextOperationalHours = fullUpdated.isTestEntry ? 0 : Number(fullUpdated.hoursLogged) || 0;
+      const hoursDelta = nextOperationalHours - prevOperationalHours;
+      const targetProjId = fullUpdated.projectId || previousLog.projectId;
+
+      if (hoursDelta !== 0 && targetProjId) {
+        setProjects((prev) =>
+          prev.map((proj) => {
+            if (proj.id !== targetProjId) return proj;
+            const updatedTasks = (proj.tasks || []).map((task) => {
+              if (task.name === (fullUpdated?.taskName || previousLog?.taskName)) {
+                const newCompleted = Math.max(0, (task.completedHours || 0) + hoursDelta);
+                return {
+                  ...task,
+                  completedHours: newCompleted,
+                  status:
+                    newCompleted >= task.estimatedHours
+                      ? ('Completed' as const)
+                      : ('In Progress' as const),
+                };
+              }
+              return task;
+            });
+            const updatedTotalCompleted =
+              proj.totalCompletedHours && proj.totalCompletedHours > 0
+                ? Math.max(0, proj.totalCompletedHours + hoursDelta)
+                : proj.totalCompletedHours;
+            const updatedProj = {
+              ...proj,
+              totalCompletedHours: updatedTotalCompleted,
+              tasks: updatedTasks,
+            };
+            try {
+              updateDoc(doc(db, 'projects', proj.id), {
+                tasks: updatedTasks,
+                ...(updatedTotalCompleted !== undefined
+                  ? { totalCompletedHours: updatedTotalCompleted, totalHoursLogged: updatedTotalCompleted }
+                  : {}),
+              }).catch(() => {});
+            } catch {}
+            return updatedProj;
+          })
+        );
+      }
+    }
   };
 
   const deleteWorkLog = (id: string) => {
-    setAllWorkLogs((prev) => prev.filter((w) => w.id !== id));
+    let deletedLog: DailyWorkLog | undefined;
+    setAllWorkLogs((prev) => {
+      deletedLog = prev.find((w) => w.id === id);
+      return prev.filter((w) => w.id !== id);
+    });
     try {
       deleteDoc(doc(db, 'work_logs', id)).catch((err) =>
         console.warn('Firestore deleteWorkLog sync notice:', err)
       );
     } catch (e) {
       console.warn('Firestore deleteWorkLog notice:', e);
+    }
+
+    if (deletedLog && !deletedLog.isTestEntry && deletedLog.projectId) {
+      const removedHours = Number(deletedLog.hoursLogged) || 0;
+      if (removedHours > 0) {
+        setProjects((prev) =>
+          prev.map((proj) => {
+            if (proj.id !== deletedLog?.projectId) return proj;
+            const updatedTasks = (proj.tasks || []).map((task) => {
+              if (task.name === deletedLog?.taskName) {
+                const newCompleted = Math.max(0, (task.completedHours || 0) - removedHours);
+                return {
+                  ...task,
+                  completedHours: newCompleted,
+                  status:
+                    newCompleted >= task.estimatedHours
+                      ? ('Completed' as const)
+                      : ('In Progress' as const),
+                };
+              }
+              return task;
+            });
+            const updatedTotalCompleted =
+              proj.totalCompletedHours && proj.totalCompletedHours > 0
+                ? Math.max(0, proj.totalCompletedHours - removedHours)
+                : proj.totalCompletedHours;
+            const updatedProj = {
+              ...proj,
+              totalCompletedHours: updatedTotalCompleted,
+              tasks: updatedTasks,
+            };
+            try {
+              updateDoc(doc(db, 'projects', proj.id), {
+                tasks: updatedTasks,
+                ...(updatedTotalCompleted !== undefined
+                  ? { totalCompletedHours: updatedTotalCompleted, totalHoursLogged: updatedTotalCompleted }
+                  : {}),
+              }).catch(() => {});
+            } catch {}
+            return updatedProj;
+          })
+        );
+      }
     }
   };
 

@@ -347,6 +347,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               new Date(parsedSession.expiresAt).getTime() > Date.now()
             ) {
               if (isSuperAdminEmail(parsed.email)) {
+                const roleOverride =
+                  typeof window !== 'undefined'
+                    ? (sessionStorage.getItem('bpms_active_security_role_override') as SecurityRole | null)
+                    : null;
+                if (roleOverride && parsed.securityRole === roleOverride) {
+                  return parsed;
+                }
                 return {
                   ...parsed,
                   status: 'APPROVED',
@@ -471,6 +478,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // 2a. Direct database query
     const verifyDatabaseRole = async () => {
       try {
+        if (
+          typeof window !== 'undefined' &&
+          sessionStorage.getItem('bpms_active_security_role_override')
+        ) {
+          return;
+        }
         const dbRecord = await fetchUserRoleFromDatabase(user.email, user.googleId || user.id);
         if (isCancelled || !dbRecord) return;
 
@@ -516,6 +529,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const reqQuery = query(collection(db, 'access_requests'), where('email', '==', cleanUserEmail));
       unsubSnapshot = onSnapshot(reqQuery, (snap) => {
         if (snap.empty || isCancelled) return;
+        if (
+          typeof window !== 'undefined' &&
+          sessionStorage.getItem('bpms_active_security_role_override')
+        ) {
+          return;
+        }
         const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
         docs.sort((a, b) => {
           const aStatus = String(a.status || '').toLowerCase();
@@ -1326,6 +1345,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('bim_tracker_current_user_v5');
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('bpms_redirect_target');
+      sessionStorage.removeItem('bpms_active_security_role_override');
       window.history.pushState(null, '', '/');
       window.dispatchEvent(new Event('popstate'));
     }
@@ -1336,6 +1356,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    */
   const switchSecurityRole = (newRole: SecurityRole) => {
     if (!user) return;
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('bpms_active_security_role_override', newRole);
+    }
     const newPerms = DEFAULT_PERMISSIONS_BY_ROLE[newRole] || DEFAULT_PERMISSIONS_BY_ROLE['Viewer'];
     const mappedAppRole: UserRole =
       newRole === 'Super Admin'

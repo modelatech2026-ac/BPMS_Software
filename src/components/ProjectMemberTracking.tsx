@@ -28,7 +28,7 @@ import {
   Check,
   ArrowUpRight
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
 import { Employee, BimProject, Discipline, DailyWorkLog } from '../types';
 import { EditEmployeeModal } from './EditEmployeeModal';
 
@@ -55,8 +55,10 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
     getProjectCompletedHours,
     updateEmployee,
     theme,
+    currentUser,
   } = useBimData();
   const isLight = theme === 'light';
+  const isSuperAdmin = isUserSuperAdmin(currentUser);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
@@ -202,23 +204,27 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
 
         {/* Action buttons */}
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={onOpenNewEmployeeModal}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
-            title="Register New BIM Team Member"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Add Member</span>
-          </button>
+          {isSuperAdmin && (
+            <>
+              <button
+                onClick={onOpenNewEmployeeModal}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
+                title="Register New BIM Team Member"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Add Member</span>
+              </button>
 
-          <button
-            onClick={onOpenNewProjectModal}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
-            title="Create New BIM Project"
-          >
-            <Plus className="w-4 h-4 text-slate-400" />
-            <span>Add Project</span>
-          </button>
+              <button
+                onClick={onOpenNewProjectModal}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                title="Create New BIM Project"
+              >
+                <Plus className="w-4 h-4 text-slate-400" />
+                <span>Add Project</span>
+              </button>
+            </>
+          )}
 
           <button
             onClick={exportMemberMatrixCSV}
@@ -488,14 +494,16 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => setEditingEmployee(emp)}
-                          className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-400 border border-slate-700 hover:border-blue-500/50 text-[10px] font-semibold flex items-center gap-1 transition"
-                          title="Edit member details"
-                        >
-                          <Edit className="w-3 h-3" />
-                          <span>Edit</span>
-                        </button>
+                        {isSuperAdmin && (
+                          <button
+                            onClick={() => setEditingEmployee(emp)}
+                            className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-400 border border-slate-700 hover:border-blue-500/50 text-[10px] font-semibold flex items-center gap-1 transition"
+                            title="Edit member details"
+                          >
+                            <Edit className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                        )}
                         <span
                           className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                             emp.status === 'Active'
@@ -552,12 +560,14 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                     <div className="mt-3.5 space-y-1.5">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-400 font-semibold">Assigned Projects ({assignedProjects.length})</span>
-                        <button
-                          onClick={() => setAssignModalEmployee(emp)}
-                          className="text-[11px] text-blue-400 hover:text-blue-300 font-medium"
-                        >
-                          Edit Assignments
-                        </button>
+                        {isSuperAdmin && (
+                          <button
+                            onClick={() => setAssignModalEmployee(emp)}
+                            className="text-[11px] text-blue-400 hover:text-blue-300 font-medium"
+                          >
+                            Edit Assignments
+                          </button>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap gap-1.5">
@@ -815,17 +825,21 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                         </td>
 
                         <td className="py-3 px-3 text-right">
-                          <button
-                            onClick={() => {
-                              setEvaluatingEmployee(emp);
-                              setEvaluationNotes(savedReview?.notes || '');
-                              setEvaluationRating(savedReview?.rating || (isStar ? 'Star Performer' : 'High'));
-                            }}
-                            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white transition text-[11px] font-medium inline-flex items-center gap-1"
-                          >
-                            <Gauge className="w-3 h-3 text-amber-400" />
-                            <span>Evaluate</span>
-                          </button>
+                          {isSuperAdmin ? (
+                            <button
+                              onClick={() => {
+                                setEvaluatingEmployee(emp);
+                                setEvaluationNotes(savedReview?.notes || '');
+                                setEvaluationRating(savedReview?.rating || (isStar ? 'Star Performer' : 'High'));
+                              }}
+                              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white transition text-[11px] font-medium inline-flex items-center gap-1"
+                            >
+                              <Gauge className="w-3 h-3 text-amber-400" />
+                              <span>Evaluate</span>
+                            </button>
+                          ) : (
+                            <span className="text-[11px] text-slate-500 font-mono">Read-Only</span>
+                          )}
                         </td>
                       </tr>
                     );
