@@ -15,7 +15,10 @@ import {
   ChevronLeft,
   ChevronRight,
   TrendingUp,
-  FileSpreadsheet
+  FileSpreadsheet,
+  X,
+  Check,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   useBimData,
@@ -23,7 +26,7 @@ import {
   getEffectiveLogDate,
   toLocalIsoDate,
 } from '../context/BimDataContext';
-import { DailyWorkLog, Discipline, ActivityType } from '../types';
+import { DailyWorkLog, Discipline, ActivityType, LODLevel } from '../types';
 
 interface DailyHourTrackerProps {
   onOpenLogModal: () => void;
@@ -36,6 +39,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     workLogs,
     employees,
     projects,
+    updateWorkLog,
     deleteWorkLog,
     getEmployeeLoggedHours,
     currentUser,
@@ -87,8 +91,78 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const [selectedEmployeeFilter, setSelectedEmployeeFilter] = useState('all');
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('all');
   const [selectedDisciplineFilter, setSelectedDisciplineFilter] = useState('all');
-  const [selectedDate, setSelectedDate] = useState(() => toLocalIsoDate(new Date()));
+  const [logTypeFilter, setLogTypeFilter] = useState<'all' | 'operational' | 'test'>('all');
   const [activeView, setActiveView] = useState<'matrix' | 'logs'>('matrix');
+
+  // Edit & Delete confirmation states
+  const [logToDelete, setLogToDelete] = useState<DailyWorkLog | null>(null);
+  const [editingLog, setEditingLog] = useState<DailyWorkLog | null>(null);
+
+  // Edit form fields
+  const [editEmployeeId, setEditEmployeeId] = useState('');
+  const [editProjectId, setEditProjectId] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editHours, setEditHours] = useState<number>(4);
+  const [editLodStage, setEditLodStage] = useState<LODLevel>('LOD 350');
+  const [editDiscipline, setEditDiscipline] = useState<Discipline>('BIM - ACS');
+  const [editActivityType, setEditActivityType] = useState<ActivityType>('3D Detailed Modeling');
+  const [editTaskName, setEditTaskName] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editBillable, setEditBillable] = useState<boolean>(true);
+  const [editIsTestEntry, setEditIsTestEntry] = useState<boolean>(false);
+
+  const openEditLogModal = (log: DailyWorkLog) => {
+    setEditingLog(log);
+    setEditEmployeeId(log.employeeId || '');
+    setEditProjectId(log.projectId || projects[0]?.id || '');
+    setEditDate(log.date || toLocalIsoDate(new Date()));
+    setEditHours(Number(log.hoursLogged) || 0);
+    setEditLodStage(log.lodStage || 'LOD 350');
+    setEditDiscipline(log.discipline || 'BIM - ACS');
+    setEditActivityType(log.activityType || '3D Detailed Modeling');
+    setEditTaskName(log.taskName || '');
+    setEditNotes(log.notes || '');
+    setEditBillable(log.billable !== undefined ? Boolean(log.billable) : true);
+    setEditIsTestEntry(Boolean(log.isTestEntry));
+  };
+
+  const handleSaveEditedLog = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingLog) return;
+
+    const matchedProj = projects.find((p) => p.id === editProjectId);
+    const matchedEmp = allTrackedEmployees.find(
+      (emp) =>
+        emp.id === editEmployeeId ||
+        emp.id.replace(/^emp-/, '') === editEmployeeId.replace(/^emp-/, '')
+    );
+
+    updateWorkLog(editingLog.id, {
+      employeeId: matchedEmp?.id || editEmployeeId || editingLog.employeeId,
+      employeeName: matchedEmp?.name || editingLog.employeeName,
+      memberEmail: matchedEmp?.email || editingLog.memberEmail,
+      userEmail: matchedEmp?.email || editingLog.userEmail,
+      projectId: matchedProj?.id || editProjectId || editingLog.projectId,
+      projectName: matchedProj?.name || editingLog.projectName,
+      date: editDate,
+      hoursLogged: Number(editHours) || 0,
+      lodStage: editLodStage,
+      discipline: editDiscipline,
+      activityType: editActivityType,
+      taskName: editTaskName,
+      notes: editNotes,
+      billable: Boolean(editBillable),
+      isTestEntry: Boolean(editIsTestEntry),
+    });
+
+    setEditingLog(null);
+  };
+
+  const handleConfirmDeleteLog = () => {
+    if (!logToDelete) return;
+    deleteWorkLog(logToDelete.id);
+    setLogToDelete(null);
+  };
 
   // Helper to match a work log to an employee record across all identifiers
   const doesLogMatchEmployee = (log: DailyWorkLog, emp: { id: string; name?: string; email?: string }): boolean => {
@@ -212,52 +286,102 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     return list;
   }, [employees, workLogs, isSuperAdmin, currentUser]);
 
-  // Filtered log list: Super Admin & Director see all records, Submitting Member sees only their own
-  const filteredLogs = (workLogs || []).filter((log) => {
-    const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
+  // Base filtered logs (by role/ownership, search, project, employee, discipline) before logTypeFilter
+  const baseFilteredLogs = useMemo(() => {
+    return (workLogs || []).filter((log) => {
+      const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
 
-    if (!isSuperAdmin) {
-      const userEmail = (currentUser?.email || '').trim().toLowerCase();
-      const userId = (currentUser?.id || '').trim();
-      const userIdStripped = userId.replace(/^emp-/, '');
-      const logEmpId = (log.employeeId || '').trim();
-      const logUserId = ((log as any).userId || '').trim();
-      const isOwned =
-        (userEmail && ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase() === userEmail)) ||
-        (userId && (logUserId === userId || logEmpId === userId || logUserId.replace(/^emp-/, '') === userIdStripped || logEmpId.replace(/^emp-/, '') === userIdStripped)) ||
-        (currentUser?.name && (log.employeeName || '').toLowerCase().trim() === currentUser.name.toLowerCase().trim()) ||
-        (selectedEmpObj && doesLogMatchEmployee(log, selectedEmpObj));
-      if (!isOwned) return false;
+      if (!isSuperAdmin) {
+        const userEmail = (currentUser?.email || '').trim().toLowerCase();
+        const userId = (currentUser?.id || '').trim();
+        const userIdStripped = userId.replace(/^emp-/, '');
+        const logEmpId = (log.employeeId || '').trim();
+        const logUserId = ((log as any).userId || '').trim();
+        const isOwned =
+          (userEmail && ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase() === userEmail)) ||
+          (userId && (logUserId === userId || logEmpId === userId || logUserId.replace(/^emp-/, '') === userIdStripped || logEmpId.replace(/^emp-/, '') === userIdStripped)) ||
+          (currentUser?.name && (log.employeeName || '').toLowerCase().trim() === currentUser.name.toLowerCase().trim()) ||
+          (selectedEmpObj && doesLogMatchEmployee(log, selectedEmpObj));
+        if (!isOwned) return false;
+      }
+
+      const matchesSearch =
+        (log.notes || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (log.taskName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (log.employeeName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (log.projectName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (log.discipline || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (log.activityType || '').toLowerCase().includes(searchQuery.toLowerCase());
+
+      const matchesEmp =
+        !isSuperAdmin ||
+        selectedEmployeeFilter === 'all' ||
+        log.employeeId === selectedEmployeeFilter ||
+        (selectedEmpObj ? doesLogMatchEmployee(log, selectedEmpObj) : false);
+
+      const matchesProj =
+        selectedProjectFilter === 'all' || log.projectId === selectedProjectFilter;
+      const matchesDisc =
+        selectedDisciplineFilter === 'all' || log.discipline === selectedDisciplineFilter;
+
+      return matchesSearch && matchesEmp && matchesProj && matchesDisc;
+    });
+  }, [
+    workLogs,
+    allTrackedEmployees,
+    selectedEmployeeFilter,
+    isSuperAdmin,
+    currentUser,
+    searchQuery,
+    selectedProjectFilter,
+    selectedDisciplineFilter,
+  ]);
+
+  const operationalCount = useMemo(
+    () => baseFilteredLogs.filter((l) => !l.isTestEntry).length,
+    [baseFilteredLogs]
+  );
+  const testCount = useMemo(
+    () => baseFilteredLogs.filter((l) => Boolean(l.isTestEntry)).length,
+    [baseFilteredLogs]
+  );
+
+  // Filtered log list applying All Logs / Operational Only / Test Logs Only filter
+  const filteredLogs = useMemo(() => {
+    if (logTypeFilter === 'operational') {
+      return baseFilteredLogs.filter((l) => !l.isTestEntry);
     }
+    if (logTypeFilter === 'test') {
+      return baseFilteredLogs.filter((l) => Boolean(l.isTestEntry));
+    }
+    return baseFilteredLogs;
+  }, [baseFilteredLogs, logTypeFilter]);
 
-    const matchesSearch =
-      (log.notes || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (log.taskName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (log.employeeName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (log.projectName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (log.discipline || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (log.activityType || '').toLowerCase().includes(searchQuery.toLowerCase());
+  // Keep normal logged-hour calculations unchanged:
+  // Test entries must not affect operational totals unless explicitly intended by the selected filter ('test').
+  const operationalFilteredHours = useMemo(
+    () =>
+      baseFilteredLogs
+        .filter((l) => !l.isTestEntry)
+        .reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0),
+    [baseFilteredLogs]
+  );
 
-    const matchesEmp =
-      !isSuperAdmin ||
-      selectedEmployeeFilter === 'all' ||
-      log.employeeId === selectedEmployeeFilter ||
-      (selectedEmpObj ? doesLogMatchEmployee(log, selectedEmpObj) : false);
+  const testFilteredHours = useMemo(
+    () =>
+      baseFilteredLogs
+        .filter((l) => Boolean(l.isTestEntry))
+        .reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0),
+    [baseFilteredLogs]
+  );
 
-    const matchesProj =
-      selectedProjectFilter === 'all' || log.projectId === selectedProjectFilter;
-    const matchesDisc =
-      selectedDisciplineFilter === 'all' || log.discipline === selectedDisciplineFilter;
-
-    return matchesSearch && matchesEmp && matchesProj && matchesDisc;
-  });
-
-  const totalFilteredHours = filteredLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
+  const totalFilteredHours =
+    logTypeFilter === 'test' ? testFilteredHours : operationalFilteredHours;
 
   // Export to CSV function
   const exportLogsToCsv = () => {
-    const headers = ['Date', 'Employee', 'Project', 'Discipline', 'Activity', 'Task', 'LOD', 'Hours', 'Billable', 'Notes'];
-    const rows = filteredLogs.map(l => [
+    const headers = ['Date', 'Employee', 'Project', 'Discipline', 'Activity', 'Task', 'LOD', 'Hours', 'Billable', 'Entry Type', 'Notes'];
+    const rows = filteredLogs.map((l) => [
       l.date,
       `"${l.employeeName || ''}"`,
       `"${l.projectName || ''}"`,
@@ -267,10 +391,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       l.lodStage,
       l.hoursLogged,
       l.billable ? 'Yes' : 'No',
-      `"${(l.notes || '').replace(/"/g, '""')}"`
+      l.isTestEntry ? 'TEST' : 'Operational',
+      `"${(l.notes || '').replace(/"/g, '""')}"`,
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
@@ -278,6 +403,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const canModifyLog = (log: DailyWorkLog): boolean => {
+    if (isSuperAdmin && !isDirector) return true;
+    const myEmail = (currentUser?.email || '').toLowerCase().trim();
+    const logEmail = (log.memberEmail || (log as any).userEmail || '').toLowerCase().trim();
+    if (myEmail && logEmail && myEmail === logEmail) return true;
+    if (currentUser?.id && (log.employeeId === currentUser.id || (log as any).userId === currentUser.id)) return true;
+    return false;
   };
 
   return (
@@ -320,8 +454,17 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
-            <span className="text-xs text-slate-400 font-semibold uppercase">Total Logged (Filtered)</span>
-            <p className="text-2xl font-bold text-white mt-1">{totalFilteredHours.toFixed(1)} hrs</p>
+            <span className="text-xs text-slate-400 font-semibold uppercase">
+              {logTypeFilter === 'test' ? 'Total Logged (Test Only)' : 'Total Logged (Operational)'}
+            </span>
+            <div className="flex items-baseline gap-2 mt-1">
+              <p className="text-2xl font-bold text-white">{totalFilteredHours.toFixed(1)} hrs</p>
+              {logTypeFilter === 'all' && testFilteredHours > 0 && (
+                <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  +{testFilteredHours.toFixed(1)}h [TEST] excluded
+                </span>
+              )}
+            </div>
           </div>
           <div className="w-10 h-10 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
             <Clock className="w-5 h-5" />
@@ -331,7 +474,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
             <span className="text-xs text-slate-400 font-semibold uppercase">Logged Entries</span>
-            <p className="text-2xl font-bold text-white mt-1">{filteredLogs.length} Records</p>
+            <div className="flex items-baseline gap-2 mt-1">
+              <p className="text-2xl font-bold text-white">{filteredLogs.length} Records</p>
+              {testCount > 0 && logTypeFilter === 'all' && (
+                <span className="text-[11px] font-semibold text-amber-300">
+                  ({testCount} Test)
+                </span>
+              )}
+            </div>
           </div>
           <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
             <FileSpreadsheet className="w-5 h-5" />
@@ -353,8 +503,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         </div>
       </div>
 
-      {/* Tabs for Matrix vs Log Stream */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+      {/* Tabs for Matrix vs Log Stream + Log Entry Type Filter (All Logs / Operational Only / Test Logs Only) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setActiveView('matrix')}
@@ -377,17 +527,61 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
             Detailed Log Records ({filteredLogs.length})
           </button>
         </div>
+
+        {/* Entry Type Filter Buttons: All Logs | Operational Only | Test Logs Only */}
+        <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs">
+          <button
+            type="button"
+            onClick={() => setLogTypeFilter('all')}
+            className={`px-3 py-1 rounded-md font-semibold transition ${
+              logTypeFilter === 'all'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            All Logs ({baseFilteredLogs.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setLogTypeFilter('operational')}
+            className={`px-3 py-1 rounded-md font-semibold transition ${
+              logTypeFilter === 'operational'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Operational Only ({operationalCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setLogTypeFilter('test')}
+            className={`px-3 py-1 rounded-md font-semibold transition flex items-center gap-1 ${
+              logTypeFilter === 'test'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
+                : 'text-amber-300/80 hover:text-amber-300'
+            }`}
+          >
+            <span>Test Logs Only ({testCount})</span>
+          </button>
+        </div>
       </div>
 
       {/* Matrix View: Employee rows across days of the week */}
       {activeView === 'matrix' && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between text-xs text-slate-300 bg-slate-800/40">
-            <span className="font-semibold text-white">
-              {isSuperAdmin
-                ? `Weekly Team Timesheet Matrix (${currentWeekRange.label})`
-                : `My Weekly Timesheet Matrix (${currentWeekRange.label})`}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-white">
+                {isSuperAdmin
+                  ? `Weekly Team Timesheet Matrix (${currentWeekRange.label})`
+                  : `My Weekly Timesheet Matrix (${currentWeekRange.label})`}
+              </span>
+              {logTypeFilter === 'test' && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  [TEST] FILTER ACTIVE
+                </span>
+              )}
+            </div>
             <span className="text-slate-400">Standard Target: 40.0 hrs / week</span>
           </div>
 
@@ -412,6 +606,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   const dailyHours = weekDays.map((d) => {
                     const dayLogs = workLogs.filter(
                       (w) =>
+                        (logTypeFilter === 'test' ? Boolean(w.isTestEntry) : !w.isTestEntry) &&
                         doesLogMatchEmployee(w, emp) &&
                         getEffectiveLogDate(w, currentWeekRange) === d.date
                     );
@@ -420,10 +615,10 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     return { date: d.date, hours };
                   });
 
-                  const effectiveWeeklyLoad = Math.max(
-                    weekSum,
-                    getEmployeeLoggedHours(emp.id, 'this-week')
-                  );
+                  const effectiveWeeklyLoad =
+                    logTypeFilter === 'test'
+                      ? weekSum
+                      : Math.max(weekSum, getEmployeeLoggedHours(emp.id, 'this-week'));
                   const capHours = emp.weeklyCapacityHours || 40;
                   const capPct = Math.round((effectiveWeeklyLoad / capHours) * 100);
                   const isOver = effectiveWeeklyLoad > capHours;
@@ -442,7 +637,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           {d.hours > 0 ? (
                             <span
                               className={`inline-block px-2 py-0.5 rounded font-semibold text-xs ${
-                                d.hours >= 8
+                                logTypeFilter === 'test'
+                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                  : d.hours >= 8
                                   ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                                   : 'bg-slate-800 text-slate-300'
                               }`}
@@ -485,7 +682,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       {activeView === 'logs' && (
         <div className="space-y-4">
           {/* Filters */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs">
             <div>
               <label className="block text-slate-400 font-medium mb-1">Search Keywords</label>
               <div className="relative">
@@ -557,6 +754,20 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <option value="Coordination & QA">Coordination & QA</option>
               </select>
             </div>
+
+            <div>
+              <label className="block text-slate-400 font-medium mb-1">Log Entry Type</label>
+              <select
+                aria-label="Filter by Log Entry Type"
+                value={logTypeFilter}
+                onChange={(e) => setLogTypeFilter(e.target.value as 'all' | 'operational' | 'test')}
+                className="w-full bg-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="all">All Logs ({baseFilteredLogs.length})</option>
+                <option value="operational">Operational Only ({operationalCount})</option>
+                <option value="test">Test Logs Only ({testCount})</option>
+              </select>
+            </div>
           </div>
 
           {/* Logs Table */}
@@ -585,56 +796,381 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     </tr>
                   ) : (
                     filteredLogs.map((log) => {
+                      const allowModify = canModifyLog(log);
                       return (
                         <tr key={log.id} className="hover:bg-slate-800/40 transition">
-                      <td className="p-3.5 font-mono text-slate-400 whitespace-nowrap">
-                        {log.date}
-                      </td>
-                      <td className="p-3.5 font-medium text-white whitespace-nowrap">
-                        {log.employeeName}
-                      </td>
-                      <td className="p-3.5">
-                        <div className="font-semibold text-slate-200">{log.projectName}</div>
-                        <div className="text-[11px] text-slate-400">{log.taskName}</div>
-                      </td>
-                      <td className="p-3.5">
-                        <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium text-[11px]">
-                          {log.discipline}
-                        </span>
-                        <span className="ml-1 text-indigo-400 font-bold text-[10px]">
-                          {log.lodStage}
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-slate-300">
-                        {log.activityType}
-                      </td>
-                      <td className="p-3.5 font-bold text-blue-400 text-sm whitespace-nowrap">
-                        {log.hoursLogged} hrs
-                      </td>
-                      <td className="p-3.5 text-slate-400 text-[11px] max-w-xs truncate" title={log.notes}>
-                        {log.notes}
-                      </td>
-                      <td className="p-3.5 text-right">
-                        {(!isDirector ||
-                          ((currentUser?.email || '').toLowerCase().trim() &&
-                            ((log.memberEmail || (log as any).userEmail || '').toLowerCase().trim() ===
-                              (currentUser?.email || '').toLowerCase().trim()))) && (
-                          <button
-                            onClick={() => {
-                              deleteWorkLog(log.id);
-                            }}
-                            className="p-1 text-slate-500 hover:text-rose-400 transition"
-                            title="Delete entry"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                }))}
-              </tbody>
+                          <td className="p-3.5 font-mono text-slate-400 whitespace-nowrap">
+                            {log.date}
+                          </td>
+                          <td className="p-3.5 font-medium text-white whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <span>{log.employeeName}</span>
+                              {log.isTestEntry && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                  [TEST]
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-slate-200">{log.projectName}</span>
+                              {log.isTestEntry && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                  [TEST]
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-400">{log.taskName}</div>
+                          </td>
+                          <td className="p-3.5">
+                            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium text-[11px]">
+                              {log.discipline}
+                            </span>
+                            <span className="ml-1 text-indigo-400 font-bold text-[10px]">
+                              {log.lodStage}
+                            </span>
+                          </td>
+                          <td className="p-3.5 text-slate-300">
+                            {log.activityType}
+                          </td>
+                          <td className="p-3.5 font-bold text-sm whitespace-nowrap">
+                            <span className={log.isTestEntry ? 'text-amber-300' : 'text-blue-400'}>
+                              {log.hoursLogged} hrs
+                            </span>
+                          </td>
+                          <td className="p-3.5 text-slate-400 text-[11px] max-w-xs truncate" title={log.notes}>
+                            {log.notes}
+                          </td>
+                          <td className="p-3.5 text-right whitespace-nowrap">
+                            {allowModify && (
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditLogModal(log)}
+                                  className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition"
+                                  title="Edit daily log entry"
+                                  aria-label={`Edit log entry for ${log.employeeName}`}
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setLogToDelete(log)}
+                                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
+                                  title="Delete daily log entry"
+                                  aria-label={`Delete log entry for ${log.employeeName}`}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT DAILY LOG MODAL (Super Admin / Authorized Owner) */}
+      {editingLog && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full my-8 text-slate-100 shadow-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center">
+                  <Edit2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Edit Daily Work Log</h3>
+                  <p className="text-xs text-slate-400">
+                    Modify hours, project assignment, or test entry status in Firestore
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingLog(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditedLog} className="p-6 space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">Team Member</label>
+                  <select
+                    value={editEmployeeId}
+                    onChange={(e) => setEditEmployeeId(e.target.value)}
+                    disabled={!isSuperAdmin}
+                    className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-75"
+                  >
+                    {!allTrackedEmployees.some((emp) => emp.id === editEmployeeId) && editEmployeeId && (
+                      <option value={editEmployeeId}>{editingLog.employeeName}</option>
+                    )}
+                    {allTrackedEmployees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.name} ({emp.role})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">Target Project</label>
+                  <select
+                    value={editProjectId}
+                    onChange={(e) => setEditProjectId(e.target.value)}
+                    className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">Log Date</label>
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">Hours Spent</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0.5"
+                    max="24"
+                    value={editHours}
+                    onChange={(e) => setEditHours(Number(e.target.value))}
+                    className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 font-bold"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">LOD Level</label>
+                  <select
+                    value={editLodStage}
+                    onChange={(e) => setEditLodStage(e.target.value as LODLevel)}
+                    className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="LOD 100">LOD 100</option>
+                    <option value="LOD 200">LOD 200</option>
+                    <option value="LOD 300">LOD 300</option>
+                    <option value="LOD 350">LOD 350</option>
+                    <option value="LOD 400">LOD 400</option>
+                    <option value="LOD 500">LOD 500</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">BIM Discipline</label>
+                  <select
+                    value={editDiscipline}
+                    onChange={(e) => setEditDiscipline(e.target.value as Discipline)}
+                    className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="BIM - ACS">BIM - ACS</option>
+                    <option value="Structure">Structure</option>
+                    <option value="MEP - HVAC">MEP - HVAC</option>
+                    <option value="MEP - Electrical">MEP - Electrical</option>
+                    <option value="MEP - Plumbing">MEP - Plumbing</option>
+                    <option value="Façade / Envelope">Façade / Envelope</option>
+                    <option value="Coordination & QA">Coordination & QA</option>
+                    <option value="Fire Protection">Fire Protection</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1">Activity Category</label>
+                  <select
+                    value={editActivityType}
+                    onChange={(e) => setEditActivityType(e.target.value as ActivityType)}
+                    className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="Drawing">Drawing</option>
+                    <option value="Input Document study">Input Document study</option>
+                    <option value="Estimation">Estimation</option>
+                    <option value="QA & QC">QA & QC</option>
+                    <option value="RFI , Mark up & issue Creation">RFI , Mark up & issue Creation</option>
+                    <option value="Dynamo Script Making">Dynamo Script Making</option>
+                    <option value="Addins & Pluggins Creation">Addins & Pluggins Creation</option>
+                    <option value="3D Detailed Modeling">3D Detailed Modeling</option>
+                    <option value="Clash Detection & Resolution">Clash Detection & Resolution</option>
+                    <option value="Construction Documentation & Sheets">Construction Documentation & Sheets</option>
+                    <option value="Parametric Family Creation">Parametric Family Creation</option>
+                    <option value="Coordination & Navisworks Review">Coordination & Navisworks Review</option>
+                    <option value="COBie & Asset Data Entry">COBie & Asset Data Entry</option>
+                    <option value="Scan-to-BIM Point Cloud Modeling">Scan-to-BIM Point Cloud Modeling</option>
+                    <option value="2D to 3D Conversion">2D to 3D Conversion</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 font-medium mb-1">Task Details</label>
+                <input
+                  type="text"
+                  value={editTaskName}
+                  onChange={(e) => setEditTaskName(e.target.value)}
+                  className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 font-medium mb-1">Work Notes & Technical Details</label>
+                <textarea
+                  rows={3}
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 leading-relaxed"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="editBillable"
+                    checked={editBillable}
+                    onChange={(e) => setEditBillable(e.target.checked)}
+                    className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500"
+                  />
+                  <label htmlFor="editBillable" className="text-slate-300 select-none cursor-pointer">
+                    Billable Client Project Hours
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                  <input
+                    type="checkbox"
+                    id="editIsTestEntry"
+                    checked={editIsTestEntry}
+                    onChange={(e) => setEditIsTestEntry(e.target.checked)}
+                    className="rounded bg-slate-800 border-amber-500/50 text-amber-500 focus:ring-amber-500"
+                  />
+                  <label htmlFor="editIsTestEntry" className="text-amber-300 font-semibold select-none cursor-pointer flex items-center gap-1.5">
+                    <span>Mark as Test Entry</span>
+                    {editIsTestEntry && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/25 text-amber-300 border border-amber-400/50">
+                        [TEST]
+                      </span>
+                    )}
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingLog(null)}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold transition flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save Changes</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE DAILY LOG CONFIRMATION PROMPT MODAL */}
+      {logToDelete && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full text-slate-100 shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Delete Daily Work Log</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    This permanently deletes the timesheet record from Firestore.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLogToDelete(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700/70 text-xs space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Employee:</span>
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <span>{logToDelete.employeeName}</span>
+                  {logToDelete.isTestEntry && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                      [TEST]
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Project:</span>
+                <span className="font-semibold text-blue-300">{logToDelete.projectName}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Date & Hours:</span>
+                <span className="font-mono font-bold text-white">
+                  {logToDelete.date} • {logToDelete.hoursLogged} hrs
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Are you sure you want to permanently delete this daily log entry?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setLogToDelete(null)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteLog}
+                className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold transition flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Log</span>
+              </button>
             </div>
           </div>
         </div>

@@ -58,7 +58,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     const parsed = parseFloat(rawValue);
     if (!Number.isNaN(parsed) && parsed >= 0) {
       const currentLoggedFromWorkLogs = (workLogs || [])
-        .filter((w) => w.projectId === project.id)
+        .filter((w) => !w.isTestEntry && w.projectId === project.id)
         .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
       updateProject(project.id, {
         totalCompletedHours: parsed,

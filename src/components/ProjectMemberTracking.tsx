@@ -104,7 +104,7 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
   const activeEmpNames = useMemo(() => new Set(activeMembers.map((e) => (e.name || '').toLowerCase().trim())), [activeMembers]);
 
   const totalLoggedHours = (workLogs || [])
-    .filter((log) => activeEmpIds.has(log.employeeId) || activeEmpNames.has((log.employeeName || '').toLowerCase().trim()))
+    .filter((log) => !log.isTestEntry && (activeEmpIds.has(log.employeeId) || activeEmpNames.has((log.employeeName || '').toLowerCase().trim())))
     .reduce((sum, log) => sum + (log.hoursLogged || 0), 0);
   const totalWeeklyCapacity = (activeMembers || []).reduce((sum, emp) => sum + (emp.weeklyCapacityHours || 40), 0);
   

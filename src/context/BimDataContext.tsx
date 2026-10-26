@@ -1130,6 +1130,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
             const data = docSnap.data();
             const normalizedEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
+            const resolvedCreatedAt =
+              typeof data.createdAt === 'string'
+                ? data.createdAt
+                : typeof data.createdAt?.toDate === 'function'
+                ? data.createdAt.toDate().toISOString()
+                : typeof data.createdAt?.seconds === 'number'
+                ? new Date(data.createdAt.seconds * 1000).toISOString()
+                : data.timestamp || new Date().toISOString();
             return {
               id: docSnap.id,
               employeeId: data.employeeId || data.userId || '',
@@ -1144,10 +1152,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               lodStage: (data.lodStage as LODLevel) || 'LOD 350',
               notes: data.notes || '',
               billable: data.billable !== undefined ? Boolean(data.billable) : true,
-              timestamp: data.timestamp || new Date().toISOString(),
+              timestamp: data.timestamp || resolvedCreatedAt,
               memberEmail: normalizedEmail,
               userEmail: normalizedEmail,
               userId: data.userId || data.employeeId || '',
+              isTestEntry: Boolean(data.isTestEntry ?? false),
+              loggedBy: data.loggedBy || normalizedEmail || data.employeeName || '',
+              createdAt: resolvedCreatedAt,
             };
           });
 
@@ -2184,12 +2195,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const project = getProjectById(projectId);
     const normProjName = project ? normalizeProjectNameKey(project.name) : '';
 
-    // Sum hours from all organizational workLogs for this project (by ID or normalized project name)
+    // Sum operational hours (excluding test entries) from all organizational workLogs for this project
     const logged = (allWorkLogs || [])
       .filter(
         (w) =>
-          w.projectId === projectId ||
-          (normProjName && normalizeProjectNameKey(w.projectName) === normProjName)
+          !w.isTestEntry &&
+          (w.projectId === projectId ||
+            (normProjName && normalizeProjectNameKey(w.projectName) === normProjName))
       )
       .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
 
@@ -2260,7 +2272,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const weekRange = getCurrentWeekRange();
     const todayIso = toLocalIsoDate(new Date());
 
-    const matchingLogs = (allWorkLogs || []).filter((w) => matchesMember(w));
+    // Exclude test entries from operational employee logged hours & capacity calculations
+    const matchingLogs = (allWorkLogs || []).filter((w) => !w.isTestEntry && matchesMember(w));
 
     if (filterRange === 'all') {
       return matchingLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
@@ -2468,6 +2481,16 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       logData.employeeId ||
       '';
     const hoursValue = Number(logData.hoursLogged) || 0;
+    const isoNow = new Date().toISOString();
+    const isTestEntryFlag = Boolean(logData.isTestEntry ?? false);
+    const loggedByValue =
+      logData.loggedBy ||
+      (currentUser?.email || '').trim().toLowerCase() ||
+      currentUser?.name ||
+      userEmail ||
+      logData.employeeName ||
+      '';
+    const createdAtValue = logData.createdAt || isoNow;
 
     const newLog: DailyWorkLog = {
       ...logData,
@@ -2476,7 +2499,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       memberEmail: userEmail,
       userEmail: userEmail,
       userId: userId,
-      timestamp: new Date().toISOString(),
+      timestamp: isoNow,
+      isTestEntry: isTestEntryFlag,
+      loggedBy: loggedByValue,
+      createdAt: createdAtValue,
     };
 
     // 1. Optimistic state update in allWorkLogs
@@ -2486,49 +2512,66 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const logDoc = doc(db, 'work_logs', logId);
       const sanitizedLog = JSON.parse(JSON.stringify(newLog));
-      setDoc(logDoc, sanitizedLog, { merge: true }).catch((err) =>
-        console.warn('Firestore addWorkLog sync notice:', err)
-      );
+      setDoc(
+        logDoc,
+        {
+          ...sanitizedLog,
+          isTestEntry: isTestEntryFlag,
+          loggedBy: loggedByValue,
+          createdAt: createdAtValue,
+        },
+        { merge: true }
+      ).catch((err) => console.warn('Firestore addWorkLog sync notice:', err));
     } catch (fsErr) {
       console.warn('Firestore addWorkLog error:', fsErr);
     }
 
-    // 3. Update project task completed hours if applicable
-    setProjects((prev) =>
-      prev.map((proj) => {
-        if (proj.id !== logData.projectId) return proj;
-        const updatedTasks = proj.tasks.map((task) => {
-          if (task.name === logData.taskName) {
-            const newCompleted = (task.completedHours || 0) + hoursValue;
-            return {
-              ...task,
-              completedHours: newCompleted,
-              status:
-                newCompleted >= task.estimatedHours
-                  ? ('Completed' as const)
-                  : ('In Progress' as const),
-            };
-          }
-          return task;
-        });
-        const updatedProj = { ...proj, tasks: updatedTasks };
-        try {
-          updateDoc(doc(db, 'projects', proj.id), { tasks: updatedTasks }).catch(() => {});
-        } catch {}
-        return updatedProj;
-      })
-    );
+    // 3. Update project task completed hours if applicable (only for operational entries)
+    if (!isTestEntryFlag) {
+      setProjects((prev) =>
+        prev.map((proj) => {
+          if (proj.id !== logData.projectId) return proj;
+          const updatedTasks = proj.tasks.map((task) => {
+            if (task.name === logData.taskName) {
+              const newCompleted = (task.completedHours || 0) + hoursValue;
+              return {
+                ...task,
+                completedHours: newCompleted,
+                status:
+                  newCompleted >= task.estimatedHours
+                    ? ('Completed' as const)
+                    : ('In Progress' as const),
+              };
+            }
+            return task;
+          });
+          const updatedProj = { ...proj, tasks: updatedTasks };
+          try {
+            updateDoc(doc(db, 'projects', proj.id), { tasks: updatedTasks }).catch(() => {});
+          } catch {}
+          return updatedProj;
+        })
+      );
+    }
 
     return newLog;
   };
 
   const updateWorkLog = (id: string, updates: Partial<DailyWorkLog>) => {
+    let fullUpdated: DailyWorkLog | undefined;
     setAllWorkLogs((prev) =>
-      prev.map((w) => (w.id === id ? { ...w, ...updates } : w))
+      prev.map((w) => {
+        if (w.id === id) {
+          fullUpdated = { ...w, ...updates };
+          return fullUpdated;
+        }
+        return w;
+      })
     );
     try {
-      const sanitizedUpdates = JSON.parse(JSON.stringify(updates));
-      updateDoc(doc(db, 'work_logs', id), sanitizedUpdates).catch((err) =>
+      const payload = fullUpdated ? { ...fullUpdated, ...updates } : { id, ...updates };
+      const sanitizedUpdates = JSON.parse(JSON.stringify(payload));
+      setDoc(doc(db, 'work_logs', id), sanitizedUpdates, { merge: true }).catch((err) =>
         console.warn('Firestore updateWorkLog sync notice:', err)
       );
     } catch (e) {

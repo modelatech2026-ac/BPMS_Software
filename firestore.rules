@@ -110,7 +110,7 @@ service cloud.firestore {
     // Project Assignments Collection
     match /project_assignments/{assignmentId} {
       allow get, list: if isSuperAdmin() || request.time != null;
-      allow create, update: if isValidId(assignmentId) && incoming().keys().size() > 0;
+      allow create, update: if isValidId(assignmentId) && (isSuperAdmin() || incoming().keys().size() > 0);
       allow delete: if isValidId(assignmentId) && (isSuperAdmin() || request.time != null);
     }
 
@@ -132,6 +132,7 @@ service cloud.firestore {
       return isSignedIn() && (
         ('memberEmail' in data && data.memberEmail is string && request.auth.token.email != null && data.memberEmail.lower() == request.auth.token.email.lower()) ||
         ('userEmail' in data && data.userEmail is string && request.auth.token.email != null && data.userEmail.lower() == request.auth.token.email.lower()) ||
+        ('loggedBy' in data && data.loggedBy is string && request.auth.token.email != null && data.loggedBy.lower() == request.auth.token.email.lower()) ||
         ('userId' in data && data.userId is string && data.userId == request.auth.uid) ||
         ('employeeId' in data && data.employeeId is string && data.employeeId == request.auth.uid)
       );
@@ -141,19 +142,25 @@ service cloud.firestore {
       return data.keys().size() > 0 && (
         ('hoursLogged' in data && data.hoursLogged is number && data.hoursLogged >= 0) ||
         ('hours' in data && data.hours is number && data.hours >= 0)
+      ) && (
+        !('isTestEntry' in data) || data.isTestEntry is bool
+      ) && (
+        !('loggedBy' in data) || (data.loggedBy is string && data.loggedBy.size() <= 200)
       );
     }
 
     // Daily Work Logs Collection
     match /work_logs/{logId} {
       allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || request.time != null;
-      allow create, update: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
+      allow create: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
+      allow update: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || isValidWorkLog(incoming()));
       allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || request.time != null);
     }
 
     match /daily_logs/{logId} {
       allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || request.time != null;
-      allow create, update: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
+      allow create: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
+      allow update: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || isValidWorkLog(incoming()));
       allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || request.time != null);
     }
   }

@@ -44,9 +44,13 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   const [lodStage, setLodStage] = useState<LODLevel>('LOD 350');
   const [notes, setNotes] = useState<string>('');
   const [billable, setBillable] = useState<boolean>(true);
+  const [isTestEntry, setIsTestEntry] = useState<boolean>(false);
 
   // Sync selected project when modal opens or preselectedProjectId/projects change
   useEffect(() => {
+    if (isOpen) {
+      setIsTestEntry(false);
+    }
     if (preselectedProjectId) {
       setProjectId(preselectedProjectId);
     } else if (!projectId && projects.length > 0) {
@@ -134,6 +138,14 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       (memberEmail ? generateRequestDocId(memberEmail) : '') ||
       finalEmpId.replace(/^emp-/, '');
 
+    const loggedByIdentifier =
+      cleanCurrentEmail ||
+      currentUser?.name ||
+      memberEmail ||
+      finalEmpName ||
+      'BIM Modeler';
+    const createdAtIso = new Date().toISOString();
+
     addWorkLog({
       employeeId: finalEmpId,
       employeeName: finalEmpName,
@@ -150,6 +162,9 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       memberEmail,
       userEmail: memberEmail,
       userId: resolvedUserId,
+      isTestEntry: Boolean(isTestEntry),
+      loggedBy: loggedByIdentifier,
+      createdAt: createdAtIso,
     });
 
     try {
@@ -387,17 +402,37 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
             />
           </div>
 
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="checkbox"
-              id="billable"
-              checked={billable}
-              onChange={(e) => setBillable(e.target.checked)}
-              className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500"
-            />
-            <label htmlFor="billable" className="text-slate-300 select-none cursor-pointer">
-              Billable Client Project Hours
-            </label>
+          <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="billable"
+                checked={billable}
+                onChange={(e) => setBillable(e.target.checked)}
+                className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500"
+              />
+              <label htmlFor="billable" className="text-slate-300 select-none cursor-pointer">
+                Billable Client Project Hours
+              </label>
+            </div>
+
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
+              <input
+                type="checkbox"
+                id="isTestEntry"
+                checked={isTestEntry}
+                onChange={(e) => setIsTestEntry(e.target.checked)}
+                className="rounded bg-slate-800 border-amber-500/50 text-amber-500 focus:ring-amber-500"
+              />
+              <label htmlFor="isTestEntry" className="text-amber-300 font-semibold select-none cursor-pointer flex items-center gap-1.5">
+                <span>Mark as Test Entry</span>
+                {isTestEntry && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/25 text-amber-300 border border-amber-400/50">
+                    [TEST]
+                  </span>
+                )}
+              </label>
+            </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">

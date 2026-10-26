@@ -265,6 +265,20 @@
         "memberEmail": {
           "type": "string",
           "maxLength": 150
+        },
+        "isTestEntry": {
+          "type": "boolean",
+          "description": "Whether this daily log entry is marked as a test entry"
+        },
+        "loggedBy": {
+          "type": "string",
+          "description": "Email or identifier of the user who logged the entry",
+          "maxLength": 150
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of when the log entry was created",
+          "maxLength": 64
         }
       },
       "required": ["employeeId", "projectId", "date", "hoursLogged"]

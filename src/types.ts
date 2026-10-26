@@ -152,6 +152,9 @@ export interface DailyWorkLog {
   memberEmail?: string;
   userEmail?: string;
   userId?: string;
+  isTestEntry?: boolean;
+  loggedBy?: string;
+  createdAt?: string;
 }
 
 export interface Employee {

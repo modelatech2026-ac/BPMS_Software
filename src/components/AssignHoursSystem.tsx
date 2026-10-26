@@ -63,9 +63,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const isSuperAdmin = isUserSuperAdmin(currentUser);
   const activeMembers = employees;
 
-  // Helper to test if allocation belongs to a live active team member
+  // Helper to test if allocation belongs to a live active team member (Super Admins have global visibility across all allocations)
   const isLiveActiveMember = (item: ResourceAllocationItem) => {
-    if (activeMembers.length === 0) return true;
+    if (isSuperAdmin || activeMembers.length === 0) return true;
     if (item.memberEmail) {
       const matchByEmail = activeMembers.some(
         (m) => (m.email || '').toLowerCase().trim() === item.memberEmail?.toLowerCase().trim()
@@ -167,26 +167,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   // Sync allocations with activeMembers collection
   useEffect(() => {
-    if (activeMembers.length > 0) {
-      setAllocations((prev) => {
-        const filtered = prev.filter(isLiveActiveMember);
-        if (filtered.length !== prev.length) {
-          localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(filtered));
-        }
-        return filtered;
-      });
-    }
-
     const handleAllocUpdate = (e: any) => {
       if (e.detail && Array.isArray(e.detail)) {
-        setAllocations(activeMembers.length > 0 ? e.detail.filter(isLiveActiveMember) : e.detail);
+        setAllocations(isSuperAdmin || activeMembers.length === 0 ? e.detail : e.detail.filter(isLiveActiveMember));
       }
     };
     window.addEventListener('bim_resource_allocations_updated', handleAllocUpdate);
     return () => {
       window.removeEventListener('bim_resource_allocations_updated', handleAllocUpdate);
     };
-  }, [activeMembers]);
+  }, [activeMembers, isSuperAdmin]);
 
   // Persist to localStorage
   useEffect(() => {
@@ -251,9 +241,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
   };
 
-  // Helper to get live active allocations strictly filtered against activeMembers
+  // Helper to get live active allocations (Super Admins have global visibility across all allocations)
   const liveActiveAllocations = useMemo(() => {
-    if (activeMembers.length === 0) return allocations;
+    if (isSuperAdmin || activeMembers.length === 0) return allocations;
     return allocations.filter((a) => {
       if (a.memberEmail && activeMembers.some((m) => (m.email || '').toLowerCase().trim() === a.memberEmail?.toLowerCase().trim())) {
         return true;
@@ -264,7 +254,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           (a.employeeName && (m.name || '').toLowerCase().trim() === a.employeeName.toLowerCase().trim())
       );
     });
-  }, [allocations, activeMembers]);
+  }, [allocations, activeMembers, isSuperAdmin]);
 
   // Helper to get total weekly hours assigned to an employee
   const getEmployeeWeeklyHours = useMemo(() => {
@@ -302,10 +292,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     const allocatedHours = filteredByEmployee.reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
 
-    // Calculate total logged hours matching the current allocation scope
+    // Calculate total logged hours matching the current allocation scope (excluding test entries)
     const loggedHours = filteredByEmployee.reduce((sum, alloc) => {
       const rowLogged = workLogs
-        .filter((w) => w.employeeId === alloc.employeeId && matchProjectId(w.projectId, alloc.projectId))
+        .filter((w) => !w.isTestEntry && w.employeeId === alloc.employeeId && matchProjectId(w.projectId, alloc.projectId))
         .reduce((wSum, w) => wSum + (Number(w.hoursLogged) || 0), 0);
       return sum + rowLogged;
     }, 0);
@@ -777,7 +767,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                 </tr>
               ) : (
                 filteredAllocations.map((alloc) => {
-                  if (activeMembers.length > 0 && !isLiveActiveMember(alloc)) return null;
+                  if (!isSuperAdmin && activeMembers.length > 0 && !isLiveActiveMember(alloc)) return null;
 
                   const matchedProject = projects.find((p) => matchProjectId(p.id, alloc.projectId));
                   const resolvedProjectId = matchedProject?.id || alloc.projectId;
@@ -785,6 +775,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
                   const loggedHours = workLogs
                     .filter((w) => {
+                      if (w.isTestEntry) return false;
                       const sameProj = matchProjectId(w.projectId, alloc.projectId);
                       if (!sameProj) return false;
                       const matchId =

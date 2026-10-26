@@ -69,7 +69,7 @@ export const DailyVelocityChart: React.FC<{
   const dates = ['2026-08-12', '2026-08-13', '2026-08-14', '2026-08-15', '2026-08-16', '2026-08-17', '2026-08-18'];
   
   const dailyData = dates.map(d => {
-    const logs = workLogs.filter(w => w.date === d);
+    const logs = workLogs.filter(w => !w.isTestEntry && w.date === d);
     const totalHours = logs.reduce((sum, l) => sum + l.hoursLogged, 0);
     const dayLabel = new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
     return {
@@ -158,7 +158,7 @@ export const DisciplineDistributionChart: React.FC<{
 
   const totals = disciplines.map(disc => {
     const hours = workLogs
-      .filter(w => w.discipline === disc)
+      .filter(w => !w.isTestEntry && w.discipline === disc)
       .reduce((sum, w) => sum + w.hoursLogged, 0);
     return { discipline: disc, hours };
   }).filter(d => d.hours > 0);
