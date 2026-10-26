@@ -120,6 +120,12 @@ service cloud.firestore {
       allow delete: if isValidId(assignmentId) && (isSuperAdmin() || request.time != null);
     }
 
+    match /allocations/{allocationId} {
+      allow get, list: if isSuperAdmin() || request.time != null;
+      allow create, update: if isValidId(allocationId) && (isSuperAdmin() || incoming().keys().size() > 0);
+      allow delete: if isValidId(allocationId) && (isSuperAdmin() || request.time != null);
+    }
+
     // Disciplines Collection
     match /disciplines/{disciplineId} {
       allow get, list: if isSuperAdmin() || request.time != null;

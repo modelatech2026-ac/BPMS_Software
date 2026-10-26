@@ -27,6 +27,8 @@ import {
   toLocalIsoDate,
   isUserSuperAdmin,
 } from '../context/BimDataContext';
+import { db } from '../firebase/config';
+import { collection, deleteDoc, doc, getDocs } from 'firebase/firestore';
 import { DailyWorkLog, Discipline, ActivityType, LODLevel } from '../types';
 
 interface DailyHourTrackerProps {
@@ -40,9 +42,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     workLogs,
     employees,
     projects,
+    resourceAllocations,
     addWorkLog,
     updateWorkLog,
     deleteWorkLog,
+    deleteEmployee,
     getEmployeeLoggedHours,
     currentUser,
   } = useBimData();
@@ -71,6 +75,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   // Edit & Delete confirmation states
   const [logToDelete, setLogToDelete] = useState<DailyWorkLog | null>(null);
   const [deleteCandidateLogs, setDeleteCandidateLogs] = useState<DailyWorkLog[]>([]);
+  const [matrixTargetMember, setMatrixTargetMember] = useState<{
+    id: string;
+    name: string;
+    email?: string;
+  } | null>(null);
+  const [deletedMatrixEmpIds, setDeletedMatrixEmpIds] = useState<string[]>([]);
   const [editingLog, setEditingLog] = useState<DailyWorkLog | null>(null);
   const [editCandidateLogs, setEditCandidateLogs] = useState<DailyWorkLog[]>([]);
   const [modifiedMatrixEmpIds, setModifiedMatrixEmpIds] = useState<string[]>([]);
@@ -151,14 +161,62 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     openEditLogModal(draftLog, empLogs);
   };
 
-  const openMatrixRowDeleteModal = (empWeekLogs: DailyWorkLog[], weekTotalHours: number = 0) => {
-    const validWeekLogs = empWeekLogs.filter((l) => (Number(l.hoursLogged) || 0) > 0);
-    if (weekTotalHours <= 0 || validWeekLogs.length === 0) {
-      showMatrixDeleteNotice('No active hour logs found for this user in the current week to delete');
+  const findMatchingAllocationsForMember = (emp: { id: string; name?: string; email?: string }) => {
+    const empId = (emp.id || '').trim();
+    const empIdStripped = empId.replace(/^emp-/, '');
+    const empEmail = (emp.email || '').toLowerCase().trim();
+    const empName = (emp.name || '').toLowerCase().trim();
+
+    return (resourceAllocations || []).filter((alloc) => {
+      const raw = alloc as any;
+      const aId = (alloc.employeeId || raw.memberId || raw.assignedTo || '').trim();
+      const aIdStripped = aId.replace(/^emp-/, '');
+      const aEmail = (alloc.memberEmail || raw.assignedToEmail || '').toLowerCase().trim();
+      const aName = (alloc.employeeName || '').toLowerCase().trim();
+
+      return (
+        (empId && (aId === empId || (empIdStripped && aIdStripped === empIdStripped) || alloc.id === empId)) ||
+        (empEmail && aEmail && aEmail === empEmail) ||
+        (empName && aName && aName === empName)
+      );
+    });
+  };
+
+  const openMatrixRowDeleteModal = (
+    emp: { id: string; name: string; email?: string; discipline?: Discipline },
+    empWeekLogs: DailyWorkLog[],
+    empAllLogs: DailyWorkLog[] = []
+  ) => {
+    setMatrixTargetMember(emp);
+    const candidateLogs = empWeekLogs.length > 0 ? empWeekLogs : empAllLogs;
+    if (candidateLogs.length > 0) {
+      setDeleteCandidateLogs(candidateLogs);
+      setLogToDelete(candidateLogs[0]);
       return;
     }
-    setDeleteCandidateLogs(validWeekLogs);
-    setLogToDelete(validWeekLogs[0]);
+
+    const matchingAllocs = findMatchingAllocationsForMember(emp);
+    const primaryAlloc = matchingAllocs[0];
+    const fallbackRecord: DailyWorkLog = {
+      id: primaryAlloc?.id || emp.id || '__fallback_allocation_delete__',
+      employeeId: emp.id,
+      employeeName: emp.name,
+      memberEmail: emp.email || primaryAlloc?.memberEmail || '',
+      userEmail: emp.email || primaryAlloc?.memberEmail || '',
+      projectId: primaryAlloc?.projectId || projects[0]?.id || '',
+      projectName: primaryAlloc?.projectName || 'Assigned Hours / Allocation',
+      date: currentWeekRange.startIso,
+      hoursLogged: primaryAlloc ? Number(primaryAlloc.assignedHours) || 0 : 0,
+      discipline: (primaryAlloc?.discipline as Discipline) || emp.discipline || 'BIM - ACS',
+      activityType: '3D Detailed Modeling',
+      taskName: primaryAlloc?.taskType || 'Resource Allocation',
+      lodStage: (primaryAlloc?.lod as LODLevel) || 'LOD 350',
+      notes: 'Fallback allocation / matrix row deletion',
+      billable: true,
+      timestamp: new Date().toISOString(),
+    };
+    setDeleteCandidateLogs([]);
+    setLogToDelete(fallbackRecord);
   };
 
   const handleSaveEditedLog = (e: React.FormEvent) => {
@@ -177,6 +235,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       setModifiedMatrixEmpIds((prev) =>
         prev.includes(targetEmpId) ? prev : [...prev, targetEmpId]
       );
+      setDeletedMatrixEmpIds((prev) => prev.filter((id) => id !== targetEmpId));
     }
 
     if (editingLog.id === '__new_matrix_log__') {
@@ -221,26 +280,133 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     setEditCandidateLogs([]);
   };
 
-  const handleConfirmDeleteLog = () => {
-    if (!logToDelete || (Number(logToDelete.hoursLogged) || 0) <= 0) {
+  const deleteFallbackAllocationsForMember = async (
+    targetEmp: { id: string; name?: string; email?: string },
+    fallbackDocId?: string
+  ) => {
+    const empId = (targetEmp.id || '').trim();
+    const empIdStripped = empId.replace(/^emp-/, '');
+    const empEmail = (targetEmp.email || '').toLowerCase().trim();
+    const empName = (targetEmp.name || '').toLowerCase().trim();
+
+    const matchingAllocs = findMatchingAllocationsForMember(targetEmp);
+    const docIdsToDelete = new Set<string>();
+    if (fallbackDocId && fallbackDocId !== '__fallback_allocation_delete__') {
+      docIdsToDelete.add(fallbackDocId);
+    }
+    if (empId) docIdsToDelete.add(empId);
+    if (empIdStripped) docIdsToDelete.add(empIdStripped);
+    matchingAllocs.forEach((a) => {
+      if (a.id) docIdsToDelete.add(a.id);
+    });
+
+    // Update local allocations cache & notify listeners immediately
+    try {
+      const saved = localStorage.getItem('bim_resource_allocations_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const remaining = parsed.filter((alloc: any) => {
+            const aId = (alloc.employeeId || alloc.memberId || alloc.assignedTo || '').trim();
+            const aIdStripped = aId.replace(/^emp-/, '');
+            const aEmail = (alloc.memberEmail || alloc.assignedToEmail || '').toLowerCase().trim();
+            const aName = (alloc.employeeName || '').toLowerCase().trim();
+            const isMatch =
+              docIdsToDelete.has(alloc.id) ||
+              (empId && (aId === empId || (empIdStripped && aIdStripped === empIdStripped))) ||
+              (empEmail && aEmail && aEmail === empEmail) ||
+              (empName && aName && aName === empName);
+            return !isMatch;
+          });
+          localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(remaining));
+          window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: remaining }));
+        }
+      }
+    } catch {}
+
+    // Delete matching documents directly from Firestore assigned_hours, allocations, and project_assignments
+    for (const docId of Array.from(docIdsToDelete)) {
+      try {
+        await deleteDoc(doc(db, 'assigned_hours', docId));
+      } catch {}
+      try {
+        await deleteDoc(doc(db, 'allocations', docId));
+      } catch {}
+      try {
+        await deleteDoc(doc(db, 'project_assignments', docId));
+      } catch {}
+    }
+
+    // Also scan assigned_hours and allocations collections for any documents referencing this member
+    for (const colName of ['assigned_hours', 'allocations', 'project_assignments']) {
+      try {
+        const snap = await getDocs(collection(db, colName));
+        for (const d of snap.docs) {
+          const data = d.data() || {};
+          const dEmpId = String(data.employeeId || data.memberId || data.assignedTo || '').trim();
+          const dEmpIdStripped = dEmpId.replace(/^emp-/, '');
+          const dEmail = String(data.memberEmail || data.assignedToEmail || data.email || '').toLowerCase().trim();
+          const dName = String(data.employeeName || data.name || '').toLowerCase().trim();
+          if (
+            (empId && (dEmpId === empId || (empIdStripped && dEmpIdStripped === empIdStripped))) ||
+            (empEmail && dEmail && dEmail === empEmail) ||
+            (empName && dName && dName === empName)
+          ) {
+            await deleteDoc(doc(db, colName, d.id)).catch(() => {});
+          }
+        }
+      } catch {}
+    }
+  };
+
+  const handleConfirmDeleteLog = async () => {
+    if (!logToDelete) {
       setLogToDelete(null);
       setDeleteCandidateLogs([]);
-      showMatrixDeleteNotice('No active hour logs found for this user in the current week to delete');
+      setMatrixTargetMember(null);
       return;
     }
+
+    const matchedEmp =
+      matrixTargetMember ||
+      allTrackedEmployees.find((emp) => doesLogMatchEmployee(logToDelete, emp)) || {
+        id: logToDelete.employeeId || '',
+        name: logToDelete.employeeName || '',
+        email: logToDelete.memberEmail || logToDelete.userEmail || '',
+      };
+
     if (logToDelete.employeeId) {
       const empId = logToDelete.employeeId;
       setModifiedMatrixEmpIds((prev) => (prev.includes(empId) ? prev : [...prev, empId]));
     }
-    const matchedEmp = allTrackedEmployees.find((emp) => doesLogMatchEmployee(logToDelete, emp));
-    if (matchedEmp) {
+    if (matchedEmp?.id) {
       setModifiedMatrixEmpIds((prev) =>
         prev.includes(matchedEmp.id) ? prev : [...prev, matchedEmp.id]
       );
     }
-    deleteWorkLog(logToDelete.id);
+
+    const hasActualDailyLogs =
+      deleteCandidateLogs.length > 0 &&
+      logToDelete.id !== '__fallback_allocation_delete__' &&
+      workLogs.some((w) => w.id === logToDelete.id);
+
+    if (hasActualDailyLogs) {
+      deleteWorkLog(logToDelete.id);
+    } else {
+      // Fallback: no matching daily_logs found -> delete from assigned_hours / allocations
+      await deleteFallbackAllocationsForMember(matchedEmp, logToDelete.id);
+      if (matchedEmp?.id) {
+        setDeletedMatrixEmpIds((prev) =>
+          prev.includes(matchedEmp.id) ? prev : [...prev, matchedEmp.id]
+        );
+        deleteEmployee(matchedEmp.id);
+      }
+    }
+
     setLogToDelete(null);
     setDeleteCandidateLogs([]);
+    setMatrixTargetMember(null);
+    showMatrixDeleteNotice('Record successfully deleted');
   };
 
   // Helper to match a work log to an employee record across all identifiers
@@ -362,8 +528,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
     });
 
-    return list;
-  }, [employees, workLogs, isSuperAdmin, currentUser]);
+    return list.filter((emp) => !deletedMatrixEmpIds.includes(emp.id));
+  }, [employees, workLogs, isSuperAdmin, currentUser, deletedMatrixEmpIds]);
 
   // Base filtered logs (by role/ownership, search, project, employee, discipline) before logTypeFilter
   const baseFilteredLogs = useMemo(() => {
@@ -504,13 +670,13 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Toast Alert for Empty Matrix Row Delete */}
+      {/* Toast Notification for Matrix / Log Deletion */}
       {matrixDeleteNotice && (
         <div
-          role="alert"
-          className="fixed top-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl bg-slate-900 border border-amber-500/40 text-amber-300 shadow-2xl text-xs font-semibold animate-in fade-in slide-in-from-top-2"
+          role="status"
+          className="fixed top-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-300 shadow-2xl text-xs font-semibold animate-in fade-in slide-in-from-top-2"
         >
-          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{matrixDeleteNotice}</span>
           <button
             type="button"
@@ -842,15 +1008,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => openMatrixRowDeleteModal(empWeekLogs, weekSum)}
-                              className={`p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition ${
-                                weekSum <= 0 || empWeekLogs.length === 0 ? 'opacity-50' : ''
-                              }`}
-                              title={
-                                weekSum > 0 && empWeekLogs.length > 0
-                                  ? 'Delete this daily log entry?'
-                                  : 'No active hour logs found for this user in the current week to delete'
-                              }
+                              onClick={() => openMatrixRowDeleteModal(emp, empWeekLogs, empAllLogs)}
+                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
+                              title="Delete this daily log entry?"
                               aria-label={`Delete daily log entry for ${emp.name}`}
                             >
                               <Trash2 className="w-3.5 h-3.5" />

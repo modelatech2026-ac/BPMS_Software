@@ -251,6 +251,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [allocationToDelete, setAllocationToDelete] = useState<ResourceAllocationItem | null>(null);
+  const [deleteSuccessNotice, setDeleteSuccessNotice] = useState<string | null>(null);
 
   // Form Inputs
   const [formProject, setFormProject] = useState(projects[0]?.id || 'p1');
@@ -736,10 +737,19 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     const updated = allocations.filter((a) => a.id !== id);
     saveAllocations(updated);
     setAllocationToDelete(null);
+    setDeleteSuccessNotice('Record successfully deleted');
+    window.setTimeout(() => {
+      setDeleteSuccessNotice((cur) => (cur === 'Record successfully deleted' ? null : cur));
+    }, 4000);
     try {
       await deleteDoc(doc(db, 'assigned_hours', id));
     } catch (err) {
       console.warn('Firestore deleteAllocation assigned_hours notice:', err);
+    }
+    try {
+      await deleteDoc(doc(db, 'allocations', id));
+    } catch (err) {
+      console.warn('Firestore deleteAllocation allocations notice:', err);
     }
     try {
       await deleteDoc(doc(db, 'project_assignments', id));
@@ -782,6 +792,23 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   return (
     <div className="space-y-6 pb-12">
+      {deleteSuccessNotice && (
+        <div
+          role="status"
+          className="fixed top-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-300 shadow-2xl text-xs font-semibold animate-in fade-in slide-in-from-top-2"
+        >
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{deleteSuccessNotice}</span>
+          <button
+            type="button"
+            onClick={() => setDeleteSuccessNotice(null)}
+            className="ml-2 p-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition"
+            aria-label="Dismiss notification"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
       {/* 1. WORKSPACE & METRICS HEADER */}
       <div className={`p-5 rounded-2xl border ${
         isLight ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800'
