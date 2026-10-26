@@ -21,9 +21,12 @@ import {
   Lock,
   ShieldCheck,
   Edit3,
+  Trash2,
   X,
   Check
 } from 'lucide-react';
+import { doc, deleteDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
 import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
 import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
@@ -39,20 +42,68 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onOpenNewProjectModal,
   onOpenReportModalWithProject,
 }) => {
-  const { projects, workLogs, getProjectCompletedHours, employees, updateProjectStatus, updateProject, currentUser, selectedProjectId } = useBimData();
+  const {
+    projects,
+    workLogs,
+    getProjectCompletedHours,
+    employees,
+    updateProjectStatus,
+    updateProject,
+    deleteProject,
+    currentUser,
+    selectedProjectId,
+  } = useBimData();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [disciplineFilter, setDisciplineFilter] = useState<string>('all');
   const [adminEditUnlocked, setAdminEditUnlocked] = useState(true);
   const [editingActualDateProject, setEditingActualDateProject] = useState<BimProject | null>(null);
   const [newActualDateValue, setNewActualDateValue] = useState('');
+  const [projectToDelete, setProjectToDelete] = useState<BimProject | null>(null);
+  const [deletedProjectIds, setDeletedProjectIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('bim_deleted_project_ids_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
 
   // Inline hours editing draft state keyed by `${projectId}:logged` or `${projectId}:estimated`
   const [inlineDrafts, setInlineDrafts] = useState<Record<string, string>>({});
   const [activeInlineKey, setActiveInlineKey] = useState<string | null>(null);
 
-  const hasSuperAdminOrDirectorRole = isUserSuperAdmin(currentUser);
+  const hasSuperAdminOrDirectorRole = Boolean(
+    isUserSuperAdmin(currentUser) ||
+      currentUser?.role === 'SUPER_ADMIN' ||
+      currentUser?.role === 'DIRECTOR' ||
+      currentUser?.appRole === 'SUPER_ADMIN' ||
+      currentUser?.appRole === 'DIRECTOR' ||
+      currentUser?.securityRole === 'Super Admin' ||
+      currentUser?.securityRole === 'Director'
+  );
   const isSuperAdmin = hasSuperAdminOrDirectorRole && adminEditUnlocked;
+
+  const handleConfirmDeleteProject = async () => {
+    if (!projectToDelete) return;
+    const targetId = projectToDelete.id;
+    setDeletedProjectIds((prev) => {
+      const next = prev.includes(targetId) ? prev : [...prev, targetId];
+      try {
+        localStorage.setItem('bim_deleted_project_ids_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    deleteProject(targetId);
+    setProjectToDelete(null);
+    try {
+      await deleteDoc(doc(db, 'projects', targetId));
+    } catch (err) {
+      console.warn('Firestore deleteProject notice:', err);
+    }
+  };
 
   const commitLoggedHours = (project: BimProject, rawValue: string) => {
     const parsed = parseFloat(rawValue);
@@ -98,7 +149,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     { id: 'CLOSED', label: 'CLOSED' },
   ];
 
-  const filteredProjects = projects.filter((p) => {
+  const activePortfolioProjects = projects.filter((p) => !deletedProjectIds.includes(p.id));
+
+  const filteredProjects = activePortfolioProjects.filter((p) => {
     const matchesScope = selectedProjectId === 'all' || p.id === selectedProjectId;
     const q = searchTerm.toLowerCase();
     const matchesSearch =
@@ -120,8 +173,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   });
 
   // Calculate total portfolio stats
-  const totalLoggedHours = projects.reduce((sum, p) => sum + getProjectCompletedHours(p.id), 0);
-  const totalEstimatedHours = projects.reduce((sum, p) => sum + p.totalEstimatedHours, 0);
+  const totalLoggedHours = activePortfolioProjects.reduce((sum, p) => sum + getProjectCompletedHours(p.id), 0);
+  const totalEstimatedHours = activePortfolioProjects.reduce((sum, p) => sum + p.totalEstimatedHours, 0);
 
   return (
     <div className="space-y-6 pb-12">
@@ -287,7 +340,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   </th>
                   <th className="py-3 px-3 min-w-[120px]">Difference</th>
                   <th className="py-3 px-3 min-w-[110px]">Hours Burn</th>
-                  <th className="py-3 px-3 text-right min-w-[90px]">Actions</th>
+                  <th className="py-3 px-3 text-right min-w-[110px]">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
@@ -593,7 +646,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                           </div>
                         </td>
 
-                        {/* Actions */}
+                        {/* Action */}
                         <td className="py-2.5 px-3 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
                             <button
@@ -609,6 +662,17 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                             >
                               View
                             </button>
+                            {hasSuperAdminOrDirectorRole && (
+                              <button
+                                type="button"
+                                onClick={() => setProjectToDelete(project)}
+                                className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
+                                title="Are you sure you want to permanently delete this project record?"
+                                aria-label={`Delete project ${project.name}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -619,6 +683,63 @@ export const ProjectList: React.FC<ProjectListProps> = ({
             </table>
           </div>
         </div>
+
+      {/* Super Admin / Director Confirmation Modal: Delete Project Record */}
+      {projectToDelete && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 text-slate-100 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">Confirm Project Deletion</h3>
+                  <p className="text-[11px] text-slate-400">Permanent Firestore record removal</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProjectToDelete(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <p className="text-slate-200 font-semibold text-sm">
+                Are you sure you want to permanently delete this project record?
+              </p>
+              <div className="p-3 rounded-xl bg-slate-800/70 border border-slate-700/80 space-y-1">
+                <div className="font-bold text-white">{projectToDelete.name}</div>
+                <div className="text-[11px] text-slate-400">
+                  Code: <span className="font-mono text-slate-300">{projectToDelete.code}</span> • Status:{' '}
+                  <span className="text-slate-300">{projectToDelete.status}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setProjectToDelete(null)}
+                className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteProject}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold transition flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Project</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Super Admin Modal: Edit Actual Delivered Date */}
       {editingActualDateProject && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">

@@ -735,13 +735,10 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                 <thead className="bg-slate-800/90 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-700 text-[11px]">
                   <tr>
                     <th className="py-3 px-4 min-w-[200px]">Team Member</th>
-                    <th className="py-3 px-3 min-w-[130px]">Discipline</th>
                     <th className="py-3 px-3 min-w-[120px]">Logged / Cap.</th>
                     <th className="py-3 px-3 min-w-[130px]">Efficiency Score</th>
-                    <th className="py-3 px-3 min-w-[110px]">Velocity</th>
                     <th className="py-3 px-3 min-w-[110px]">QA Pass Rate</th>
                     <th className="py-3 px-3 min-w-[120px]">Rating Tier</th>
-                    <th className="py-3 px-3 text-right min-w-[120px]">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
@@ -750,7 +747,6 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
 
                     const loggedHours = getEmployeeLoggedHours(emp.id);
                     const baseEfficiency = Math.min(100, Math.round(82 + (emp.rating ? emp.rating * 3.5 : 12) + (emp.experienceYears > 5 ? 3 : 1)));
-                    const velocity = (0.95 + (emp.experienceYears * 0.03)).toFixed(2);
                     const qaRate = Math.min(99.8, 92 + (emp.rating * 1.5)).toFixed(1);
                     const isStar = baseEfficiency >= 95;
                     const savedReview = evaluationFeedbackSaved[emp.id];
@@ -769,12 +765,6 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                             </div>
                             <div className="text-[11px] text-slate-400">{emp.role}</div>
                           </div>
-                        </td>
-
-                        <td className="py-3 px-3">
-                          <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold border ${getDisciplineBadge(emp.discipline)}`}>
-                            {emp.discipline}
-                          </span>
                         </td>
 
                         <td className="py-3 px-3 font-mono">
@@ -800,19 +790,24 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                         </td>
 
                         <td className="py-3 px-3 font-mono">
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-300">
-                            <TrendingUp className="w-3 h-3 text-cyan-400" />
-                            {velocity}x
-                          </span>
-                        </td>
-
-                        <td className="py-3 px-3 font-mono">
                           <span className="text-xs font-semibold text-purple-300">{qaRate}%</span>
                         </td>
 
                         <td className="py-3 px-3">
                           <span
+                            onClick={
+                              isSuperAdmin
+                                ? () => {
+                                    setEvaluatingEmployee(emp);
+                                    setEvaluationNotes(savedReview?.notes || '');
+                                    setEvaluationRating(savedReview?.rating || (isStar ? 'Star Performer' : 'High'));
+                                  }
+                                : undefined
+                            }
+                            title={isSuperAdmin ? 'Click to evaluate performance tier' : undefined}
                             className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                              isSuperAdmin ? 'cursor-pointer hover:opacity-85 transition' : ''
+                            } ${
                               isStar
                                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                                 : baseEfficiency >= 90
@@ -822,24 +817,6 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
                           >
                             {savedReview?.rating || (isStar ? 'Star Performer' : baseEfficiency >= 90 ? 'High Efficiency' : 'Optimal')}
                           </span>
-                        </td>
-
-                        <td className="py-3 px-3 text-right">
-                          {isSuperAdmin ? (
-                            <button
-                              onClick={() => {
-                                setEvaluatingEmployee(emp);
-                                setEvaluationNotes(savedReview?.notes || '');
-                                setEvaluationRating(savedReview?.rating || (isStar ? 'Star Performer' : 'High'));
-                              }}
-                              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white transition text-[11px] font-medium inline-flex items-center gap-1"
-                            >
-                              <Gauge className="w-3 h-3 text-amber-400" />
-                              <span>Evaluate</span>
-                            </button>
-                          ) : (
-                            <span className="text-[11px] text-slate-500 font-mono">Read-Only</span>
-                          )}
                         </td>
                       </tr>
                     );
