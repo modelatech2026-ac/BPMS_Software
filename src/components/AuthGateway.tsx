@@ -9,10 +9,20 @@ import {
   User,
   X,
   AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import { TwoFactorChallengeModal } from './TwoFactorChallengeModal';
 import { db } from '../firebase/config';
-import { addDoc, collection, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore';
+import {
+  addDoc,
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from 'firebase/firestore';
 import {
   isSuperAdminEmail,
   normalizeUserRole,
@@ -20,7 +30,7 @@ import {
   mapAppRoleToDisplayRole,
   mapUserRoleToSecurityRole,
 } from '../auth/googleAuth';
-import { fetchUserRoleFromDatabase, generateRequestDocId } from '../auth/roleSync';
+import { generateRequestDocId } from '../auth/roleSync';
 import { AccessLevel } from '../types';
 
 interface AuthGatewayProps {
@@ -52,7 +62,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     logout,
   } = useAuth();
 
-  const { currentUser, registerAccessRequest, signOut } = useBimData();
+  const { currentUser, onboardingRequests, registerAccessRequest, signOut } = useBimData();
 
   // View state: 'form' | 'pending'
   const [viewStep, setViewStep] = useState<'form' | 'pending'>(() => {
@@ -71,6 +81,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
   const [submittedRecord, setSubmittedRecord] = useState<SubmittedRequestData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Active user reference for real-time pending listener
   const activeUser = submittedRecord || (currentUser?.email ? {
@@ -91,15 +102,18 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         reqQuery,
         (snapshot) => {
           if (!snapshot.empty) {
-            const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as any));
+            const docs = snapshot.docs.map((d) => ({
+              id: d.id,
+              ...d.data({ serverTimestamps: 'estimate' }),
+            } as any));
             docs.sort((a, b) => {
               const aStatus = String(a.status || '').toLowerCase();
               const bStatus = String(b.status || '').toLowerCase();
               const aWeight = aStatus === 'approved' ? 3 : aStatus === 'rejected' ? 2 : 1;
               const bWeight = bStatus === 'approved' ? 3 : bStatus === 'rejected' ? 2 : 1;
               if (aWeight !== bWeight) return bWeight - aWeight;
-              const aTime = new Date(a.updatedAt || a.reviewedAt || a.timestamp || a.createdAt || 0).getTime() || 0;
-              const bTime = new Date(b.updatedAt || b.reviewedAt || b.timestamp || b.createdAt || 0).getTime() || 0;
+              const aTime = new Date(a.updatedAt || a.reviewedAt || a.timestamp || 0).getTime() || 0;
+              const bTime = new Date(b.updatedAt || b.reviewedAt || b.timestamp || 0).getTime() || 0;
               return bTime - aTime;
             });
             const data = docs[0];
@@ -201,6 +215,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     setInputErrors({});
     setIsLoading(true);
     setErrorMessage(null);
+    setSuccessMessage(null);
 
     const generatedUid = generateRequestDocId(cleanEmail);
     const isoTimestamp = new Date().toISOString();
@@ -208,119 +223,13 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     const userReason = 'Sign-in Access Request for ProductionPulse BPMS';
 
     try {
-      // 1. Check if user is already an approved user or Super Admin in Firestore
-      let existingRecord: Awaited<ReturnType<typeof fetchUserRoleFromDatabase>> | undefined;
-      try {
-        existingRecord = await fetchUserRoleFromDatabase(cleanEmail, generatedUid);
-      } catch (lookupErr) {
-        console.warn('Role lookup notice prior to submission:', lookupErr);
-      }
-
-      const isExistingUser = Boolean(existingRecord && existingRecord.source !== 'default');
-      const isApprovedUser =
-        isSuperAdminEmail(cleanEmail) ||
-        Boolean(isExistingUser && existingRecord?.status === 'APPROVED');
-
-      let finalDocId = existingRecord?.id || generatedUid;
-
-      if (isApprovedUser && existingRecord) {
-        // Approved user or Super Admin: update login activity without overwriting assigned role or status
-        const reqDoc = doc(db, 'access_requests', finalDocId);
-        await setDoc(
-          reqDoc,
-          {
-            id: finalDocId,
-            uid: finalDocId,
-            name: cleanName,
-            fullName: cleanName,
-            email: cleanEmail,
-            status: 'Approved',
-            role: existingRecord.role,
-            assignedRole: existingRecord.role,
-            assignedAccessLevel: existingRecord.accessLevel,
-            lastLoginAt: isoTimestamp,
-            lastActive: isoTimestamp,
-            updatedAt: isoTimestamp,
-          },
-          { merge: true }
-        );
-      } else {
-        // Unknown user or Pending user: strictly await addDoc to "access_requests" before showing "Request Sent"
-        const preservedRole = isExistingUser && existingRecord?.role ? existingRecord.role : 'EDITOR';
-        const preservedAccessLevel =
-          isExistingUser && existingRecord?.accessLevel ? existingRecord.accessLevel : 'Editor';
-
-        const requestPayload = {
-          fullName: cleanName,
+      // 1. Super Admin fast-path sign-in
+      if (isSuperAdminEmail(cleanEmail)) {
+        const result = await submitAccessRequest({
           name: cleanName,
           email: cleanEmail,
-          status: 'pending',
-          createdAt: isoTimestamp,
-          requestedAt: isoTimestamp,
-          timestamp: isoTimestamp,
-          requestTimestamp: isoTimestamp,
-          updatedAt: isoTimestamp,
-          requestedRole: 'Editor',
-          role: preservedRole === 'EDITOR' ? 'Editor' : preservedRole,
-          assignedRole: preservedRole,
-          assignedAccessLevel: preservedAccessLevel,
-          discipline: userDiscipline,
-          primaryDiscipline: userDiscipline,
-          organization: userDiscipline,
-          reasonForAccess: userReason,
-          accessReason: userReason,
-          notes: userReason,
-        };
-
-        const docRef = await addDoc(collection(db, 'access_requests'), requestPayload);
-        finalDocId = docRef.id;
-      }
-
-      // 2. Register in memory and notify listeners without repeating Firestore write
-      await registerAccessRequest({
-        name: cleanName,
-        fullName: cleanName,
-        email: cleanEmail,
-        discipline: userDiscipline,
-        reasonForAccess: userReason,
-        uid: finalDocId,
-        organization: userDiscipline,
-        accessReason: userReason,
-        existingDbRecord: isApprovedUser ? existingRecord : undefined,
-        skipFirestoreWrite: true,
-      });
-
-      // 3. Submit through AuthContext to establish session without repeating Firestore write
-      const effectiveRecordForSession = isApprovedUser && existingRecord
-        ? existingRecord
-        : {
-            role: 'EDITOR' as const,
-            status: 'PENDING' as const,
-            accessLevel: 'Editor' as const,
-            displayRole: 'BIM Modeler / Editor',
-            securityRole: 'BIM Specialist' as const,
-            source: 'database_access_requests' as const,
-            isApproved: false,
-            id: finalDocId,
-          };
-
-      const result = await submitAccessRequest({
-        name: cleanName,
-        email: cleanEmail,
-        uid: finalDocId,
-        existingDbRecord: effectiveRecordForSession,
-        skipFirestoreWrite: true,
-      });
-
-      const record: SubmittedRequestData = {
-        name: cleanName,
-        email: cleanEmail,
-        uid: finalDocId,
-      };
-      setSubmittedRecord(record);
-      setIsLoading(false);
-
-      if (result.status === 'APPROVED' || result.status === 'active') {
+          uid: generatedUid,
+        });
         const targetRoute =
           result.user?.appRole === 'VIEWER'
             ? '/daily-tracker'
@@ -330,13 +239,98 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         } else if (onClose) {
           onClose();
         }
-      } else {
-        // Show "Request Sent" ONLY after await addDoc(collection(db, "access_requests"), ...) completes
-        setViewStep('pending');
+        return;
       }
+
+      // 2. Write new pending access request directly to Firestore collection(db, "access_requests")
+      const requestPayload = {
+        fullName: cleanName,
+        name: cleanName,
+        email: cleanEmail,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+        requestedAt: isoTimestamp,
+        timestamp: isoTimestamp,
+        requestTimestamp: isoTimestamp,
+        updatedAt: isoTimestamp,
+        requestedRole: 'Editor',
+        role: 'Editor',
+        assignedRole: 'EDITOR',
+        assignedAccessLevel: 'Editor',
+        discipline: userDiscipline,
+        primaryDiscipline: userDiscipline,
+        organization: userDiscipline,
+        reasonForAccess: userReason,
+        accessReason: userReason,
+        notes: userReason,
+      };
+
+      let finalDocId = generatedUid;
+
+      // Execute addDoc to collection(db, "access_requests")
+      const writePromise = addDoc(collection(db, 'access_requests'), requestPayload);
+      const docRef = await Promise.race([
+        writePromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+      ]);
+
+      if (docRef && docRef.id) {
+        finalDocId = docRef.id;
+      } else {
+        // Fallback deterministic write if addDoc is still syncing
+        writePromise
+          .then((resolvedRef) => {
+            if (resolvedRef?.id) {
+              setSubmittedRecord((prev) => (prev ? { ...prev, uid: resolvedRef.id } : prev));
+            }
+          })
+          .catch((err) => console.warn('Deferred addDoc notice:', err));
+      }
+
+      // Also sync any existing deterministic doc for the same email to 'pending' so stale records never shadow it
+      const existingForEmail = onboardingRequests.filter(
+        (r) => (r.email || '').trim().toLowerCase() === cleanEmail && r.id !== finalDocId
+      );
+      if (existingForEmail.length > 0) {
+        existingForEmail.forEach((oldReq) => {
+          setDoc(
+            doc(db, 'access_requests', oldReq.id),
+            {
+              fullName: cleanName,
+              name: cleanName,
+              email: cleanEmail,
+              status: 'pending',
+              createdAt: serverTimestamp(),
+              updatedAt: isoTimestamp,
+            },
+            { merge: true }
+          ).catch(() => {});
+        });
+      }
+
+      // 3. Immediately update in-memory onboardingRequests state so Admin Nexus Pending Queue updates instantly
+      await registerAccessRequest({
+        name: cleanName,
+        fullName: cleanName,
+        email: cleanEmail,
+        discipline: userDiscipline,
+        reasonForAccess: userReason,
+        uid: finalDocId,
+        organization: userDiscipline,
+        accessReason: userReason,
+        skipFirestoreWrite: true,
+      });
+
+      const record: SubmittedRequestData = {
+        name: cleanName,
+        email: cleanEmail,
+        uid: finalDocId,
+      };
+      setSubmittedRecord(record);
+      setSuccessMessage('Request Submitted Successfully!');
+      setViewStep('pending');
     } catch (err: any) {
       console.error('Access request Firestore write error:', err);
-      setIsLoading(false);
       const rawMsg = String(err?.message || '');
       if (err?.code === 'permission-denied' || rawMsg.includes('Missing or insufficient permissions')) {
         setErrorMessage('Database permission error while saving your access request. Please contact the Super Administrator.');
@@ -347,6 +341,8 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
           rawMsg || 'Failed to submit access request to database. Please check your connection and try again.'
         );
       }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -464,6 +460,13 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         </div>
       )}
 
+      {successMessage && (
+        <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{successMessage}</span>
+        </div>
+      )}
+
       {/* Primary Blue Action Button: "→ Submit Request" */}
       <div className="pt-2">
         <button
@@ -509,15 +512,27 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
    * Render Pending Approval View
    */
   const renderPendingView = () => (
-    <div className="space-y-6 my-2 text-center animate-in fade-in duration-200">
-      <div>
+    <div className="space-y-5 my-2 text-center animate-in fade-in duration-200">
+      <div className="flex flex-col items-center gap-2">
+        <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mx-auto">
+          <CheckCircle2 className="w-6 h-6" />
+        </div>
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
           Status: Pending
         </span>
       </div>
 
-      <h1 className="text-2xl font-bold text-white tracking-tight">Request Sent</h1>
+      <h1 className="text-xl font-bold text-white tracking-tight">
+        {successMessage || 'Request Submitted Successfully!'}
+      </h1>
+
+      {activeUser?.email && (
+        <div className="px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-300 space-y-0.5">
+          <div className="font-semibold text-white">{activeUser.name}</div>
+          <div className="font-mono text-slate-400 text-[11px]">{activeUser.email}</div>
+        </div>
+      )}
 
       <p className="text-sm text-slate-400 max-w-sm mx-auto leading-relaxed">
         Your request has been sent to the Super Admin. Please wait for approval.
@@ -533,8 +548,11 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
             setEmail('');
             setInputErrors({});
             setErrorMessage(null);
-            logout();
-            signOut();
+            setSuccessMessage(null);
+            if (!isModal && (currentUser?.status || '').toUpperCase() !== 'APPROVED') {
+              logout();
+              signOut();
+            }
             if (isModal && onClose) {
               onClose();
             }

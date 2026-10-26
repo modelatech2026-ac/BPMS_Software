@@ -125,7 +125,11 @@ export const AdminNexus: React.FC = () => {
 
   const formatFirestoreTimestamp = (val: any): string => {
     if (!val) return '';
-    if (typeof val === 'string') return val;
+    if (typeof val === 'string') {
+      if (val === 'SERVER_TIMESTAMP' || val === '[object Object]') return '';
+      const parsed = new Date(val).getTime();
+      return Number.isNaN(parsed) ? '' : val;
+    }
     if (typeof val?.toDate === 'function') {
       try {
         return val.toDate().toISOString();
@@ -136,10 +140,20 @@ export const AdminNexus: React.FC = () => {
     if (typeof val?.seconds === 'number') {
       return new Date(val.seconds * 1000).toISOString();
     }
-    if (val instanceof Date) {
-      return val.toISOString();
+    if (typeof val?._seconds === 'number') {
+      return new Date(val._seconds * 1000).toISOString();
     }
-    return String(val);
+    if (val instanceof Date) {
+      return Number.isNaN(val.getTime()) ? '' : val.toISOString();
+    }
+    return '';
+  };
+
+  const isReqPending = (status?: string) => {
+    if (!status) return true;
+    if (status === 'pending') return true;
+    const s = String(status).trim().toLowerCase();
+    return s === 'pending' || s === 'pending_approval' || s.includes('pending');
   };
 
   const normalizeRawRequest = (raw: any): OnboardingRequest | null => {
@@ -208,18 +222,33 @@ export const AdminNexus: React.FC = () => {
 
   const deduplicateAndSortRequests = (rawList: OnboardingRequest[]): OnboardingRequest[] => {
     const byEmail = new Map<string, OnboardingRequest>();
-    // Sort by newest timestamp first so the latest submission or admin decision for an email always wins
+    const rank = (s?: string) => {
+      if (s === 'pending' || isReqPending(s)) return 3;
+      const u = (s || '').toUpperCase();
+      if (u === 'APPROVED' || u === 'ACTIVE') return 2;
+      return 1;
+    };
+
+    // Prioritize pending requests and newest timestamps so newly submitted pending requests always appear immediately
     const sorted = [...rawList].sort((a, b) => {
-      const tA = new Date(a.timestamp || a.createdAt || 0).getTime() || 0;
-      const tB = new Date(b.timestamp || b.createdAt || 0).getTime() || 0;
-      if (tB !== tA) return tB - tA;
-      const rank = (s?: string) => {
-        const u = (s || '').toUpperCase();
-        if (u === 'PENDING') return 3;
-        if (u === 'APPROVED' || u === 'ACTIVE') return 2;
-        return 1;
-      };
-      return rank(b.status) - rank(a.status);
+      const rA = rank(a.status);
+      const rB = rank(b.status);
+      if (rA !== rB) {
+        const pendingItem = rA === 3 ? a : rB === 3 ? b : null;
+        const otherItem = pendingItem === a ? b : a;
+        if (pendingItem) {
+          const pendingCreatedMs = new Date(pendingItem.createdAt || pendingItem.timestamp || 0).getTime() || 0;
+          const otherReviewedMs = new Date(otherItem.reviewedAt || 0).getTime() || 0;
+          if (otherReviewedMs > pendingCreatedMs + 1000) {
+            return otherItem === b ? 1 : -1;
+          }
+          return pendingItem === b ? 1 : -1;
+        }
+        return rB - rA;
+      }
+      const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
+      const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
+      return tB - tA;
     });
 
     for (const req of sorted) {
@@ -240,7 +269,7 @@ export const AdminNexus: React.FC = () => {
   const setAccessRequests = (rawRequests: any[]) => {
     const mapped = rawRequests.map(normalizeRawRequest).filter(Boolean) as OnboardingRequest[];
     const list = deduplicateAndSortRequests(mapped);
-    setOnboardingRequests(list);
+    setOnboardingRequests([...list]);
   };
 
   // Manual Live Sync fallback button handler
@@ -249,7 +278,10 @@ export const AdminNexus: React.FC = () => {
     setSyncError(null);
     try {
       const snapshot = await getDocs(collection(db, 'access_requests'));
-      const requests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      const requests = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data({ serverTimestamps: 'estimate' }),
+      }));
       setAccessRequests(requests);
     } catch (err: any) {
       console.error('Admin Nexus pending fetch error:', err);
@@ -263,9 +295,13 @@ export const AdminNexus: React.FC = () => {
   useEffect(() => {
     const unsubscribe = onSnapshot(
       collection(db, 'access_requests'),
+      { includeMetadataChanges: true },
       (snapshot) => {
         setSyncError(null);
-        const requests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        const requests = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data({ serverTimestamps: 'estimate' }),
+        }));
         setAccessRequests(requests);
         setLastSyncTime(new Date().toLocaleTimeString());
       },
@@ -276,12 +312,6 @@ export const AdminNexus: React.FC = () => {
     );
     return () => unsubscribe();
   }, []);
-
-  const isReqPending = (status?: string) => {
-    if (!status) return true;
-    const s = String(status).trim().toLowerCase();
-    return s === 'pending' || s === 'pending_approval' || s.includes('pending');
-  };
 
   // Dynamic Team Efficiency reference
   const members = employees;
@@ -705,7 +735,9 @@ export const AdminNexus: React.FC = () => {
     return matchesSearch && matchesAccess;
   });
 
-  const pendingRequests = onboardingRequests.filter((r) => isReqPending(r.status));
+  const pendingRequests = onboardingRequests.filter(
+    (r) => r.status === 'pending' || isReqPending(r.status)
+  );
   const pendingCount = pendingRequests.length;
   const approvedRequests = onboardingRequests.filter(
     (r) => (r.status || '').toUpperCase() === 'APPROVED'
@@ -714,11 +746,11 @@ export const AdminNexus: React.FC = () => {
     (r) => (r.status || '').toUpperCase() === 'REJECTED'
   );
 
-  // Access Review table filter: strictly displays active/pending requests (status === 'Pending')
+  // Access Review table filter: strictly displays active/pending requests (request.status === 'pending')
   const filteredOnboarding = onboardingRequests.filter((r) => {
     if (onboardingFilter === 'approved') return (r.status || '').toUpperCase() === 'APPROVED';
     // Strictly displays active/pending requests
-    return isReqPending(r.status);
+    return r.status === 'pending' || isReqPending(r.status);
   });
 
   const filteredRejectedRequests = rejectedRequests.filter((r) => {

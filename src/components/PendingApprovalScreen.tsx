@@ -32,15 +32,18 @@ export const PendingApprovalScreen: React.FC = () => {
         (snapshot) => {
           setSyncError(null);
           if (!snapshot.empty) {
-            const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as any));
+            const docs = snapshot.docs.map((d) => ({
+              id: d.id,
+              ...d.data({ serverTimestamps: 'estimate' }),
+            } as any));
             docs.sort((a, b) => {
               const aStatus = String(a.status || '').toLowerCase();
               const bStatus = String(b.status || '').toLowerCase();
               const aWeight = aStatus === 'approved' ? 3 : aStatus === 'rejected' ? 2 : 1;
               const bWeight = bStatus === 'approved' ? 3 : bStatus === 'rejected' ? 2 : 1;
               if (aWeight !== bWeight) return bWeight - aWeight;
-              const aTime = new Date(a.updatedAt || a.reviewedAt || a.timestamp || a.createdAt || 0).getTime() || 0;
-              const bTime = new Date(b.updatedAt || b.reviewedAt || b.timestamp || b.createdAt || 0).getTime() || 0;
+              const aTime = new Date(a.updatedAt || a.reviewedAt || a.timestamp || 0).getTime() || 0;
+              const bTime = new Date(b.updatedAt || b.reviewedAt || b.timestamp || 0).getTime() || 0;
               return bTime - aTime;
             });
             const data = docs[0];
@@ -107,7 +110,7 @@ export const PendingApprovalScreen: React.FC = () => {
 
         {/* Main Heading */}
         <h1 className="text-2xl font-bold text-white tracking-tight">
-          Request Sent
+          Request Submitted Successfully!
         </h1>
 
         {/* Subtext */}

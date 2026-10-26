@@ -723,7 +723,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  const [onboardingRequests, setOnboardingRequests] = useState<OnboardingRequest[]>([]);
+  const [onboardingRequests, setOnboardingRequests] = useState<OnboardingRequest[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.ONBOARDING);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_ONBOARDING_REQUESTS;
+  });
 
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>(() => {
     try {
@@ -809,13 +820,25 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [currentUser]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.ONBOARDING, JSON.stringify(onboardingRequests));
+    } catch {
+      // ignore
+    }
+  }, [onboardingRequests]);
+
   // Synchronize Firestore access_requests collection into onboardingRequests in real-time
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
 
     const formatFirestoreTimestamp = (val: any): string => {
       if (!val) return '';
-      if (typeof val === 'string') return val;
+      if (typeof val === 'string') {
+        if (val === 'SERVER_TIMESTAMP' || val === '[object Object]') return '';
+        const parsed = new Date(val).getTime();
+        return Number.isNaN(parsed) ? '' : val;
+      }
       if (typeof val?.toDate === 'function') {
         try {
           return val.toDate().toISOString();
@@ -826,14 +849,24 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (typeof val?.seconds === 'number') {
         return new Date(val.seconds * 1000).toISOString();
       }
-      if (val instanceof Date) {
-        return val.toISOString();
+      if (typeof val?._seconds === 'number') {
+        return new Date(val._seconds * 1000).toISOString();
       }
-      return String(val);
+      if (val instanceof Date) {
+        return Number.isNaN(val.getTime()) ? '' : val.toISOString();
+      }
+      return '';
+    };
+
+    const isPendingStatus = (status?: string) => {
+      if (!status) return true;
+      if (status === 'pending') return true;
+      const s = String(status).trim().toLowerCase();
+      return s === 'pending' || s === 'pending_approval' || s.includes('pending');
     };
 
     const mapDocToRequest = (d: any): OnboardingRequest | null => {
-      const data = typeof d.data === 'function' ? d.data() : d;
+      const data = typeof d.data === 'function' ? d.data({ serverTimestamps: 'estimate' }) : d;
       if (!data) return null;
       const cleanEmail = String(data.email || data.userEmail || data.memberEmail || '').trim().toLowerCase();
       if (!cleanEmail) return null;
@@ -846,7 +879,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         ? 'APPROVED'
         : rawStatus === 'rejected' || rawStatus === 'declined'
         ? 'REJECTED'
-        : 'Pending';
+        : 'pending';
 
       const fullName = String(data.fullName || data.name || cleanEmail.split('@')[0]).trim();
       const discipline = String(data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS');
@@ -899,18 +932,33 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const deduplicateAndSortRequests = (rawList: OnboardingRequest[]): OnboardingRequest[] => {
       const byEmail = new Map<string, OnboardingRequest>();
-      // Sort by newest timestamp first so latest submission or admin review for an email wins
+      const rank = (s?: string) => {
+        if (s === 'pending' || isPendingStatus(s)) return 3;
+        const u = (s || '').toUpperCase();
+        if (u === 'APPROVED' || u === 'ACTIVE') return 2;
+        return 1;
+      };
+
+      // Prioritize pending requests and newest timestamps so newly submitted pending requests always appear immediately
       const sorted = [...rawList].sort((a, b) => {
-        const tA = new Date(a.timestamp || a.createdAt || 0).getTime() || 0;
-        const tB = new Date(b.timestamp || b.createdAt || 0).getTime() || 0;
-        if (tB !== tA) return tB - tA;
-        const rank = (s?: string) => {
-          const u = (s || '').toUpperCase();
-          if (u === 'PENDING') return 3;
-          if (u === 'APPROVED' || u === 'ACTIVE') return 2;
-          return 1;
-        };
-        return rank(b.status) - rank(a.status);
+        const rA = rank(a.status);
+        const rB = rank(b.status);
+        if (rA !== rB) {
+          const pendingItem = rA === 3 ? a : rB === 3 ? b : null;
+          const otherItem = pendingItem === a ? b : a;
+          if (pendingItem) {
+            const pendingCreatedMs = new Date(pendingItem.createdAt || pendingItem.timestamp || 0).getTime() || 0;
+            const otherReviewedMs = new Date(otherItem.reviewedAt || 0).getTime() || 0;
+            if (otherReviewedMs > pendingCreatedMs + 1000) {
+              return otherItem === b ? 1 : -1;
+            }
+            return pendingItem === b ? 1 : -1;
+          }
+          return rB - rA;
+        }
+        const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
+        const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
+        return tB - tA;
       });
 
       for (const req of sorted) {
@@ -983,13 +1031,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         }
       };
 
-      // Real-time onSnapshot listener (delivers initial snapshot + live changes without redundant getDocs)
+      // Real-time onSnapshot listener on access_requests
       unsubscribe = onSnapshot(
         colRef,
+        { includeMetadataChanges: true },
         (snapshot) => {
           const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
           const list = deduplicateAndSortRequests(rawList);
-          setOnboardingRequests(list);
+          setOnboardingRequests([...list]);
           syncApprovedToEmployees(list);
         },
         (err) => {
@@ -1083,25 +1132,27 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               INITIAL_PROJECTS.map((mp) => [normalizeProjectNameKey(mp.name), mp])
             );
 
-            // Seed / sync all 32 master portfolio projects to Firestore once
+            // Seed missing master portfolio projects to Firestore once without rewriting already-synced docs
             if (!hasSeededProjectsRef.current && !snapshot.metadata.fromCache) {
               hasSeededProjectsRef.current = true;
               const baseList = mergeWithMasterProjects(prev);
               baseList.forEach((p) => {
-                const sanitized = JSON.parse(JSON.stringify(p));
-                setDoc(
-                  doc(db, 'projects', p.id),
-                  {
-                    ...sanitized,
-                    projectName: p.name,
-                    status: p.status || 'WIP',
-                    estimatedHours: Number(p.totalEstimatedHours) || 0,
-                    totalHoursLogged: Number(p.totalCompletedHours) || 0,
-                    plannedDeliveryDate: p.plannedDeliveryDate || p.targetCompletionDate || '',
-                    createdAt: serverTimestamp(),
-                  },
-                  { merge: true }
-                ).catch(() => {});
+                if (!firestoreDocsMap.has(p.id)) {
+                  const sanitized = JSON.parse(JSON.stringify(p));
+                  setDoc(
+                    doc(db, 'projects', p.id),
+                    {
+                      ...sanitized,
+                      projectName: p.name,
+                      status: p.status || 'WIP',
+                      estimatedHours: Number(p.totalEstimatedHours) || 0,
+                      totalHoursLogged: Number(p.totalCompletedHours) || 0,
+                      plannedDeliveryDate: p.plannedDeliveryDate || p.targetCompletionDate || '',
+                      createdAt: serverTimestamp(),
+                    },
+                    { merge: true }
+                  ).catch(() => {});
+                }
               });
 
               // Remove any legacy duplicate Firestore docs that have the same normalized name as a canonical master project
@@ -1789,20 +1840,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const discipline = params.discipline || params.organization || 'BIM - ACS';
     const reasonForAccess = params.reasonForAccess || params.accessReason || 'Sign-in Access Request for ProductionPulse BPMS';
 
-    // Check if an access request already exists in memory or Firestore database
+    // Check if an access request already exists in memory
     const existingReq = onboardingRequests.find(
       (r) => (r.email || '').toLowerCase().trim() === trimmedEmail || r.id === requestId
     );
-    const dbRecord = params.existingDbRecord || (await fetchUserRoleFromDatabase(trimmedEmail, requestId));
-    const isExistingUser = Boolean(existingReq || (dbRecord && dbRecord.source !== 'default'));
+    const dbRecord = params.existingDbRecord;
 
     const preservedAppRole: UserRole =
       existingReq?.assignedRole ||
       (dbRecord && dbRecord.source !== 'default' ? dbRecord.role : 'EDITOR');
 
     const preservedStatus: UserApprovalStatus =
-      existingReq?.status ||
-      (dbRecord && dbRecord.source !== 'default' ? dbRecord.status : 'Pending');
+      params.existingDbRecord?.status === 'APPROVED' ? 'APPROVED' : 'pending';
 
     const preservedAccessLevel: AccessLevel =
       existingReq?.assignedAccessLevel ||
@@ -1812,7 +1861,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       existingReq?.role ||
       (dbRecord && dbRecord.source !== 'default' ? dbRecord.displayRole : mapAppRoleToDisplayRole(preservedAppRole));
 
-    const effectiveDocId = existingReq?.id || requestId;
+    const effectiveDocId = params.uid || existingReq?.id || requestId;
 
     const newRequest: OnboardingRequest = {
       id: effectiveDocId,
@@ -1827,42 +1876,40 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       assignedAccessLevel: preservedAccessLevel,
       primaryDiscipline: existingReq?.primaryDiscipline || discipline,
       discipline: existingReq?.discipline || discipline,
-      createdAt: existingReq?.createdAt || isoTimestamp,
-      requestedAt: existingReq?.requestedAt || isoTimestamp,
-      requestTimestamp: existingReq?.requestTimestamp || timestamp,
-      timestamp: existingReq?.timestamp || isoTimestamp,
+      createdAt: isoTimestamp,
+      requestedAt: isoTimestamp,
+      requestTimestamp: timestamp,
+      timestamp: isoTimestamp,
       status: preservedStatus,
       organization: existingReq?.organization || discipline,
-      reasonForAccess: existingReq?.reasonForAccess || reasonForAccess,
-      accessReason: existingReq?.accessReason || reasonForAccess,
-      notes: existingReq?.notes || 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
-      reviewedBy: existingReq?.reviewedBy,
-      reviewedAt: existingReq?.reviewedAt,
+      reasonForAccess: reasonForAccess || existingReq?.reasonForAccess,
+      accessReason: reasonForAccess || existingReq?.accessReason,
+      notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+      reviewedBy: preservedStatus === 'pending' ? undefined : existingReq?.reviewedBy,
+      reviewedAt: preservedStatus === 'pending' ? undefined : existingReq?.reviewedAt,
     };
 
-    // 1. Update in-memory React state while preserving existing assigned roles
+    // 1. Update in-memory React state immediately so Pending Queue (N) reflects the new request without manual refresh
     setOnboardingRequests((prev) => [
       newRequest,
       ...prev.filter((r) => (r.email || '').toLowerCase().trim() !== trimmedEmail && r.id !== effectiveDocId),
     ]);
 
-    // 2. Log to Admin Audit Trail if newly registered
-    if (!isExistingUser) {
-      const newAudit: AdminAuditLog = {
-        id: `audit-${Date.now()}`,
-        action: 'joined',
-        targetUserEmail: trimmedEmail,
-        targetUserName: formattedName,
-        performedBy: 'Sign-in Access Gateway',
-        timestamp,
-        details: `New access request submitted from sign-in: ${formattedName} (${trimmedEmail}). Registered in Admin Nexus awaiting Super Admin approval.`,
-      };
-      setAuditLogs((prev) => [newAudit, ...prev]);
-    }
+    // 2. Log to Admin Audit Trail
+    const newAudit: AdminAuditLog = {
+      id: `audit-${Date.now()}`,
+      action: 'joined',
+      targetUserEmail: trimmedEmail,
+      targetUserName: formattedName,
+      performedBy: 'Sign-in Access Gateway',
+      timestamp,
+      details: `New access request submitted from sign-in: ${formattedName} (${trimmedEmail}). Registered in Admin Nexus awaiting Super Admin approval.`,
+    };
+    setAuditLogs((prev) => [newAudit, ...prev]);
 
     // 3. Save to central database collection Firestore access_requests unless caller already wrote it
     if (!params.skipFirestoreWrite) {
-      if (isExistingUser && preservedStatus === 'APPROVED') {
+      if (preservedStatus === 'APPROVED') {
         const reqDoc = doc(db, 'access_requests', effectiveDocId);
         await setDoc(
           reqDoc,
@@ -1892,7 +1939,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           role: 'Editor',
           assignedRole: 'EDITOR',
           requestedRole: 'Editor',
-          createdAt: isoTimestamp,
+          createdAt: serverTimestamp(),
           requestedAt: isoTimestamp,
           timestamp: isoTimestamp,
           requestTimestamp: timestamp,
