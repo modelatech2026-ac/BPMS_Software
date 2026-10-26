@@ -62,6 +62,8 @@ interface BimDataContextType {
   projects: BimProject[];
   employees: Employee[];
   workLogs: DailyWorkLog[];
+  allWorkLogs: DailyWorkLog[];
+  resourceAllocations: ResourceAllocationItem[];
   generatedReports: GeneratedStakeholderReport[];
   savedReports?: GeneratedStakeholderReport[];
   selectedProjectId: string;
@@ -453,14 +455,11 @@ export const isTabAllowedForRole = (tab: ViewTab, role: SecurityRole): boolean =
       return role === 'Super Admin';
     case 'dashboard':
     case 'stakeholder-reports':
-    case 'assign-hours':
-    case 'clash-lod':
       return (
         role === 'Super Admin' ||
         role === 'Director' ||
         role === 'Project Manager'
       );
-    case 'project-members':
     case 'employees':
       return (
         role === 'Super Admin' ||
@@ -472,6 +471,9 @@ export const isTabAllowedForRole = (tab: ViewTab, role: SecurityRole): boolean =
     case 'projects':
     case 'project-feedback':
       return role !== 'Viewer';
+    case 'assign-hours':
+    case 'clash-lod':
+    case 'project-members':
     case 'daily-tracker':
       return true;
     default:
@@ -1352,132 +1354,160 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Synchronize Firestore work_logs collection into state in real-time via onSnapshot()
+  // Synchronize Firestore work_logs and daily_logs collections into state in real-time via onSnapshot()
   // - Super Admins & Directors view all organizational daily logs in real time
-  // - Standard engineers view their own logs (enforced via role-scoped workLogs memo & DailyHourTracker)
-  // - Project hour totals (Total Logged Hours & Remaining Hours) recalculate automatically on every snapshot
+  // - Viewers & standard engineers submit daily logs to daily_logs / work_logs and sync bi-directionally
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
+    let unsubWorkLogs: (() => void) | undefined;
+    let unsubDailyLogs: (() => void) | undefined;
+
+    const workLogsMap = new Map<string, DailyWorkLog>();
+    const dailyLogsMap = new Map<string, DailyWorkLog>();
+
+    const parseLogDoc = (docSnap: any): DailyWorkLog => {
+      const data = docSnap.data();
+      const normalizedEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
+      const resolvedCreatedAt =
+        typeof data.createdAt === 'string'
+          ? data.createdAt
+          : typeof data.createdAt?.toDate === 'function'
+          ? data.createdAt.toDate().toISOString()
+          : typeof data.createdAt?.seconds === 'number'
+          ? new Date(data.createdAt.seconds * 1000).toISOString()
+          : data.timestamp || new Date().toISOString();
+      return {
+        id: docSnap.id,
+        employeeId: data.employeeId || data.userId || '',
+        employeeName: data.employeeName || 'BIM Modeler',
+        projectId: data.projectId || '',
+        projectName: data.projectName || 'BIM Project',
+        date: data.date || new Date().toISOString().slice(0, 10),
+        hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
+        discipline: (data.discipline as Discipline) || 'BIM - ACS',
+        activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
+        taskName: data.taskName || 'BIM Modeling Task',
+        lodStage: (data.lodStage as LODLevel) || 'LOD 350',
+        notes: data.notes || '',
+        billable: data.billable !== undefined ? Boolean(data.billable) : true,
+        timestamp: data.timestamp || resolvedCreatedAt,
+        memberEmail: normalizedEmail,
+        userEmail: normalizedEmail,
+        userId: data.userId || data.employeeId || '',
+        isTestEntry: Boolean(data.isTestEntry ?? false),
+        loggedBy: data.loggedBy || normalizedEmail || data.employeeName || '',
+        createdAt: resolvedCreatedAt,
+      };
+    };
+
+    const syncMergedLogs = () => {
+      const combined = new Map<string, DailyWorkLog>();
+      workLogsMap.forEach((v, k) => combined.set(k, v));
+      dailyLogsMap.forEach((v, k) => combined.set(k, v));
+
+      const list = Array.from(combined.values());
+      list.sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      });
+
+      setAllWorkLogs(list);
+
+      if (list.length > 0) {
+        setEmployees((currentEmployees) => {
+          let changed = false;
+          const updated = [...currentEmployees];
+
+          list.forEach((log) => {
+            const emailKey = (log.memberEmail || log.userEmail || '').trim().toLowerCase();
+            const nameKey = (log.employeeName || '').trim().toLowerCase();
+            const rawId = (log.employeeId || log.userId || '').trim();
+            const strippedId = rawId.replace(/^emp-/, '');
+
+            if (!emailKey && !nameKey && !rawId) return;
+            if (emailKey === 'sushovan.das@bimworkspace.com' || emailKey === 'aditi@bimworkspace.com') return;
+
+            const exists = updated.some((e) => {
+              const eEmail = (e.email || '').trim().toLowerCase();
+              const eName = (e.name || '').trim().toLowerCase();
+              const eIdStripped = (e.id || '').replace(/^emp-/, '');
+              return (
+                (rawId && (e.id === rawId || eIdStripped === strippedId)) ||
+                (emailKey && eEmail === emailKey) ||
+                (nameKey && eName === nameKey)
+              );
+            });
+
+            if (!exists && (nameKey || emailKey)) {
+              changed = true;
+              const empId = rawId.startsWith('emp-')
+                ? rawId
+                : rawId
+                ? `emp-${rawId}`
+                : emailKey
+                ? `emp-${generateRequestDocId(emailKey)}`
+                : `emp-${Date.now()}`;
+              const displayName = log.employeeName || (emailKey ? emailKey.split('@')[0] : 'BIM Engineer');
+              const disc = (log.discipline as Discipline) || 'BIM - ACS';
+
+              updated.push({
+                id: empId,
+                name: displayName,
+                email: emailKey,
+                role: 'BIM Modeler' as any,
+                primaryDiscipline: disc,
+                discipline: disc,
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
+                weeklyCapacityHours: 40,
+                experienceYears: 3,
+                status: 'Active',
+                activeProjectIds: log.projectId ? [log.projectId] : [],
+                skills: [disc],
+                phone: '',
+              });
+            }
+          });
+
+          return changed ? updated : currentEmployees;
+        });
+      }
+    };
 
     try {
-      const colRef = collection(db, 'work_logs');
-      unsubscribe = onSnapshot(
-        colRef,
+      unsubWorkLogs = onSnapshot(
+        collection(db, 'work_logs'),
         (snapshot) => {
-          const list: DailyWorkLog[] = snapshot.docs.map((docSnap) => {
-            const data = docSnap.data();
-            const normalizedEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
-            const resolvedCreatedAt =
-              typeof data.createdAt === 'string'
-                ? data.createdAt
-                : typeof data.createdAt?.toDate === 'function'
-                ? data.createdAt.toDate().toISOString()
-                : typeof data.createdAt?.seconds === 'number'
-                ? new Date(data.createdAt.seconds * 1000).toISOString()
-                : data.timestamp || new Date().toISOString();
-            return {
-              id: docSnap.id,
-              employeeId: data.employeeId || data.userId || '',
-              employeeName: data.employeeName || 'BIM Modeler',
-              projectId: data.projectId || '',
-              projectName: data.projectName || 'BIM Project',
-              date: data.date || new Date().toISOString().slice(0, 10),
-              hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
-              discipline: (data.discipline as Discipline) || 'BIM - ACS',
-              activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
-              taskName: data.taskName || 'BIM Modeling Task',
-              lodStage: (data.lodStage as LODLevel) || 'LOD 350',
-              notes: data.notes || '',
-              billable: data.billable !== undefined ? Boolean(data.billable) : true,
-              timestamp: data.timestamp || resolvedCreatedAt,
-              memberEmail: normalizedEmail,
-              userEmail: normalizedEmail,
-              userId: data.userId || data.employeeId || '',
-              isTestEntry: Boolean(data.isTestEntry ?? false),
-              loggedBy: data.loggedBy || normalizedEmail || data.employeeName || '',
-              createdAt: resolvedCreatedAt,
-            };
+          workLogsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            workLogsMap.set(docSnap.id, parseLogDoc(docSnap));
           });
-
-          // Sort newest first by log date, then submission timestamp
-          list.sort((a, b) => {
-            const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
-            if (dateDiff !== 0) return dateDiff;
-            return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-          });
-
-          setAllWorkLogs(list);
-
-          // Ensure any engineer who submitted work logs is represented in employees state
-          if (list.length > 0) {
-            setEmployees((currentEmployees) => {
-              let changed = false;
-              const updated = [...currentEmployees];
-
-              list.forEach((log) => {
-                const emailKey = (log.memberEmail || log.userEmail || '').trim().toLowerCase();
-                const nameKey = (log.employeeName || '').trim().toLowerCase();
-                const rawId = (log.employeeId || log.userId || '').trim();
-                const strippedId = rawId.replace(/^emp-/, '');
-
-                if (!emailKey && !nameKey && !rawId) return;
-                if (emailKey === 'sushovan.das@bimworkspace.com' || emailKey === 'aditi@bimworkspace.com') return;
-
-                const exists = updated.some((e) => {
-                  const eEmail = (e.email || '').trim().toLowerCase();
-                  const eName = (e.name || '').trim().toLowerCase();
-                  const eIdStripped = (e.id || '').replace(/^emp-/, '');
-                  return (
-                    (rawId && (e.id === rawId || eIdStripped === strippedId)) ||
-                    (emailKey && eEmail === emailKey) ||
-                    (nameKey && eName === nameKey)
-                  );
-                });
-
-                if (!exists && (nameKey || emailKey)) {
-                  changed = true;
-                  const empId = rawId.startsWith('emp-')
-                    ? rawId
-                    : rawId
-                    ? `emp-${rawId}`
-                    : emailKey
-                    ? `emp-${generateRequestDocId(emailKey)}`
-                    : `emp-${Date.now()}`;
-                  const displayName = log.employeeName || (emailKey ? emailKey.split('@')[0] : 'BIM Engineer');
-                  const disc = (log.discipline as Discipline) || 'BIM - ACS';
-
-                  updated.push({
-                    id: empId,
-                    name: displayName,
-                    email: emailKey,
-                    role: 'BIM Modeler' as any,
-                    primaryDiscipline: disc,
-                    discipline: disc,
-                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
-                    weeklyCapacityHours: 40,
-                    experienceYears: 3,
-                    status: 'Active',
-                    activeProjectIds: log.projectId ? [log.projectId] : [],
-                    skills: [disc],
-                    phone: '',
-                  });
-                }
-              });
-
-              return changed ? updated : currentEmployees;
-            });
-          }
+          syncMergedLogs();
         },
         (err) => {
           console.warn('Firestore work_logs real-time listener notice:', err);
         }
       );
+
+      unsubDailyLogs = onSnapshot(
+        collection(db, 'daily_logs'),
+        (snapshot) => {
+          dailyLogsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            dailyLogsMap.set(docSnap.id, parseLogDoc(docSnap));
+          });
+          syncMergedLogs();
+        },
+        (err) => {
+          console.warn('Firestore daily_logs real-time listener notice:', err);
+        }
+      );
     } catch (e) {
-      console.warn('Firestore work_logs setup error:', e);
+      console.warn('Firestore work_logs/daily_logs setup error:', e);
     }
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      if (unsubWorkLogs) unsubWorkLogs();
+      if (unsubDailyLogs) unsubDailyLogs();
     };
   }, [
     currentUser?.email,
@@ -1488,9 +1518,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     currentUser?.accessLevel,
   ]);
 
-  // Synchronize Firestore project_assignments collection into resourceAllocations in real-time
+  // Synchronize Firestore assigned_hours and project_assignments collections into resourceAllocations in real-time
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
+    let unsubProjectAssignments: (() => void) | undefined;
+    let unsubAssignedHours: (() => void) | undefined;
+
+    const projectAssignmentsMap = new Map<string, ResourceAllocationItem>();
+    const assignedHoursMap = new Map<string, ResourceAllocationItem>();
 
     const handleLocalAllocUpdate = (e: any) => {
       if (e?.detail && Array.isArray(e.detail)) {
@@ -1499,52 +1533,79 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
     window.addEventListener('bim_resource_allocations_updated', handleLocalAllocUpdate);
 
-    try {
-      const colRef = collection(db, 'project_assignments');
-      unsubscribe = onSnapshot(
-        colRef,
-        (snapshot) => {
-          const remoteAllocations: ResourceAllocationItem[] = snapshot.docs.map((docSnap) => {
-            const data = docSnap.data();
-            return {
-              id: docSnap.id,
-              projectId: data.projectId || '',
-              projectName: data.projectName || 'Unassigned Project',
-              employeeId: data.employeeId || '',
-              employeeName: data.employeeName || '',
-              employeeRole: data.employeeRole || 'Editor',
-              memberEmail: data.memberEmail || '',
-              discipline: data.discipline || 'BIM - ACS',
-              lod: data.lod || 'LOD 350',
-              projectPhase: data.projectPhase || 'Design Development',
-              taskType: data.taskType || '3D Modeling',
-              targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
-              assignedHours: Number(data.assignedHours) || 0,
-              viewFrequency: data.viewFrequency || 'Weekly',
-              startDate: data.startDate || toLocalIsoDate(new Date()),
-              dueDate: data.dueDate || toLocalIsoDate(new Date()),
-              priority: data.priority || 'High',
-              status: data.status || 'Allocated',
-              notes: data.notes || '',
-            };
-          });
+    const parseAllocDoc = (docSnap: any): ResourceAllocationItem => {
+      const data = docSnap.data();
+      return {
+        id: docSnap.id,
+        projectId: data.projectId || '',
+        projectName: data.projectName || 'Unassigned Project',
+        employeeId: data.employeeId || data.assignedTo || '',
+        employeeName: data.employeeName || '',
+        employeeRole: data.employeeRole || 'Editor',
+        memberEmail: data.memberEmail || '',
+        discipline: data.discipline || 'BIM - ACS',
+        lod: data.lod || 'LOD 350',
+        projectPhase: data.projectPhase || 'Design Development',
+        taskType: data.taskType || '3D Modeling',
+        targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
+        assignedHours: Number(data.assignedHours) || 0,
+        viewFrequency: data.viewFrequency || 'Weekly',
+        startDate: data.startDate || toLocalIsoDate(new Date()),
+        dueDate: data.dueDate || toLocalIsoDate(new Date()),
+        ...(data.priority ? { priority: data.priority } : {}),
+        status: data.status || 'Allocated',
+        notes: data.notes || '',
+      };
+    };
 
-          setResourceAllocations(remoteAllocations);
-          try {
-            localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(remoteAllocations));
-          } catch {}
+    const syncMergedAllocations = () => {
+      const combined = new Map<string, ResourceAllocationItem>();
+      projectAssignmentsMap.forEach((v, k) => combined.set(k, v));
+      assignedHoursMap.forEach((v, k) => combined.set(k, v));
+      const remoteAllocations = Array.from(combined.values());
+
+      setResourceAllocations(remoteAllocations);
+      try {
+        localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(remoteAllocations));
+      } catch {}
+    };
+
+    try {
+      unsubProjectAssignments = onSnapshot(
+        collection(db, 'project_assignments'),
+        (snapshot) => {
+          projectAssignmentsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            projectAssignmentsMap.set(docSnap.id, parseAllocDoc(docSnap));
+          });
+          syncMergedAllocations();
         },
         (err) => {
           console.warn('Firestore project_assignments context listener notice:', err);
         }
       );
+
+      unsubAssignedHours = onSnapshot(
+        collection(db, 'assigned_hours'),
+        (snapshot) => {
+          assignedHoursMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            assignedHoursMap.set(docSnap.id, parseAllocDoc(docSnap));
+          });
+          syncMergedAllocations();
+        },
+        (err) => {
+          console.warn('Firestore assigned_hours context listener notice:', err);
+        }
+      );
     } catch (e) {
-      console.warn('Firestore project_assignments context setup error:', e);
+      console.warn('Firestore assigned_hours context setup error:', e);
     }
 
     return () => {
       window.removeEventListener('bim_resource_allocations_updated', handleLocalAllocUpdate);
-      if (unsubscribe) unsubscribe();
+      if (unsubProjectAssignments) unsubProjectAssignments();
+      if (unsubAssignedHours) unsubAssignedHours();
     };
   }, []);
 
@@ -2741,20 +2802,23 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     // 1. Optimistic state update in allWorkLogs
     setAllWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
 
-    // 2. Persist to central Firestore work_logs collection
+    // 2. Persist to central Firestore daily_logs and work_logs collections for bi-directional sync
     try {
-      const logDoc = doc(db, 'work_logs', logId);
       const sanitizedLog = JSON.parse(JSON.stringify(newLog));
-      setDoc(
-        logDoc,
-        {
-          ...sanitizedLog,
-          isTestEntry: isTestEntryFlag,
-          loggedBy: loggedByValue,
-          createdAt: createdAtValue,
-        },
-        { merge: true }
-      ).catch((err) => console.warn('Firestore addWorkLog sync notice:', err));
+      const payload = {
+        ...sanitizedLog,
+        hours: hoursValue,
+        hoursLogged: hoursValue,
+        isTestEntry: isTestEntryFlag,
+        loggedBy: loggedByValue,
+        createdAt: createdAtValue,
+      };
+      setDoc(doc(db, 'daily_logs', logId), payload, { merge: true }).catch((err) =>
+        console.warn('Firestore daily_logs addWorkLog sync notice:', err)
+      );
+      setDoc(doc(db, 'work_logs', logId), payload, { merge: true }).catch((err) =>
+        console.warn('Firestore work_logs addWorkLog sync notice:', err)
+      );
     } catch (fsErr) {
       console.warn('Firestore addWorkLog error:', fsErr);
     }
@@ -2806,8 +2870,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const payload = fullUpdated ? { ...fullUpdated, ...updates } : { id, ...updates };
       const sanitizedUpdates = JSON.parse(JSON.stringify(payload));
+      setDoc(doc(db, 'daily_logs', id), sanitizedUpdates, { merge: true }).catch((err) =>
+        console.warn('Firestore daily_logs updateWorkLog sync notice:', err)
+      );
       setDoc(doc(db, 'work_logs', id), sanitizedUpdates, { merge: true }).catch((err) =>
-        console.warn('Firestore updateWorkLog sync notice:', err)
+        console.warn('Firestore work_logs updateWorkLog sync notice:', err)
       );
     } catch (e) {
       console.warn('Firestore updateWorkLog notice:', e);
@@ -2868,8 +2935,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       return prev.filter((w) => w.id !== id);
     });
     try {
+      deleteDoc(doc(db, 'daily_logs', id)).catch((err) =>
+        console.warn('Firestore daily_logs deleteWorkLog sync notice:', err)
+      );
       deleteDoc(doc(db, 'work_logs', id)).catch((err) =>
-        console.warn('Firestore deleteWorkLog sync notice:', err)
+        console.warn('Firestore work_logs deleteWorkLog sync notice:', err)
       );
     } catch (e) {
       console.warn('Firestore deleteWorkLog notice:', e);
@@ -3370,6 +3440,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         projects,
         employees,
         workLogs,
+        allWorkLogs,
+        resourceAllocations,
         generatedReports,
         savedReports: generatedReports,
         selectedProjectId,

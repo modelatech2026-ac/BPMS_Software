@@ -63,6 +63,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     projects,
     employees,
     workLogs,
+    allWorkLogs,
     theme,
     currentUser,
     disciplineAssignments,
@@ -70,22 +71,30 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   } = useBimData();
   const isLight = theme === 'light';
   const isSuperAdmin = isUserSuperAdmin(currentUser);
+  const canManageAllocations = useMemo(() => {
+    if (isSuperAdmin) return true;
+    const role = (
+      currentUser?.securityRole ||
+      currentUser?.accessLevel ||
+      currentUser?.role ||
+      ''
+    ).toLowerCase();
+    const appRole = (currentUser?.appRole || '').toUpperCase();
+    return (
+      role.includes('admin') ||
+      role.includes('director') ||
+      role.includes('manager') ||
+      appRole === 'SUPER_ADMIN' ||
+      appRole === 'DIRECTOR' ||
+      appRole === 'PROJECT_MANAGER'
+    );
+  }, [currentUser, isSuperAdmin]);
+  const activeWorkLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs;
   const activeMembers = employees;
 
-  // Helper to test if allocation belongs to a live active team member (Super Admins have global visibility across all allocations)
-  const isLiveActiveMember = (item: ResourceAllocationItem) => {
-    if (isSuperAdmin || activeMembers.length === 0) return true;
-    if (item.memberEmail) {
-      const matchByEmail = activeMembers.some(
-        (m) => (m.email || '').toLowerCase().trim() === item.memberEmail?.toLowerCase().trim()
-      );
-      if (matchByEmail) return true;
-    }
-    return activeMembers.some(
-      (m) =>
-        m.id === item.employeeId ||
-        (item.employeeName && (m.name || '').toLowerCase().trim() === item.employeeName.toLowerCase().trim())
-    );
+  // All allocations from Firestore assigned_hours / project_assignments are visible in real time
+  const isLiveActiveMember = (_item: ResourceAllocationItem) => {
+    return true;
   };
 
   // State
@@ -111,74 +120,106 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   const hasInitialSeededRef = React.useRef(false);
 
-  // Real-time Firestore listener on project_assignments collection
+  // Real-time Firestore listener on assigned_hours and project_assignments collections
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-    try {
-      const colRef = collection(db, 'project_assignments');
-      unsubscribe = onSnapshot(
-        colRef,
-        (snapshot) => {
-          const remoteAllocations: ResourceAllocationItem[] = snapshot.docs.map((docSnap) => {
-            const data = docSnap.data();
-            const matchedProj = projects.find((p) => matchProjectId(p.id, data.projectId));
-            const resolvedEmpId = data.assignedTo || data.employeeId || '';
-            const matchedEmp = employees.find(
-              (e) =>
-                e.id === resolvedEmpId ||
-                e.id.replace(/^emp-/, '') === String(resolvedEmpId).replace(/^emp-/, '')
-            );
-            return {
-              id: docSnap.id,
-              projectId: data.projectId || matchedProj?.id || '',
-              projectName: data.projectName || matchedProj?.name || 'Unassigned Project',
-              employeeId: matchedEmp?.id || resolvedEmpId,
-              employeeName: data.employeeName || matchedEmp?.name || '',
-              employeeRole: data.employeeRole || matchedEmp?.role || 'Editor',
-              memberEmail: data.memberEmail || matchedEmp?.email || '',
-              discipline: data.discipline || matchedEmp?.discipline || 'BIM - ACS',
-              lod: data.lod || 'LOD 350',
-              projectPhase: data.projectPhase || 'Design Development',
-              taskType: data.taskType || '3D Modeling',
-              targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
-              assignedHours: Number(data.assignedHours) || 0,
-              viewFrequency: data.viewFrequency || 'Weekly',
-              startDate: data.startDate || getCurrentWeekRange().startIso,
-              dueDate: data.dueDate || getCurrentWeekRange().endIso,
-              ...(data.priority ? { priority: data.priority } : {}),
-              status: data.status || 'Allocated',
-              notes: data.notes || '',
-            };
-          });
+    let unsubAssignedHours: (() => void) | undefined;
+    let unsubProjectAssignments: (() => void) | undefined;
 
-          if (remoteAllocations.length > 0 || !snapshot.metadata.fromCache) {
-            setAllocations((prev) => {
-              if (!hasInitialSeededRef.current) {
-                hasInitialSeededRef.current = true;
-                if (remoteAllocations.length === 0 && prev.length > 0) {
-                  // Seed existing local allocations once on initial load
-                  prev.forEach((item) => {
-                    const sanitized = JSON.parse(JSON.stringify(item));
-                    setDoc(doc(db, 'project_assignments', item.id), sanitized, { merge: true }).catch(() => {});
-                  });
-                  return prev;
-                }
-              }
-              return remoteAllocations;
-            });
+    const assignedHoursMap = new Map<string, ResourceAllocationItem>();
+    const projectAssignmentsMap = new Map<string, ResourceAllocationItem>();
+
+    const parseSnapshotDoc = (docSnap: any): ResourceAllocationItem => {
+      const data = docSnap.data();
+      const matchedProj = projects.find((p) => matchProjectId(p.id, data.projectId));
+      const resolvedEmpId = data.assignedTo || data.employeeId || '';
+      const matchedEmp = employees.find(
+        (e) =>
+          e.id === resolvedEmpId ||
+          e.id.replace(/^emp-/, '') === String(resolvedEmpId).replace(/^emp-/, '')
+      );
+      return {
+        id: docSnap.id,
+        projectId: data.projectId || matchedProj?.id || '',
+        projectName: data.projectName || matchedProj?.name || 'Unassigned Project',
+        employeeId: matchedEmp?.id || resolvedEmpId,
+        employeeName: data.employeeName || matchedEmp?.name || '',
+        employeeRole: data.employeeRole || matchedEmp?.role || 'Editor',
+        memberEmail: data.memberEmail || matchedEmp?.email || '',
+        discipline: data.discipline || matchedEmp?.discipline || 'BIM - ACS',
+        lod: data.lod || 'LOD 350',
+        projectPhase: data.projectPhase || 'Design Development',
+        taskType: data.taskType || '3D Modeling',
+        targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
+        assignedHours: Number(data.assignedHours) || 0,
+        viewFrequency: data.viewFrequency || 'Weekly',
+        startDate: data.startDate || getCurrentWeekRange().startIso,
+        dueDate: data.dueDate || getCurrentWeekRange().endIso,
+        ...(data.priority ? { priority: data.priority } : {}),
+        status: data.status || 'Allocated',
+        notes: data.notes || '',
+      };
+    };
+
+    const syncMerged = (fromCache: boolean) => {
+      const combined = new Map<string, ResourceAllocationItem>();
+      projectAssignmentsMap.forEach((v, k) => combined.set(k, v));
+      assignedHoursMap.forEach((v, k) => combined.set(k, v));
+      const remoteAllocations = Array.from(combined.values());
+
+      if (remoteAllocations.length > 0 || !fromCache) {
+        setAllocations((prev) => {
+          if (!hasInitialSeededRef.current) {
+            hasInitialSeededRef.current = true;
+            if (remoteAllocations.length === 0 && prev.length > 0) {
+              prev.forEach((item) => {
+                const sanitized = JSON.parse(JSON.stringify(item));
+                setDoc(doc(db, 'assigned_hours', item.id), sanitized, { merge: true }).catch(() => {});
+                setDoc(doc(db, 'project_assignments', item.id), sanitized, { merge: true }).catch(() => {});
+              });
+              return prev;
+            }
           }
+          return remoteAllocations;
+        });
+      }
+    };
+
+    try {
+      unsubAssignedHours = onSnapshot(
+        collection(db, 'assigned_hours'),
+        (snapshot) => {
+          assignedHoursMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            assignedHoursMap.set(docSnap.id, parseSnapshotDoc(docSnap));
+          });
+          syncMerged(snapshot.metadata.fromCache);
+        },
+        (err) => {
+          console.warn('Firestore assigned_hours listener notice:', err);
+        }
+      );
+
+      unsubProjectAssignments = onSnapshot(
+        collection(db, 'project_assignments'),
+        (snapshot) => {
+          projectAssignmentsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            projectAssignmentsMap.set(docSnap.id, parseSnapshotDoc(docSnap));
+          });
+          syncMerged(snapshot.metadata.fromCache);
         },
         (err) => {
           console.warn('Firestore project_assignments listener notice:', err);
         }
       );
     } catch (e) {
-      console.warn('Firestore project_assignments setup error:', e);
+      console.warn('Firestore assigned_hours setup error:', e);
     }
     return () => {
-      if (unsubscribe) unsubscribe();
+      if (unsubAssignedHours) unsubAssignedHours();
+      if (unsubProjectAssignments) unsubProjectAssignments();
     };
-  }, [projects]);
+  }, [projects, employees]);
 
   // Sync allocations with activeMembers collection
   useEffect(() => {
@@ -238,7 +279,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const [formNotes, setFormNotes] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Persist allocations to state, localStorage, and Firestore project_assignments
+  // Persist allocations to state, localStorage, and Firestore assigned_hours & project_assignments
   const saveAllocations = (newAllocations: ResourceAllocationItem[], changedItem?: ResourceAllocationItem) => {
     setAllocations(newAllocations);
     localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(newAllocations));
@@ -251,10 +292,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           discipline: changedItem.discipline || 'BIM - ACS',
           updatedAt: new Date().toISOString(),
         };
+        const assignedHoursRef = doc(db, 'assigned_hours', changedItem.id);
+        updateDoc(assignedHoursRef, sanitized).catch(() => {
+          setDoc(assignedHoursRef, sanitized, { merge: true }).catch((err) =>
+            console.warn('Firestore saveAllocation assigned_hours sync notice:', err)
+          );
+        });
         const targetRef = doc(db, 'project_assignments', changedItem.id);
         updateDoc(targetRef, sanitized).catch(() => {
           setDoc(targetRef, sanitized, { merge: true }).catch((err) =>
-            console.warn('Firestore saveAllocation sync notice:', err)
+            console.warn('Firestore saveAllocation project_assignments sync notice:', err)
           );
         });
       } catch (e) {
@@ -314,6 +361,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     try {
       const assignRef = doc(db, 'project_assignments', allocationId);
+      const assignedHoursRef = doc(db, 'assigned_hours', allocationId);
       const updatePayload = {
         assignedTo: emp?.id || memberId,
         employeeId: emp?.id || memberId,
@@ -323,6 +371,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         discipline: resolvedDiscipline,
         updatedAt: new Date().toISOString(),
       };
+      try {
+        await updateDoc(assignedHoursRef, updatePayload);
+      } catch {
+        await setDoc(assignedHoursRef, { ...(updatedTarget || {}), ...updatePayload }, { merge: true });
+      }
       try {
         await updateDoc(assignRef, updatePayload);
       } catch {
@@ -338,20 +391,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
   };
 
-  // Helper to get live active allocations (Super Admins have global visibility across all allocations)
+  // All allocations synced from Firestore assigned_hours & project_assignments
   const liveActiveAllocations = useMemo(() => {
-    if (isSuperAdmin || activeMembers.length === 0) return allocations;
-    return allocations.filter((a) => {
-      if (a.memberEmail && activeMembers.some((m) => (m.email || '').toLowerCase().trim() === a.memberEmail?.toLowerCase().trim())) {
-        return true;
-      }
-      return activeMembers.some(
-        (m) =>
-          m.id === a.employeeId ||
-          (a.employeeName && (m.name || '').toLowerCase().trim() === a.employeeName.toLowerCase().trim())
-      );
-    });
-  }, [allocations, activeMembers, isSuperAdmin]);
+    return allocations;
+  }, [allocations]);
 
   // Helper to get total weekly hours assigned to an employee
   const getEmployeeWeeklyHours = useMemo(() => {
@@ -391,8 +434,23 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     // Calculate total logged hours matching the current allocation scope (excluding test entries)
     const loggedHours = filteredByEmployee.reduce((sum, alloc) => {
-      const rowLogged = workLogs
-        .filter((w) => !w.isTestEntry && w.employeeId === alloc.employeeId && matchProjectId(w.projectId, alloc.projectId))
+      const rowLogged = activeWorkLogs
+        .filter((w) => {
+          if (w.isTestEntry) return false;
+          if (!matchProjectId(w.projectId, alloc.projectId)) return false;
+          const matchId =
+            w.employeeId === alloc.employeeId ||
+            (w.employeeId || '').replace(/^emp-/, '') === (alloc.employeeId || '').replace(/^emp-/, '');
+          const matchEmail =
+            Boolean(alloc.memberEmail) &&
+            ((w.memberEmail || (w as any).userEmail || '').toLowerCase().trim() ===
+              alloc.memberEmail!.toLowerCase().trim());
+          const matchName =
+            Boolean(alloc.employeeName) &&
+            (w.employeeName || '').toLowerCase().trim() ===
+              alloc.employeeName.toLowerCase().trim();
+          return matchId || matchEmail || matchName;
+        })
         .reduce((wSum, w) => wSum + (Number(w.hoursLogged) || 0), 0);
       return sum + rowLogged;
     }, 0);
@@ -454,7 +512,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       completionRate,
       priorityBreakdown
     };
-  }, [projects, employees, liveActiveAllocations, workLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours]);
+  }, [projects, employees, liveActiveAllocations, activeWorkLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours]);
 
   // Filtered Allocations based on 2 Dropdowns (Project + Team Member) and Search
   const filteredAllocations = useMemo(() => {
@@ -595,9 +653,14 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     saveAllocations(updated);
     setAllocationToDelete(null);
     try {
+      await deleteDoc(doc(db, 'assigned_hours', id));
+    } catch (err) {
+      console.warn('Firestore deleteAllocation assigned_hours notice:', err);
+    }
+    try {
       await deleteDoc(doc(db, 'project_assignments', id));
     } catch (err) {
-      console.warn('Firestore deleteAllocation notice:', err);
+      console.warn('Firestore deleteAllocation project_assignments notice:', err);
     }
   };
 
@@ -654,7 +717,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               )}
             </div>
             <h1 className="text-xl font-bold text-white tracking-tight mt-1.5 flex items-center gap-2">
-              Assign Hours System
+              Assigned Hours System
             </h1>
             <p className="text-xs text-slate-400 mt-0.5">
               Track allocated hours, timeline efficiency, delivery throughput, and specialist capacities across all BIM disciplines.
@@ -683,13 +746,15 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               </button>
             </div>
 
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-md transition"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Assign New Hours</span>
-            </button>
+            {canManageAllocations && (
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-md transition"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Assign New Hours</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -869,7 +934,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   const resolvedProjectId = matchedProject?.id || alloc.projectId;
                   const resolvedProjectName = matchedProject?.name || alloc.projectName || 'Unassigned Project';
 
-                  const loggedHours = workLogs
+                  const loggedHours = activeWorkLogs
                     .filter((w) => {
                       if (w.isTestEntry) return false;
                       const sameProj = matchProjectId(w.projectId, alloc.projectId);
@@ -901,7 +966,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                             {(alloc.employeeName || 'U').split(' ').map((n) => n[0]).join('')}
                           </div>
                           <div>
-                            {isSuperAdmin && employees.length > 0 ? (
+                            {canManageAllocations && employees.length > 0 ? (
                               <select
                                 aria-label={`Assigned team member for ${alloc.discipline || 'BIM - ACS'}`}
                                 value={
@@ -942,7 +1007,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
                       {/* Project (Synced with Firestore projectId / projectName) */}
                       <td className="py-3 px-3">
-                        {isSuperAdmin ? (
+                        {canManageAllocations ? (
                           <div className="flex items-center gap-1.5">
                             <Building className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                             <select
@@ -973,19 +1038,26 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         )}
                       </td>
 
-                      {/* Assigned Hours (Inline Editable) */}
+                      {/* Assigned Hours (Inline Editable for Admins, Read-Only for Viewers) */}
                       <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="number"
-                            min={0.5}
-                            step={0.5}
-                            value={alloc.assignedHours}
-                            onChange={(e) => handleInlineHoursChange(alloc.id, parseFloat(e.target.value) || 0)}
-                            className="w-16 px-2 py-1 text-xs font-mono font-bold rounded bg-slate-800 border border-slate-700 text-white text-center focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          />
-                          <span className="text-[10px] text-slate-400">hrs</span>
-                        </div>
+                        {canManageAllocations ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min={0.5}
+                              step={0.5}
+                              value={alloc.assignedHours}
+                              onChange={(e) => handleInlineHoursChange(alloc.id, parseFloat(e.target.value) || 0)}
+                              className="w-16 px-2 py-1 text-xs font-mono font-bold rounded bg-slate-800 border border-slate-700 text-white text-center focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            />
+                            <span className="text-[10px] text-slate-400">hrs</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-white">
+                            <span>{Number(alloc.assignedHours || 0).toFixed(1)}</span>
+                            <span className="text-[10px] font-normal text-slate-400">hrs</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Logged Hours */}
@@ -1006,17 +1078,23 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         </div>
                       </td>
 
-                      {/* Action (Delete Allocation with Confirmation Prompt) */}
+                      {/* Action (Delete Allocation with Confirmation Prompt for Admins) */}
                       <td className="py-3 px-3.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setAllocationToDelete(alloc)}
-                          className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition inline-flex items-center justify-center"
-                          title={`Delete allocation for ${alloc.employeeName}`}
-                          aria-label={`Delete allocation for ${alloc.employeeName}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {canManageAllocations ? (
+                          <button
+                            type="button"
+                            onClick={() => setAllocationToDelete(alloc)}
+                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition inline-flex items-center justify-center"
+                            title={`Delete allocation for ${alloc.employeeName}`}
+                            aria-label={`Delete allocation for ${alloc.employeeName}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                            Assigned
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );

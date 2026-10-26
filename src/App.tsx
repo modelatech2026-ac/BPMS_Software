@@ -388,24 +388,16 @@ function BimAppContent() {
             <DailyHourTracker onOpenLogModal={() => handleOpenLogModal()} />
           )}
 
-          {isTabAllowedForRole('project-members', effectiveSecurityRole) && currentTab === 'project-members' && (
-            <ProjectMemberTracking
-              onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
-              onOpenNewProjectModal={() => setIsNewProjectModalOpen(true)}
-              onOpenLogModalForMember={(empId) => handleOpenLogModal()}
-              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
-            />
-          )}
-
           {isTabAllowedForRole('employees', effectiveSecurityRole) && currentTab === 'employees' && (
             <EmployeeDirectory
               onOpenNewEmployeeModal={() => setIsNewEmployeeModalOpen(true)}
               onOpenLogModalForEmployee={(empId) => handleOpenLogModal()}
+              onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
             />
           )}
 
           {isTabAllowedForRole('assign-hours', effectiveSecurityRole) &&
-            (currentTab === 'assign-hours' || currentTab === 'clash-lod') && (
+            (currentTab === 'assign-hours' || currentTab === 'clash-lod' || currentTab === 'project-members') && (
               <AssignHoursSystem
                 onSelectProject={(proj) => setSelectedProjectForDetail(proj)}
               />

@@ -107,8 +107,14 @@ service cloud.firestore {
       allow delete: if isValidId(projectId) && (isSuperAdmin() || request.time != null);
     }
 
-    // Project Assignments Collection
+    // Project Assignments & Assigned Hours Collections
     match /project_assignments/{assignmentId} {
+      allow get, list: if isSuperAdmin() || request.time != null;
+      allow create, update: if isValidId(assignmentId) && (isSuperAdmin() || incoming().keys().size() > 0);
+      allow delete: if isValidId(assignmentId) && (isSuperAdmin() || request.time != null);
+    }
+
+    match /assigned_hours/{assignmentId} {
       allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(assignmentId) && (isSuperAdmin() || incoming().keys().size() > 0);
       allow delete: if isValidId(assignmentId) && (isSuperAdmin() || request.time != null);

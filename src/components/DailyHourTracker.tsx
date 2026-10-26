@@ -74,6 +74,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const [editingLog, setEditingLog] = useState<DailyWorkLog | null>(null);
   const [editCandidateLogs, setEditCandidateLogs] = useState<DailyWorkLog[]>([]);
   const [modifiedMatrixEmpIds, setModifiedMatrixEmpIds] = useState<string[]>([]);
+  const [matrixDeleteNotice, setMatrixDeleteNotice] = useState<string | null>(null);
+
+  const showMatrixDeleteNotice = (message: string) => {
+    setMatrixDeleteNotice(message);
+    window.setTimeout(() => {
+      setMatrixDeleteNotice((current) => (current === message ? null : current));
+    }, 4000);
+  };
 
   // Edit form fields
   const [editEmployeeId, setEditEmployeeId] = useState('');
@@ -143,10 +151,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     openEditLogModal(draftLog, empLogs);
   };
 
-  const openMatrixRowDeleteModal = (empLogs: DailyWorkLog[]) => {
-    if (empLogs.length === 0) return;
-    setDeleteCandidateLogs(empLogs);
-    setLogToDelete(empLogs[0]);
+  const openMatrixRowDeleteModal = (empWeekLogs: DailyWorkLog[], weekTotalHours: number = 0) => {
+    const validWeekLogs = empWeekLogs.filter((l) => (Number(l.hoursLogged) || 0) > 0);
+    if (weekTotalHours <= 0 || validWeekLogs.length === 0) {
+      showMatrixDeleteNotice('No active hour logs found for this user in the current week to delete');
+      return;
+    }
+    setDeleteCandidateLogs(validWeekLogs);
+    setLogToDelete(validWeekLogs[0]);
   };
 
   const handleSaveEditedLog = (e: React.FormEvent) => {
@@ -210,7 +222,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   };
 
   const handleConfirmDeleteLog = () => {
-    if (!logToDelete) return;
+    if (!logToDelete || (Number(logToDelete.hoursLogged) || 0) <= 0) {
+      setLogToDelete(null);
+      setDeleteCandidateLogs([]);
+      showMatrixDeleteNotice('No active hour logs found for this user in the current week to delete');
+      return;
+    }
     if (logToDelete.employeeId) {
       const empId = logToDelete.employeeId;
       setModifiedMatrixEmpIds((prev) => (prev.includes(empId) ? prev : [...prev, empId]));
@@ -487,6 +504,25 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
   return (
     <div className="space-y-6 pb-12">
+      {/* Toast Alert for Empty Matrix Row Delete */}
+      {matrixDeleteNotice && (
+        <div
+          role="alert"
+          className="fixed top-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl bg-slate-900 border border-amber-500/40 text-amber-300 shadow-2xl text-xs font-semibold animate-in fade-in slide-in-from-top-2"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{matrixDeleteNotice}</span>
+          <button
+            type="button"
+            onClick={() => setMatrixDeleteNotice(null)}
+            className="ml-2 p-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition"
+            aria-label="Dismiss notification"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
         <div>
@@ -838,13 +874,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => openMatrixRowDeleteModal(empActionLogs)}
-                              disabled={empActionLogs.length === 0}
-                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                              onClick={() => openMatrixRowDeleteModal(empWeekLogs, weekSum)}
+                              className={`p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition ${
+                                weekSum <= 0 || empWeekLogs.length === 0 ? 'opacity-50' : ''
+                              }`}
                               title={
-                                empActionLogs.length > 0
+                                weekSum > 0 && empWeekLogs.length > 0
                                   ? 'Delete this daily log entry?'
-                                  : 'No daily log entries recorded for this member'
+                                  : 'No active hour logs found for this user in the current week to delete'
                               }
                               aria-label={`Delete daily log entry for ${emp.name}`}
                             >
