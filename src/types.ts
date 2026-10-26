@@ -306,7 +306,7 @@ export interface ResourceAllocationItem {
   viewFrequency: 'Daily' | 'Weekly';
   startDate: string;
   dueDate: string;
-  priority: AllocationPriority;
+  priority?: AllocationPriority;
   status: 'Allocated' | 'In Progress' | 'Completed' | 'Delayed';
   notes?: string;
 }

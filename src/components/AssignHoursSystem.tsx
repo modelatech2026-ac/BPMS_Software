@@ -145,7 +145,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               viewFrequency: data.viewFrequency || 'Weekly',
               startDate: data.startDate || getCurrentWeekRange().startIso,
               dueDate: data.dueDate || getCurrentWeekRange().endIso,
-              priority: data.priority || 'High',
+              ...(data.priority ? { priority: data.priority } : {}),
               status: data.status || 'Allocated',
               notes: data.notes || '',
             };
@@ -235,7 +235,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const [formHours, setFormHours] = useState<number>(20);
   const [formStartDate, setFormStartDate] = useState(() => getCurrentWeekRange().startIso);
   const [formDueDate, setFormDueDate] = useState(() => getCurrentWeekRange().endIso);
-  const [formPriority, setFormPriority] = useState<AllocationPriority>('High');
   const [formNotes, setFormNotes] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -526,7 +525,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       viewFrequency,
       startDate: formStartDate,
       dueDate: formDueDate,
-      priority: formPriority,
       status: 'Allocated',
       notes: formNotes
     };
@@ -1256,8 +1254,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                 </div>
               </div>
 
-              {/* Hours, Priority, Dates */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              {/* Hours & Dates */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
                     Assigned Hours *
@@ -1271,22 +1269,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
                     required
                   />
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">
-                    Priority Level
-                  </label>
-                  <select
-                    value={formPriority}
-                    onChange={(e) => setFormPriority(e.target.value as AllocationPriority)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="Low">Low</option>
-                    <option value="Medium">Medium</option>
-                    <option value="High">High</option>
-                    <option value="Critical">Critical</option>
-                  </select>
                 </div>
 
                 <div>
