@@ -635,78 +635,46 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
           </button>
         </div>
 
-        {/* Date Range Filter & Entry Type Filter Buttons */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-xs">
-            <Calendar className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-            <span className="text-slate-400 font-medium whitespace-nowrap">Date Range:</span>
-            <input
-              type="date"
-              aria-label="Filter logs from start date"
-              value={startDateFilter}
-              onChange={(e) => setStartDateFilter(e.target.value)}
-              className="bg-slate-800 text-slate-200 rounded px-2 py-0.5 border border-slate-700 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            <span className="text-slate-500">to</span>
-            <input
-              type="date"
-              aria-label="Filter logs to end date"
-              value={endDateFilter}
-              onChange={(e) => setEndDateFilter(e.target.value)}
-              className="bg-slate-800 text-slate-200 rounded px-2 py-0.5 border border-slate-700 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            {(startDateFilter || endDateFilter) && (
+        {/* Entry Type Filter Buttons (Detailed Log Records only) */}
+        {activeView === 'logs' && (
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs">
               <button
                 type="button"
-                onClick={() => {
-                  setStartDateFilter('');
-                  setEndDateFilter('');
-                }}
-                className="ml-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-300 border border-slate-700 text-[11px] font-semibold flex items-center gap-1 transition"
-                title="Clear date range filter"
+                onClick={() => setLogTypeFilter('all')}
+                className={`px-3 py-1 rounded-md font-semibold transition ${
+                  logTypeFilter === 'all'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
               >
-                <X className="w-3 h-3" />
-                <span>Clear</span>
+                All Logs ({baseFilteredLogs.length})
               </button>
-            )}
+              <button
+                type="button"
+                onClick={() => setLogTypeFilter('operational')}
+                className={`px-3 py-1 rounded-md font-semibold transition ${
+                  logTypeFilter === 'operational'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Operational Only ({operationalCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setLogTypeFilter('test')}
+                className={`px-3 py-1 rounded-md font-semibold transition flex items-center gap-1 ${
+                  logTypeFilter === 'test'
+                    ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
+                    : 'text-amber-300/80 hover:text-amber-300'
+                }`}
+              >
+                <span>Test Logs Only ({testCount})</span>
+              </button>
+            </div>
           </div>
-
-          <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs">
-            <button
-              type="button"
-              onClick={() => setLogTypeFilter('all')}
-              className={`px-3 py-1 rounded-md font-semibold transition ${
-                logTypeFilter === 'all'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              All Logs ({baseFilteredLogs.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setLogTypeFilter('operational')}
-              className={`px-3 py-1 rounded-md font-semibold transition ${
-                logTypeFilter === 'operational'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Operational Only ({operationalCount})
-            </button>
-            <button
-              type="button"
-              onClick={() => setLogTypeFilter('test')}
-              className={`px-3 py-1 rounded-md font-semibold transition flex items-center gap-1 ${
-                logTypeFilter === 'test'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
-                  : 'text-amber-300/80 hover:text-amber-300'
-              }`}
-            >
-              <span>Test Logs Only ({testCount})</span>
-            </button>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Matrix View: Employee rows across days of the week */}
@@ -971,8 +939,10 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <option value="MEP - HVAC">MEP - HVAC</option>
                 <option value="MEP - Electrical">MEP - Electrical</option>
                 <option value="MEP - Plumbing">MEP - Plumbing</option>
+                <option value="Fire Protection">Fire Protection</option>
                 <option value="Façade / Envelope">Façade / Envelope</option>
                 <option value="Coordination & QA">Coordination & QA</option>
+                <option value="AI & Automation">AI & Automation</option>
               </select>
             </div>
 
@@ -1348,6 +1318,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     <option value="Façade / Envelope">Façade / Envelope</option>
                     <option value="Coordination & QA">Coordination & QA</option>
                     <option value="Fire Protection">Fire Protection</option>
+                    <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
 
@@ -1373,6 +1344,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     <option value="COBie & Asset Data Entry">COBie & Asset Data Entry</option>
                     <option value="Scan-to-BIM Point Cloud Modeling">Scan-to-BIM Point Cloud Modeling</option>
                     <option value="2D to 3D Conversion">2D to 3D Conversion</option>
+                    <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
               </div>

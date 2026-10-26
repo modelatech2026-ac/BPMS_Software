@@ -96,7 +96,8 @@ export type ActivityType =
   | 'Coordination & Navisworks Review'
   | 'COBie & Asset Data Entry'
   | 'Scan-to-BIM Point Cloud Modeling'
-  | '2D to 3D Conversion';
+  | '2D to 3D Conversion'
+  | 'AI & Automation';
 
 export interface TaskItem {
   id: string;
@@ -277,7 +278,8 @@ export type PrimaryDiscipline =
   | 'MEP'
   | 'Point Cloud / Scan to BIM Specialist'
   | 'CAD Specialist'
-  | 'BIM Management / QA/QC';
+  | 'BIM Management / QA/QC'
+  | 'AI & Automation';
 
 export type BimTaskType =
   | 'Clash Detection'
@@ -285,7 +287,8 @@ export type BimTaskType =
   | '3D Modeling'
   | '2D Sheet Generation'
   | 'QC/QA Audit'
-  | 'COBie Data Entry';
+  | 'COBie Data Entry'
+  | 'AI & Automation';
 
 export type AllocationPriority = 'Low' | 'Medium' | 'High' | 'Critical';
 
@@ -297,7 +300,7 @@ export interface ResourceAllocationItem {
   employeeName: string;
   employeeRole: string;
   memberEmail?: string;
-  discipline: 'BIM - ACS' | 'Architectural' | 'Structural' | 'MEP' | 'Infrastructure' | 'Coordination & QA';
+  discipline: 'BIM - ACS' | 'Architectural' | 'Structural' | 'MEP' | 'Infrastructure' | 'Coordination & QA' | 'AI & Automation' | Discipline;
   lod: 'LOD 200' | 'LOD 300' | 'LOD 350' | 'LOD 400';
   projectPhase: 'Schematic Design' | 'Design Development' | 'Construction Documentation' | 'Fabrication / As-Built';
   taskType: BimTaskType;

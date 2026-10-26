@@ -381,6 +381,7 @@ export const ClashAndLODTracker: React.FC = () => {
                     <option value="MEP - Plumbing">MEP - Plumbing</option>
                     <option value="Façade / Envelope">Façade / Envelope</option>
                     <option value="Fire Protection">Fire Protection</option>
+                    <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
                 <div>
@@ -397,6 +398,7 @@ export const ClashAndLODTracker: React.FC = () => {
                     <option value="MEP - Plumbing">MEP - Plumbing</option>
                     <option value="Façade / Envelope">Façade / Envelope</option>
                     <option value="Fire Protection">Fire Protection</option>
+                    <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
               </div>

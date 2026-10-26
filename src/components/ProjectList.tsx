@@ -285,6 +285,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               <option value="Fire Protection" className="bg-slate-900">Fire Protection</option>
               <option value="Façade / Envelope" className="bg-slate-900">Façade / Envelope</option>
               <option value="Coordination & QA" className="bg-slate-900">Coordination & QA</option>
+              <option value="AI & Automation" className="bg-slate-900">AI & Automation</option>
             </select>
           </div>
         </div>

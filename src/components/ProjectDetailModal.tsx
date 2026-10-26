@@ -505,7 +505,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                         onChange={(e) => setTaskDiscipline(e.target.value as any)}
                         className="w-full bg-slate-800 text-slate-200 rounded p-1.5 border border-slate-700"
                       >
-                        {project.disciplines.map((d) => (
+                        {Array.from(new Set([...project.disciplines, 'AI & Automation'])).map((d) => (
                           <option key={d} value={d}>
                             {d}
                           </option>

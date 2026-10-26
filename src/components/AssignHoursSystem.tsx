@@ -391,10 +391,93 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
   };
 
+  const isFullAccessRole = useMemo(() => {
+    if (isSuperAdmin) return true;
+    const role = (currentUser?.role || '').toUpperCase();
+    const appRole = (currentUser?.appRole || '').toUpperCase();
+    const accessLevel = (currentUser?.accessLevel || '').toUpperCase();
+    const securityRole = (currentUser?.securityRole || '').toUpperCase();
+    return (
+      role === 'SUPER_ADMIN' ||
+      role === 'DIRECTOR' ||
+      role === 'SUPER ADMIN' ||
+      appRole === 'SUPER_ADMIN' ||
+      appRole === 'DIRECTOR' ||
+      accessLevel === 'SUPER ADMIN' ||
+      accessLevel === 'DIRECTOR' ||
+      securityRole === 'SUPER ADMIN' ||
+      securityRole === 'DIRECTOR'
+    );
+  }, [currentUser, isSuperAdmin]);
+
+  const viewerMatchedEmployee = useMemo(() => {
+    if (!currentUser) return undefined;
+    const userId = (currentUser.id || '').trim();
+    const userIdStripped = userId.replace(/^emp-/, '');
+    const userEmail = (currentUser.email || '').toLowerCase().trim();
+    const userName = (currentUser.name || '').toLowerCase().trim();
+    return employees.find(
+      (e) =>
+        (userId && (e.id === userId || e.id.replace(/^emp-/, '') === userIdStripped)) ||
+        (userEmail && (e.email || '').toLowerCase().trim() === userEmail) ||
+        (userName && (e.name || '').toLowerCase().trim() === userName)
+    );
+  }, [currentUser, employees]);
+
+  const visibleAssignments = useMemo(() => {
+    const allAssignments = allocations;
+    if (
+      isFullAccessRole ||
+      currentUser?.role === 'SUPER_ADMIN' ||
+      currentUser?.role === 'DIRECTOR'
+    ) {
+      return allAssignments;
+    }
+    if (!currentUser) return [];
+
+    const userId = (currentUser.id || '').trim();
+    const userIdStripped = userId.replace(/^emp-/, '');
+    const userEmail = (currentUser.email || '').toLowerCase().trim();
+    const userName = (currentUser.name || '').toLowerCase().trim();
+    const matchedEmpId = (viewerMatchedEmployee?.id || '').trim();
+    const matchedEmpIdStripped = matchedEmpId.replace(/^emp-/, '');
+
+    return allAssignments.filter((item) => {
+      const rawItem = item as any;
+      if (
+        (userId && (rawItem.memberId === userId || item.employeeId === userId)) ||
+        (userEmail && rawItem.assignedToEmail === currentUser.email)
+      ) {
+        return true;
+      }
+
+      const itemEmpId = (item.employeeId || rawItem.memberId || '').trim();
+      const itemEmpIdStripped = itemEmpId.replace(/^emp-/, '');
+      if (
+        (userIdStripped && itemEmpIdStripped === userIdStripped) ||
+        (matchedEmpId && (itemEmpId === matchedEmpId || itemEmpIdStripped === matchedEmpIdStripped))
+      ) {
+        return true;
+      }
+
+      const itemEmail = (item.memberEmail || rawItem.assignedToEmail || '').toLowerCase().trim();
+      if (userEmail && itemEmail && itemEmail === userEmail) {
+        return true;
+      }
+
+      const itemName = (item.employeeName || '').toLowerCase().trim();
+      if (userName && itemName && itemName === userName) {
+        return true;
+      }
+
+      return false;
+    });
+  }, [allocations, currentUser, isFullAccessRole, viewerMatchedEmployee]);
+
   // All allocations synced from Firestore assigned_hours & project_assignments
   const liveActiveAllocations = useMemo(() => {
-    return allocations;
-  }, [allocations]);
+    return visibleAssignments;
+  }, [visibleAssignments]);
 
   // Helper to get total weekly hours assigned to an employee
   const getEmployeeWeeklyHours = useMemo(() => {
@@ -426,7 +509,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       ? liveActiveAllocations
       : liveActiveAllocations.filter((a) => matchProjectId(a.projectId, selectedProjectId));
 
-    const filteredByEmployee = selectedEmployeeId === 'all'
+    const filteredByEmployee = !isFullAccessRole || selectedEmployeeId === 'all'
       ? relevantAllocations
       : relevantAllocations.filter((a) => a.employeeId === selectedEmployeeId);
 
@@ -475,7 +558,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       Structural: 0,
       MEP: 0,
       Infrastructure: 0,
-      'Coordination & QA': 0
+      'Coordination & QA': 0,
+      'AI & Automation': 0
     };
 
     filteredByEmployee.forEach((a) => {
@@ -516,9 +600,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   // Filtered Allocations based on 2 Dropdowns (Project + Team Member) and Search
   const filteredAllocations = useMemo(() => {
-    return liveActiveAllocations.filter((a) => {
+    return visibleAssignments.filter((a) => {
       const matchesProj = selectedProjectId === 'all' || matchProjectId(a.projectId, selectedProjectId);
-      const matchesEmp = selectedEmployeeId === 'all' || a.employeeId === selectedEmployeeId;
+      const matchesEmp = !isFullAccessRole || selectedEmployeeId === 'all' || a.employeeId === selectedEmployeeId;
       const matchesDisc = filterDiscipline === 'all' || a.discipline === filterDiscipline;
       const matchesStatus = filterStatus === 'all' || a.status === filterStatus;
       const matchesPriority = filterPriority === 'all' || a.priority === filterPriority;
@@ -533,7 +617,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
       return matchesProj && matchesEmp && matchesDisc && matchesStatus && matchesPriority && matchesSearch;
     });
-  }, [liveActiveAllocations, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery]);
+  }, [visibleAssignments, isFullAccessRole, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery]);
 
   // Handle Form Submission
   const handleAddAllocation = (e: React.FormEvent) => {
@@ -872,26 +956,41 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           <div className="flex items-center gap-1.5 bg-slate-800 px-3 py-2 rounded-lg border border-slate-700">
             <Users className="w-3.5 h-3.5 text-purple-400" />
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mr-1">Team Member:</span>
-            <select
-              value={selectedEmployeeId}
-              onChange={(e) => setSelectedEmployeeId(e.target.value)}
-              className="bg-transparent text-slate-200 text-xs font-semibold focus:outline-none cursor-pointer"
-            >
-              <option value="all" className="bg-slate-900">All Team Members ({employees.length})</option>
-              {employees.map((e) => (
-                <option key={e.id} value={e.id} className="bg-slate-900">
-                  {e.name}
+            {isFullAccessRole ? (
+              <select
+                value={selectedEmployeeId}
+                onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                className="bg-transparent text-slate-200 text-xs font-semibold focus:outline-none cursor-pointer"
+              >
+                <option value="all" className="bg-slate-900">All Team Members ({employees.length})</option>
+                {employees.map((e) => (
+                  <option key={e.id} value={e.id} className="bg-slate-900">
+                    {e.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={viewerMatchedEmployee?.id || currentUser?.id || 'viewer-self'}
+                disabled
+                aria-label="Team Member Filter (Locked to current user)"
+                className="bg-transparent text-slate-200 text-xs font-semibold focus:outline-none cursor-default opacity-90"
+              >
+                <option value={viewerMatchedEmployee?.id || currentUser?.id || 'viewer-self'} className="bg-slate-900">
+                  {viewerMatchedEmployee?.name || currentUser?.name || currentUser?.email || 'My Assigned Tasks'}
                 </option>
-              ))}
-            </select>
+              </select>
+            )}
           </div>
 
           {/* Quick Clear Filters button if filtered */}
-          {(selectedProjectId !== 'all' || selectedEmployeeId !== 'all' || searchQuery) && (
+          {(selectedProjectId !== 'all' || (isFullAccessRole && selectedEmployeeId !== 'all') || searchQuery) && (
             <button
               onClick={() => {
                 setSelectedProjectId('all');
-                setSelectedEmployeeId('all');
+                if (isFullAccessRole) {
+                  setSelectedEmployeeId('all');
+                }
                 setSearchQuery('');
               }}
               className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium border border-slate-700 transition"
@@ -1208,7 +1307,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    Target BIM Project *
+                    Target BIM Project
                   </label>
                   <select
                     value={formProject}
@@ -1225,7 +1324,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    Assignee Specialist *
+                    Assignee Specialist
                   </label>
                   <select
                     value={formEmployee || ''}
@@ -1249,7 +1348,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    BIM Task Type *
+                    BIM Task Type
                   </label>
                   <select
                     value={formTaskType}
@@ -1262,12 +1361,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     <option value="2D Sheet Generation">2D Sheet Generation</option>
                     <option value="QC/QA Audit">QC/QA Audit</option>
                     <option value="COBie Data Entry">COBie Data Entry</option>
+                    <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    Target Model / Element / Zone ID *
+                    Target Model / Element / Zone ID
                   </label>
                   <input
                     type="text"
@@ -1296,6 +1396,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     <option value="MEP">MEP</option>
                     <option value="Infrastructure">Infrastructure</option>
                     <option value="Coordination & QA">Coordination & QA</option>
+                    <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
 
@@ -1336,7 +1437,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    Assigned Hours *
+                    Assigned Hours
                   </label>
                   <input
                     type="number"
