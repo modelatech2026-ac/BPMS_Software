@@ -38,11 +38,14 @@ import {
   Discipline,
   LODLevel,
   BimTaskType,
+  ActivityType,
   AllocationPriority,
   ResourceAllocationItem,
   BimProject,
-  Employee
+  Employee,
+  DailyWorkLog,
 } from '../types';
+import { generateRequestDocId } from '../auth/roleSync';
 
 interface AssignHoursSystemProps {
   onSelectProject?: (project: BimProject) => void;
@@ -89,11 +92,49 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       appRole === 'PROJECT_MANAGER'
     );
   }, [currentUser, isSuperAdmin]);
-  const activeWorkLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs;
-  const activeMembers = employees;
+  // Real-time Firestore state for daily_logs / work_logs directly bound in AssignHoursSystem
+  const [realtimeDailyLogs, setRealtimeDailyLogs] = useState<DailyWorkLog[]>([]);
 
-  // All allocations from Firestore assigned_hours / project_assignments are visible in real time
-  const isLiveActiveMember = (_item: ResourceAllocationItem) => {
+  const activeWorkLogs = useMemo(() => {
+    const mergedMap = new Map<string, DailyWorkLog>();
+    (workLogs || []).forEach((l) => {
+      if (l && l.id) mergedMap.set(l.id, l);
+    });
+    (allWorkLogs || []).forEach((l) => {
+      if (l && l.id) mergedMap.set(l.id, l);
+    });
+    (realtimeDailyLogs || []).forEach((l) => {
+      if (l && l.id) mergedMap.set(l.id, l);
+    });
+    return Array.from(mergedMap.values());
+  }, [workLogs, allWorkLogs, realtimeDailyLogs]);
+
+  const activeTeamMembers = useMemo(
+    () => (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted'),
+    [employees]
+  );
+  const activeMembers = activeTeamMembers;
+
+  // Exclude allocations belonging to deleted members while keeping active allocations visible in real time
+  const isLiveActiveMember = (item: ResourceAllocationItem) => {
+    try {
+      const saved = localStorage.getItem('bim_deleted_members_v1');
+      if (saved) {
+        const deletedSet = new Set<string>(JSON.parse(saved));
+        const empId = (item.employeeId || item.memberId || '').trim().toLowerCase();
+        const empIdStripped = empId.replace(/^emp-/, '');
+        const email = (item.memberEmail || item.assignedToEmail || '').trim().toLowerCase();
+        const name = (item.employeeName || '').trim().toLowerCase();
+        if (
+          (empId && deletedSet.has(empId)) ||
+          (empIdStripped && deletedSet.has(empIdStripped)) ||
+          (email && deletedSet.has(email)) ||
+          (name && deletedSet.has(name))
+        ) {
+          return false;
+        }
+      }
+    } catch {}
     return true;
   };
 
@@ -120,31 +161,44 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   const hasInitialSeededRef = React.useRef(false);
 
-  // Real-time Firestore listener on assigned_hours and project_assignments collections
+  // Real-time Firestore onSnapshot listeners on BOTH assigned_hours (and project_assignments) AND daily_logs (and work_logs) collections
   useEffect(() => {
     let unsubAssignedHours: (() => void) | undefined;
     let unsubProjectAssignments: (() => void) | undefined;
+    let unsubDailyLogs: (() => void) | undefined;
+    let unsubWorkLogs: (() => void) | undefined;
 
     const assignedHoursMap = new Map<string, ResourceAllocationItem>();
     const projectAssignmentsMap = new Map<string, ResourceAllocationItem>();
+    const dailyLogsMap = new Map<string, DailyWorkLog>();
+    const workLogsMap = new Map<string, DailyWorkLog>();
 
     const parseSnapshotDoc = (docSnap: any): ResourceAllocationItem => {
       const data = docSnap.data();
       const matchedProj = projects.find((p) => matchProjectId(p.id, data.projectId));
-      const resolvedEmpId = data.assignedTo || data.employeeId || '';
+      const resolvedEmpId = data.memberId || data.employeeId || data.assignedTo || '';
+      const resolvedEmail = (data.memberEmail || data.assignedToEmail || '').trim().toLowerCase();
       const matchedEmp = employees.find(
         (e) =>
-          e.id === resolvedEmpId ||
-          e.id.replace(/^emp-/, '') === String(resolvedEmpId).replace(/^emp-/, '')
+          (resolvedEmpId &&
+            (e.id === resolvedEmpId ||
+              e.id.replace(/^emp-/, '') === String(resolvedEmpId).replace(/^emp-/, ''))) ||
+          (resolvedEmail && (e.email || '').trim().toLowerCase() === resolvedEmail) ||
+          (data.employeeName &&
+            (e.name || '').trim().toLowerCase() === String(data.employeeName).trim().toLowerCase())
       );
+      const finalMemberId = matchedEmp?.id || resolvedEmpId;
+      const finalEmail = data.memberEmail || data.assignedToEmail || matchedEmp?.email || '';
       return {
         id: docSnap.id,
         projectId: data.projectId || matchedProj?.id || '',
         projectName: data.projectName || matchedProj?.name || 'Unassigned Project',
-        employeeId: matchedEmp?.id || resolvedEmpId,
+        employeeId: finalMemberId,
+        memberId: data.memberId || finalMemberId,
         employeeName: data.employeeName || matchedEmp?.name || '',
         employeeRole: data.employeeRole || matchedEmp?.role || 'Editor',
-        memberEmail: data.memberEmail || matchedEmp?.email || '',
+        memberEmail: finalEmail,
+        assignedToEmail: finalEmail,
         discipline: data.discipline || matchedEmp?.discipline || 'BIM - ACS',
         lod: data.lod || 'LOD 350',
         projectPhase: data.projectPhase || 'Design Development',
@@ -157,6 +211,43 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         ...(data.priority ? { priority: data.priority } : {}),
         status: data.status || 'Allocated',
         notes: data.notes || '',
+      };
+    };
+
+    const parseDailyLogDoc = (docSnap: any): DailyWorkLog => {
+      const data = docSnap.data();
+      const normalizedEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
+      const resolvedMemberId = data.employeeId || data.memberId || data.userId || '';
+      const resolvedCreatedAt =
+        typeof data.createdAt === 'string'
+          ? data.createdAt
+          : typeof data.createdAt?.toDate === 'function'
+          ? data.createdAt.toDate().toISOString()
+          : typeof data.createdAt?.seconds === 'number'
+          ? new Date(data.createdAt.seconds * 1000).toISOString()
+          : data.timestamp || new Date().toISOString();
+      return {
+        id: docSnap.id,
+        employeeId: resolvedMemberId,
+        memberId: data.memberId || resolvedMemberId,
+        employeeName: data.employeeName || 'BIM Modeler',
+        projectId: data.projectId || '',
+        projectName: data.projectName || 'BIM Project',
+        date: data.date || new Date().toISOString().slice(0, 10),
+        hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
+        discipline: (data.discipline as Discipline) || 'BIM - ACS',
+        activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
+        taskName: data.taskName || 'BIM Modeling Task',
+        lodStage: (data.lodStage as LODLevel) || 'LOD 350',
+        notes: data.notes || '',
+        billable: data.billable !== undefined ? Boolean(data.billable) : true,
+        timestamp: data.timestamp || resolvedCreatedAt,
+        memberEmail: normalizedEmail,
+        userEmail: normalizedEmail,
+        userId: data.userId || resolvedMemberId,
+        isTestEntry: Boolean(data.isTestEntry ?? false),
+        loggedBy: data.loggedBy || normalizedEmail || data.employeeName || '',
+        createdAt: resolvedCreatedAt,
       };
     };
 
@@ -182,6 +273,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           return remoteAllocations;
         });
       }
+    };
+
+    const syncMergedDailyLogs = () => {
+      const combinedLogs = new Map<string, DailyWorkLog>();
+      workLogsMap.forEach((v, k) => combinedLogs.set(k, v));
+      dailyLogsMap.forEach((v, k) => combinedLogs.set(k, v));
+      setRealtimeDailyLogs(Array.from(combinedLogs.values()));
     };
 
     try {
@@ -212,12 +310,42 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           console.warn('Firestore project_assignments listener notice:', err);
         }
       );
+
+      unsubDailyLogs = onSnapshot(
+        collection(db, 'daily_logs'),
+        (snapshot) => {
+          dailyLogsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            dailyLogsMap.set(docSnap.id, parseDailyLogDoc(docSnap));
+          });
+          syncMergedDailyLogs();
+        },
+        (err) => {
+          console.warn('Firestore daily_logs listener in AssignHoursSystem notice:', err);
+        }
+      );
+
+      unsubWorkLogs = onSnapshot(
+        collection(db, 'work_logs'),
+        (snapshot) => {
+          workLogsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            workLogsMap.set(docSnap.id, parseDailyLogDoc(docSnap));
+          });
+          syncMergedDailyLogs();
+        },
+        (err) => {
+          console.warn('Firestore work_logs listener in AssignHoursSystem notice:', err);
+        }
+      );
     } catch (e) {
-      console.warn('Firestore assigned_hours setup error:', e);
+      console.warn('Firestore assigned_hours/daily_logs setup error:', e);
     }
     return () => {
       if (unsubAssignedHours) unsubAssignedHours();
       if (unsubProjectAssignments) unsubProjectAssignments();
+      if (unsubDailyLogs) unsubDailyLogs();
+      if (unsubWorkLogs) unsubWorkLogs();
     };
   }, [projects, employees]);
 
@@ -264,10 +392,19 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   }, [projects, formProject]);
 
   useEffect(() => {
-    if (employees.length > 0 && !employees.some((e) => e.id === formEmployee)) {
-      setFormEmployee(employees[0].id);
+    if (activeTeamMembers.length > 0 && !activeTeamMembers.some((e) => e.id === formEmployee)) {
+      setFormEmployee(activeTeamMembers[0].id);
     }
-  }, [employees, formEmployee]);
+  }, [activeTeamMembers, formEmployee]);
+
+  useEffect(() => {
+    if (
+      selectedEmployeeId !== 'all' &&
+      !activeTeamMembers.some((e) => e.id === selectedEmployeeId)
+    ) {
+      setSelectedEmployeeId('all');
+    }
+  }, [activeTeamMembers, selectedEmployeeId]);
 
   const [formDiscipline, setFormDiscipline] = useState<ResourceAllocationItem['discipline']>('BIM - ACS');
   const [formLOD, setFormLOD] = useState<ResourceAllocationItem['lod']>('LOD 350');
@@ -290,6 +427,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         const sanitized = {
           ...JSON.parse(JSON.stringify(changedItem)),
           assignedTo: changedItem.employeeId,
+          memberId: changedItem.memberId || changedItem.employeeId,
+          employeeId: changedItem.employeeId,
+          assignedToEmail: changedItem.memberEmail || '',
           discipline: changedItem.discipline || 'BIM - ACS',
           updatedAt: new Date().toISOString(),
         };
@@ -366,9 +506,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       const updatePayload = {
         assignedTo: emp?.id || memberId,
         employeeId: emp?.id || memberId,
+        memberId: emp?.id || memberId,
         employeeName: emp?.name || updatedTarget?.employeeName || '',
         employeeRole: emp?.role || updatedTarget?.employeeRole || 'Editor',
         memberEmail: emp?.email || updatedTarget?.memberEmail || '',
+        assignedToEmail: emp?.email || updatedTarget?.memberEmail || '',
         discipline: resolvedDiscipline,
         updatedAt: new Date().toISOString(),
       };
@@ -426,7 +568,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   }, [currentUser, employees]);
 
   const visibleAssignments = useMemo(() => {
-    const allAssignments = allocations;
+    const allAssignments = allocations.filter(isLiveActiveMember);
     if (
       isFullAccessRole ||
       currentUser?.role === 'SUPER_ADMIN' ||
@@ -491,6 +633,98 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     return map;
   }, [liveActiveAllocations]);
 
+  // Cross-Collection Data Aggregation helper:
+  // Dynamically aggregates matching records from daily_logs (activeWorkLogs) where
+  // log.employeeId === assignment.memberId (or matching employee identifiers) and log.projectId === assignment.projectId
+  const getLoggedHoursForAssignment = React.useCallback(
+    (assignment: ResourceAllocationItem): number => {
+      const rawAlloc = assignment as any;
+      const assignmentMemberId = (assignment.memberId || rawAlloc.memberId || assignment.employeeId || rawAlloc.assignedTo || '').trim();
+      const assignmentEmpId = (assignment.employeeId || assignmentMemberId).trim();
+      const assignmentIdStripped = assignmentMemberId.replace(/^emp-/, '');
+      const assignmentEmpIdStripped = assignmentEmpId.replace(/^emp-/, '');
+
+      const matchedEmp = employees.find(
+        (e) =>
+          (assignmentMemberId && (e.id === assignmentMemberId || e.id.replace(/^emp-/, '') === assignmentIdStripped)) ||
+          (assignmentEmpId && (e.id === assignmentEmpId || e.id.replace(/^emp-/, '') === assignmentEmpIdStripped)) ||
+          (assignment.memberEmail && (e.email || '').trim().toLowerCase() === assignment.memberEmail.trim().toLowerCase()) ||
+          (assignment.employeeName && (e.name || '').trim().toLowerCase() === assignment.employeeName.trim().toLowerCase())
+      );
+
+      const targetEmail = (
+        assignment.memberEmail ||
+        rawAlloc.assignedToEmail ||
+        matchedEmp?.email ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+      const detEmailId = targetEmail ? generateRequestDocId(targetEmail) : '';
+      const targetName = (assignment.employeeName || matchedEmp?.name || '').trim().toLowerCase();
+
+      const matchedProj = projects.find((p) => matchProjectId(p.id, assignment.projectId));
+      const targetProjNameNorm = (matchedProj?.name || assignment.projectName || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+      const matchingLogs = activeWorkLogs.filter((log) => {
+        // 1. Project match: log.projectId === assignment.projectId (or normalized project ID/name)
+        const sameProjId =
+          log.projectId === assignment.projectId || matchProjectId(log.projectId, assignment.projectId);
+        const logProjNameNorm = (log.projectName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const sameProjName =
+          Boolean(targetProjNameNorm) &&
+          targetProjNameNorm !== 'unassignedproject' &&
+          targetProjNameNorm !== 'bimproject' &&
+          logProjNameNorm === targetProjNameNorm;
+
+        if (!sameProjId && !sameProjName) return false;
+
+        // 2. Member match: log.employeeId === assignment.memberId (plus normalized ID, email, or name)
+        const logEmpId = (log.employeeId || '').trim();
+        const logMemberId = ((log as any).memberId || log.userId || '').trim();
+        const logEmpIdStripped = logEmpId.replace(/^emp-/, '');
+        const logMemberIdStripped = logMemberId.replace(/^emp-/, '');
+
+        const directMemberMatch =
+          Boolean(assignmentMemberId) &&
+          (log.employeeId === assignmentMemberId ||
+            log.employeeId === assignmentEmpId ||
+            logMemberId === assignmentMemberId ||
+            logMemberId === assignmentEmpId);
+
+        const strippedIdMatch =
+          (Boolean(assignmentIdStripped) &&
+            (logEmpIdStripped === assignmentIdStripped ||
+              logMemberIdStripped === assignmentIdStripped)) ||
+          (Boolean(assignmentEmpIdStripped) &&
+            (logEmpIdStripped === assignmentEmpIdStripped ||
+              logMemberIdStripped === assignmentEmpIdStripped)) ||
+          (Boolean(detEmailId) &&
+            (logEmpIdStripped === detEmailId || logMemberIdStripped === detEmailId)) ||
+          (Boolean(matchedEmp?.id) &&
+            (logEmpId === matchedEmp.id ||
+              logEmpIdStripped === matchedEmp.id.replace(/^emp-/, '')));
+
+        const logEmail = (log.memberEmail || (log as any).userEmail || log.loggedBy || '')
+          .trim()
+          .toLowerCase();
+        const emailMatch = Boolean(targetEmail) && Boolean(logEmail) && logEmail === targetEmail;
+
+        const logName = (log.employeeName || '').trim().toLowerCase();
+        const nameMatch = Boolean(targetName) && Boolean(logName) && logName === targetName;
+
+        return directMemberMatch || strippedIdMatch || emailMatch || nameMatch;
+      });
+
+      const operationalLogs = matchingLogs.filter((l) => !l.isTestEntry);
+      const targetList = operationalLogs.length > 0 ? operationalLogs : matchingLogs;
+      return targetList.reduce((sum, w) => sum + (Number(w.hoursLogged ?? (w as any).hours) || 0), 0);
+    },
+    [activeWorkLogs, employees, projects]
+  );
+
   // Overall Workspace Metrics & Efficiency Dashboard based on table parameters
   const workspaceMetrics = useMemo(() => {
     let budgetHours = 0;
@@ -516,28 +750,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     const allocatedHours = filteredByEmployee.reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
 
-    // Calculate total logged hours matching the current allocation scope (excluding test entries)
-    const loggedHours = filteredByEmployee.reduce((sum, alloc) => {
-      const rowLogged = activeWorkLogs
-        .filter((w) => {
-          if (w.isTestEntry) return false;
-          if (!matchProjectId(w.projectId, alloc.projectId)) return false;
-          const matchId =
-            w.employeeId === alloc.employeeId ||
-            (w.employeeId || '').replace(/^emp-/, '') === (alloc.employeeId || '').replace(/^emp-/, '');
-          const matchEmail =
-            Boolean(alloc.memberEmail) &&
-            ((w.memberEmail || (w as any).userEmail || '').toLowerCase().trim() ===
-              alloc.memberEmail!.toLowerCase().trim());
-          const matchName =
-            Boolean(alloc.employeeName) &&
-            (w.employeeName || '').toLowerCase().trim() ===
-              alloc.employeeName.toLowerCase().trim();
-          return matchId || matchEmail || matchName;
-        })
-        .reduce((wSum, w) => wSum + (Number(w.hoursLogged) || 0), 0);
-      return sum + rowLogged;
-    }, 0);
+    // Dynamically aggregate total logged hours across daily_logs for all matching assignments
+    const loggedHours = filteredByEmployee.reduce(
+      (sum, alloc) => sum + getLoggedHoursForAssignment(alloc),
+      0
+    );
 
     // Dynamic Available Remaining Hours: Assigned Hours - Logged Hours
     const remainingHours = Number((allocatedHours - loggedHours).toFixed(1));
@@ -597,7 +814,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       completionRate,
       priorityBreakdown
     };
-  }, [projects, employees, liveActiveAllocations, activeWorkLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours]);
+  }, [projects, employees, liveActiveAllocations, activeWorkLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours, getLoggedHoursForAssignment]);
 
   // Filtered Allocations based on 2 Dropdowns (Project + Team Member) and Search
   const filteredAllocations = useMemo(() => {
@@ -656,9 +873,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       projectId: proj.id,
       projectName: proj.name,
       employeeId: emp.id,
+      memberId: emp.id,
       employeeName: emp.name,
       employeeRole: emp.role,
       memberEmail: emp.email,
+      assignedToEmail: emp.email,
       discipline: formDiscipline,
       lod: formLOD,
       projectPhase: formPhase,
@@ -998,8 +1217,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                 onChange={(e) => setSelectedEmployeeId(e.target.value)}
                 className="bg-transparent text-slate-200 text-xs font-semibold focus:outline-none cursor-pointer"
               >
-                <option value="all" className="bg-slate-900">All Team Members ({employees.length})</option>
-                {employees.map((e) => (
+                <option value="all" className="bg-slate-900">All Team Members ({activeTeamMembers.length})</option>
+                {activeTeamMembers.map((e) => (
                   <option key={e.id} value={e.id} className="bg-slate-900">
                     {e.name}
                   </option>
@@ -1069,25 +1288,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   const resolvedProjectId = matchedProject?.id || alloc.projectId;
                   const resolvedProjectName = matchedProject?.name || alloc.projectName || 'Unassigned Project';
 
-                  const loggedHours = activeWorkLogs
-                    .filter((w) => {
-                      if (w.isTestEntry) return false;
-                      const sameProj = matchProjectId(w.projectId, alloc.projectId);
-                      if (!sameProj) return false;
-                      const matchId =
-                        w.employeeId === alloc.employeeId ||
-                        (w.employeeId || '').replace(/^emp-/, '') === (alloc.employeeId || '').replace(/^emp-/, '');
-                      const matchEmail =
-                        Boolean(alloc.memberEmail) &&
-                        ((w.memberEmail || (w as any).userEmail || '').toLowerCase().trim() ===
-                          alloc.memberEmail!.toLowerCase().trim());
-                      const matchName =
-                        Boolean(alloc.employeeName) &&
-                        (w.employeeName || '').toLowerCase().trim() ===
-                          alloc.employeeName.toLowerCase().trim();
-                      return matchId || matchEmail || matchName;
-                    })
-                    .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+                  const loggedHours = getLoggedHoursForAssignment(alloc);
 
                   return (
                     <tr
@@ -1101,14 +1302,20 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                             {(alloc.employeeName || 'U').split(' ').map((n) => n[0]).join('')}
                           </div>
                           <div>
-                            {canManageAllocations && employees.length > 0 ? (
+                            {canManageAllocations && activeTeamMembers.length > 0 ? (
                               <select
                                 aria-label={`Assigned team member for ${alloc.discipline || 'BIM - ACS'}`}
                                 value={
-                                  alloc.employeeId ||
-                                  disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
-                                  disciplineAssignments[alloc.discipline] ||
-                                  ''
+                                  activeTeamMembers.some((emp) => emp.id === alloc.employeeId)
+                                    ? alloc.employeeId
+                                    : activeTeamMembers.find(
+                                        (emp) =>
+                                          emp.id ===
+                                            disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
+                                          emp.id === disciplineAssignments[alloc.discipline]
+                                      )?.id ||
+                                      activeTeamMembers[0]?.id ||
+                                      ''
                                 }
                                 onChange={(e) =>
                                   handleMemberSelect(
@@ -1119,13 +1326,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                                 }
                                 className="px-2 py-1 text-[13px] font-semibold rounded bg-slate-800 border border-slate-700 text-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                               >
-                                {!employees.some((emp) => emp.id === alloc.employeeId) &&
-                                  alloc.employeeId && (
-                                    <option value={alloc.employeeId} className="bg-slate-900">
-                                      {alloc.employeeName || 'Assigned Member'}
-                                    </option>
-                                  )}
-                                {employees.map((emp) => (
+                                {activeTeamMembers.map((emp) => (
                                   <option key={emp.id} value={emp.id} className="bg-slate-900">
                                     {emp.name}
                                   </option>
@@ -1384,7 +1585,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     onChange={(e) => handleMemberSelect(formDiscipline, e.target.value)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {employees.map((e) => {
+                    {activeTeamMembers.map((e) => {
                       const weekly = getEmployeeWeeklyHours[e.id] || 0;
                       const isOver = weekly >= 40;
                       return (

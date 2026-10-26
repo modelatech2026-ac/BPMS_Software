@@ -137,22 +137,27 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       return;
     }
 
-    const defaultProj = projects[0];
+    const matchingAllocs = findMatchingAllocationsForMember(emp);
+    const primaryAlloc = matchingAllocs[0];
+    const defaultProj =
+      (primaryAlloc && projects.find((p) => p.id === primaryAlloc.projectId)) ||
+      projects[0];
     const draftDate = preferredDate || toLocalIsoDate(new Date());
     const draftLog: DailyWorkLog = {
       id: '__new_matrix_log__',
-      employeeId: emp.id,
-      employeeName: emp.name,
-      memberEmail: emp.email || '',
-      userEmail: emp.email || '',
-      projectId: defaultProj?.id || '',
-      projectName: defaultProj?.name || 'BIM Project',
+      employeeId: primaryAlloc?.memberId || primaryAlloc?.employeeId || emp.id,
+      memberId: primaryAlloc?.memberId || primaryAlloc?.employeeId || emp.id,
+      employeeName: primaryAlloc?.employeeName || emp.name,
+      memberEmail: emp.email || primaryAlloc?.memberEmail || '',
+      userEmail: emp.email || primaryAlloc?.memberEmail || '',
+      projectId: primaryAlloc?.projectId || defaultProj?.id || '',
+      projectName: primaryAlloc?.projectName || defaultProj?.name || 'BIM Project',
       date: draftDate,
       hoursLogged: 8,
-      discipline: emp.discipline || 'BIM - ACS',
+      discipline: (primaryAlloc?.discipline as Discipline) || emp.discipline || 'BIM - ACS',
       activityType: '3D Detailed Modeling',
-      taskName: defaultProj?.tasks?.[0]?.name || 'BIM Modeling & Coordination',
-      lodStage: defaultProj?.currentLOD || 'LOD 350',
+      taskName: primaryAlloc?.taskType || defaultProj?.tasks?.[0]?.name || 'BIM Modeling & Coordination',
+      lodStage: (primaryAlloc?.lod as LODLevel) || defaultProj?.currentLOD || 'LOD 350',
       notes: 'Updated via Weekly Timesheet Matrix',
       billable: true,
       timestamp: new Date().toISOString(),
@@ -230,7 +235,34 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         emp.id.replace(/^emp-/, '') === editEmployeeId.replace(/^emp-/, '')
     );
 
-    const targetEmpId = matchedEmp?.id || editEmployeeId || editingLog.employeeId;
+    const rawTargetEmpId = matchedEmp?.id || editEmployeeId || editingLog.employeeId;
+    const rawTargetProjId = matchedProj?.id || editProjectId || editingLog.projectId;
+
+    const matchingAssignment = (resourceAllocations || []).find((alloc) => {
+      const sameProj =
+        alloc.projectId === rawTargetProjId ||
+        alloc.projectId.replace(/^p(\d+)$/, 'proj-$1') === rawTargetProjId.replace(/^p(\d+)$/, 'proj-$1');
+      if (!sameProj) return false;
+      const aId = (alloc.memberId || alloc.employeeId || '').trim();
+      const aIdStripped = aId.replace(/^emp-/, '');
+      const tIdStripped = (rawTargetEmpId || '').replace(/^emp-/, '');
+      const aEmail = (alloc.memberEmail || alloc.assignedToEmail || '').toLowerCase().trim();
+      const tEmail = (matchedEmp?.email || editingLog.memberEmail || '').toLowerCase().trim();
+      const aName = (alloc.employeeName || '').toLowerCase().trim();
+      const tName = (matchedEmp?.name || editingLog.employeeName || '').toLowerCase().trim();
+      return (
+        (rawTargetEmpId && (aId === rawTargetEmpId || (aIdStripped && aIdStripped === tIdStripped))) ||
+        (tEmail && aEmail && aEmail === tEmail) ||
+        (tName && aName && aName === tName)
+      );
+    });
+
+    const targetEmpId =
+      matchingAssignment?.memberId ||
+      matchingAssignment?.employeeId ||
+      rawTargetEmpId;
+    const targetProjectId = matchingAssignment?.projectId || rawTargetProjId;
+
     if (targetEmpId) {
       setModifiedMatrixEmpIds((prev) =>
         prev.includes(targetEmpId) ? prev : [...prev, targetEmpId]
@@ -241,11 +273,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     if (editingLog.id === '__new_matrix_log__') {
       addWorkLog({
         employeeId: targetEmpId,
-        employeeName: matchedEmp?.name || editingLog.employeeName,
-        memberEmail: matchedEmp?.email || editingLog.memberEmail,
-        userEmail: matchedEmp?.email || editingLog.userEmail,
-        projectId: matchedProj?.id || editProjectId || editingLog.projectId,
-        projectName: matchedProj?.name || editingLog.projectName,
+        memberId: targetEmpId,
+        employeeName: matchingAssignment?.employeeName || matchedEmp?.name || editingLog.employeeName,
+        memberEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.memberEmail,
+        userEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.userEmail,
+        projectId: targetProjectId,
+        projectName: matchingAssignment?.projectName || matchedProj?.name || editingLog.projectName,
         date: editDate,
         hoursLogged: Number(editHours) || 0,
         lodStage: editLodStage,
@@ -259,11 +292,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     } else {
       updateWorkLog(editingLog.id, {
         employeeId: targetEmpId,
-        employeeName: matchedEmp?.name || editingLog.employeeName,
-        memberEmail: matchedEmp?.email || editingLog.memberEmail,
-        userEmail: matchedEmp?.email || editingLog.userEmail,
-        projectId: matchedProj?.id || editProjectId || editingLog.projectId,
-        projectName: matchedProj?.name || editingLog.projectName,
+        memberId: targetEmpId,
+        employeeName: matchingAssignment?.employeeName || matchedEmp?.name || editingLog.employeeName,
+        memberEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.memberEmail,
+        userEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.userEmail,
+        projectId: targetProjectId,
+        projectName: matchingAssignment?.projectName || matchedProj?.name || editingLog.projectName,
         date: editDate,
         hoursLogged: Number(editHours) || 0,
         lodStage: editLodStage,
@@ -447,14 +481,18 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const currentWeekRange = useMemo(() => getCurrentWeekRange(new Date()), []);
   const weekDays = useMemo(() => currentWeekRange.days, [currentWeekRange]);
 
-  // Super Admin & Director track all team members; Submitting Member tracks only their own timesheet
+  // Super Admin & Director track all active team members; Submitting Member tracks only their own timesheet
   const allTrackedEmployees = useMemo(() => {
+    const activeTeamMembers = (employees || []).filter(
+      (member) => !member.isDeleted && member.status !== 'deleted'
+    );
+
     if (!isSuperAdmin) {
       if (!currentUser) return [];
       const userEmail = (currentUser.email || '').toLowerCase().trim();
       const userId = (currentUser.id || '').trim();
       const userIdStripped = userId.replace(/^emp-/, '');
-      const matched = employees.find(
+      const matched = activeTeamMembers.find(
         (e) =>
           e.id === userId ||
           e.id.replace(/^emp-/, '') === userIdStripped ||
@@ -481,9 +519,20 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       ];
     }
 
-    const list = [...employees];
+    let deletedSet = new Set<string>();
+    try {
+      const saved = localStorage.getItem('bim_deleted_members_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          deletedSet = new Set(parsed.map((v: string) => String(v).trim().toLowerCase()));
+        }
+      }
+    } catch {}
+
+    const list = [...activeTeamMembers];
     const knownKeys = new Set(
-      employees.flatMap((e) =>
+      activeTeamMembers.flatMap((e) =>
         [
           e.id,
           (e.id || '').replace(/^emp-/, ''),
@@ -497,7 +546,17 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       const nameKey = (log.employeeName || '').toLowerCase().trim();
       const emailKey = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
       const idKey = (log.employeeId || (log as any).userId || '').trim();
+      const idKeyLower = idKey.toLowerCase();
       const strippedIdKey = idKey.replace(/^emp-/, '');
+      const strippedIdLower = strippedIdKey.toLowerCase();
+
+      const isDeletedMember =
+        (idKeyLower && deletedSet.has(idKeyLower)) ||
+        (strippedIdLower && deletedSet.has(strippedIdLower)) ||
+        (nameKey && deletedSet.has(nameKey)) ||
+        (emailKey && deletedSet.has(emailKey));
+
+      if (isDeletedMember) return;
 
       const alreadyExists =
         (idKey && knownKeys.has(idKey)) ||
@@ -528,8 +587,26 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
     });
 
-    return list.filter((emp) => !deletedMatrixEmpIds.includes(emp.id));
+    return list.filter(
+      (emp) =>
+        !emp.isDeleted &&
+        emp.status !== 'deleted' &&
+        !deletedMatrixEmpIds.includes(emp.id) &&
+        !deletedSet.has((emp.id || '').trim().toLowerCase()) &&
+        !deletedSet.has((emp.id || '').replace(/^emp-/, '').trim().toLowerCase()) &&
+        !deletedSet.has((emp.email || '').trim().toLowerCase()) &&
+        !deletedSet.has((emp.name || '').trim().toLowerCase())
+    );
   }, [employees, workLogs, isSuperAdmin, currentUser, deletedMatrixEmpIds]);
+
+  useEffect(() => {
+    if (
+      selectedEmployeeFilter !== 'all' &&
+      !allTrackedEmployees.some((e) => e.id === selectedEmployeeFilter)
+    ) {
+      setSelectedEmployeeFilter('all');
+    }
+  }, [allTrackedEmployees, selectedEmployeeFilter]);
 
   // Base filtered logs (by role/ownership, search, project, employee, discipline) before logTypeFilter
   const baseFilteredLogs = useMemo(() => {

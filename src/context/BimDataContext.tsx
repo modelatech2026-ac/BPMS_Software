@@ -200,6 +200,7 @@ const STORAGE_KEYS = {
   CURRENT_USER: 'bim_tracker_current_user_v7',
   ONBOARDING: 'bim_tracker_onboarding_v7',
   AUDIT_LOGS: 'bim_tracker_audit_logs_v7',
+  DELETED_MEMBERS: 'bim_deleted_members_v1',
 };
 
 // Purge legacy storage caches on boot
@@ -635,14 +636,148 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     return INITIAL_PROJECTS;
   });
 
+  const [deletedMemberKeys, setDeletedMemberKeys] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.DELETED_MEMBERS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+
+  const deletedKeysSet = useMemo(() => new Set(deletedMemberKeys), [deletedMemberKeys]);
+  const deletedKeysRef = React.useRef<Set<string>>(deletedKeysSet);
+  useEffect(() => {
+    deletedKeysRef.current = deletedKeysSet;
+    try {
+      localStorage.setItem(STORAGE_KEYS.DELETED_MEMBERS, JSON.stringify(deletedMemberKeys));
+    } catch {}
+  }, [deletedMemberKeys, deletedKeysSet]);
+
+  const registerDeletedMemberKeys = React.useCallback(
+    (params: { id?: string; email?: string; name?: string }) => {
+      const keysToAdd: string[] = [];
+      const rawId = (params.id || '').trim();
+      const strippedId = rawId.replace(/^emp-/, '');
+      const cleanEmail = (params.email || '').trim().toLowerCase();
+      const detId = cleanEmail ? generateRequestDocId(cleanEmail) : '';
+      const cleanName = (params.name || '').trim().toLowerCase();
+
+      if (rawId) keysToAdd.push(rawId);
+      if (strippedId) {
+        keysToAdd.push(strippedId);
+        keysToAdd.push(`emp-${strippedId}`);
+      }
+      if (cleanEmail) keysToAdd.push(cleanEmail);
+      if (detId) {
+        keysToAdd.push(detId);
+        keysToAdd.push(`emp-${detId}`);
+      }
+      if (cleanName) keysToAdd.push(`name:${cleanName}`);
+
+      if (keysToAdd.length === 0) return;
+      keysToAdd.forEach((k) => deletedKeysRef.current.add(k));
+      setDeletedMemberKeys((prev) => Array.from(new Set([...prev, ...keysToAdd])));
+    },
+    []
+  );
+
+  const unregisterDeletedMemberKeys = React.useCallback(
+    (params: { id?: string; email?: string; name?: string }) => {
+      const keysToRemove = new Set<string>();
+      const rawId = (params.id || '').trim();
+      const strippedId = rawId.replace(/^emp-/, '');
+      const cleanEmail = (params.email || '').trim().toLowerCase();
+      const detId = cleanEmail ? generateRequestDocId(cleanEmail) : '';
+      const cleanName = (params.name || '').trim().toLowerCase();
+
+      if (rawId) keysToRemove.add(rawId);
+      if (strippedId) {
+        keysToRemove.add(strippedId);
+        keysToRemove.add(`emp-${strippedId}`);
+      }
+      if (cleanEmail) keysToRemove.add(cleanEmail);
+      if (detId) {
+        keysToRemove.add(detId);
+        keysToRemove.add(`emp-${detId}`);
+      }
+      if (cleanName) keysToRemove.add(`name:${cleanName}`);
+
+      if (keysToRemove.size === 0) return;
+      keysToRemove.forEach((k) => deletedKeysRef.current.delete(k));
+      setDeletedMemberKeys((prev) => prev.filter((k) => !keysToRemove.has(k)));
+    },
+    []
+  );
+
+  const isMemberDeleted = React.useCallback(
+    (item: {
+      id?: string;
+      employeeId?: string;
+      memberId?: string;
+      userId?: string;
+      email?: string;
+      memberEmail?: string;
+      userEmail?: string;
+      assignedToEmail?: string;
+      name?: string;
+      employeeName?: string;
+      fullName?: string;
+      status?: string;
+      isDeleted?: boolean;
+    }): boolean => {
+      if (!item) return false;
+      if (item.isDeleted) return true;
+      const st = String(item.status || '').trim().toLowerCase();
+      if (st === 'deleted' || st === 'suspended') return true;
+
+      const activeSet = deletedKeysRef.current;
+      const rawId = String(item.id || item.employeeId || item.memberId || item.userId || '').trim();
+      const strippedId = rawId.replace(/^emp-/, '');
+      const email = String(item.email || item.memberEmail || item.userEmail || item.assignedToEmail || '')
+        .trim()
+        .toLowerCase();
+      const detEmailId = email ? generateRequestDocId(email) : '';
+      const name = String(item.name || item.employeeName || item.fullName || '')
+        .trim()
+        .toLowerCase();
+
+      if (rawId && (activeSet.has(rawId) || deletedKeysSet.has(rawId))) return true;
+      if (strippedId && (activeSet.has(strippedId) || deletedKeysSet.has(strippedId))) return true;
+      if (email && (activeSet.has(email) || deletedKeysSet.has(email))) return true;
+      if (detEmailId && (activeSet.has(detEmailId) || deletedKeysSet.has(detEmailId))) return true;
+      if (name && (activeSet.has(`name:${name}`) || deletedKeysSet.has(`name:${name}`))) return true;
+      return false;
+    },
+    [deletedKeysSet]
+  );
+
   const [employees, setEmployees] = useState<Employee[]>(() => {
     try {
+      const savedDeleted = localStorage.getItem(STORAGE_KEYS.DELETED_MEMBERS);
+      const initialDeletedSet = new Set<string>(
+        savedDeleted ? JSON.parse(savedDeleted) : []
+      );
       const saved = localStorage.getItem(STORAGE_KEYS.EMPLOYEES);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.filter(e => {
-            const email = (e.email || '').toLowerCase();
+          return parsed.filter((e) => {
+            if (!e || e.isDeleted || String(e.status || '').toLowerCase() === 'deleted') return false;
+            const email = (e.email || '').toLowerCase().trim();
+            const name = (e.name || '').toLowerCase().trim();
+            const rawId = (e.id || '').trim();
+            const strippedId = rawId.replace(/^emp-/, '');
+            if (
+              (rawId && initialDeletedSet.has(rawId)) ||
+              (strippedId && initialDeletedSet.has(strippedId)) ||
+              (email && initialDeletedSet.has(email)) ||
+              (name && initialDeletedSet.has(`name:${name}`))
+            ) {
+              return false;
+            }
             return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
           });
         }
@@ -650,6 +785,19 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch {}
     return [];
   });
+
+  // Global filtered active team members list used by all dropdowns, filters, and selectors
+  const activeTeamMembers = useMemo(
+    () =>
+      employees.filter(
+        (member) =>
+          !member.isDeleted &&
+          member.status !== 'deleted' &&
+          member.status !== 'Suspended' &&
+          !isMemberDeleted(member)
+      ),
+    [employees, isMemberDeleted]
+  );
 
   const [allWorkLogs, setAllWorkLogs] = useState<DailyWorkLog[]>(() => {
     try {
@@ -887,8 +1035,20 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const mapDocToRequest = (d: any): OnboardingRequest | null => {
       const data = typeof d.data === 'function' ? d.data({ serverTimestamps: 'estimate' }) : d;
       if (!data) return null;
+      if (data.isDeleted || String(data.status || '').trim().toLowerCase() === 'deleted') return null;
       const cleanEmail = String(data.email || data.userEmail || data.memberEmail || '').trim().toLowerCase();
       if (!cleanEmail) return null;
+      if (
+        isMemberDeleted({
+          id: d.id,
+          email: cleanEmail,
+          name: data.fullName || data.name,
+          status: data.status,
+          isDeleted: data.isDeleted,
+        })
+      ) {
+        return null;
+      }
 
       const isSuper = isSuperAdminEmail(cleanEmail);
       const rawStatus = String(data.status || 'pending').trim().toLowerCase();
@@ -1001,59 +1161,66 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       // Helper to synchronize approved access requests into active employees list
       const syncApprovedToEmployees = (reqList: OnboardingRequest[]) => {
         const approvedFromFirestore = reqList.filter(
-          (r) => (r.status || '').toUpperCase() === 'APPROVED' || (r.status || '').toLowerCase() === 'approved'
+          (r) =>
+            !r.isDeleted &&
+            !isMemberDeleted(r) &&
+            ((r.status || '').toUpperCase() === 'APPROVED' || (r.status || '').toLowerCase() === 'approved')
         );
-        if (approvedFromFirestore.length > 0) {
-          setEmployees((currentEmployees) => {
-            let changed = false;
-            const updated = [...currentEmployees];
-            approvedFromFirestore.forEach((req) => {
-              const email = (req.email || '').toLowerCase().trim();
-              if (!email) return;
-              const idx = updated.findIndex((e) => (e.email || '').toLowerCase().trim() === email);
-              const name = (req.fullName || req.name || email.split('@')[0]).trim();
-              const disc = ((req.discipline || req.primaryDiscipline || 'BIM - ACS') as Discipline);
-              const role =
-                req.role && req.role !== 'Editor' && req.role !== 'editor'
-                  ? req.role
-                  : mapAppRoleToDisplayRole((req.assignedRole as UserRole) || 'EDITOR');
+        setEmployees((currentEmployees) => {
+          let changed = false;
+          const filteredCurrent = currentEmployees.filter(
+            (e) => !e.isDeleted && e.status !== 'deleted' && !isMemberDeleted(e)
+          );
+          if (filteredCurrent.length !== currentEmployees.length) {
+            changed = true;
+          }
+          const updated = [...filteredCurrent];
+          approvedFromFirestore.forEach((req) => {
+            const email = (req.email || '').toLowerCase().trim();
+            if (!email || isMemberDeleted(req)) return;
+            const idx = updated.findIndex((e) => (e.email || '').toLowerCase().trim() === email);
+            const name = (req.fullName || req.name || email.split('@')[0]).trim();
+            const disc = ((req.discipline || req.primaryDiscipline || 'BIM - ACS') as Discipline);
+            const role =
+              req.role && req.role !== 'Editor' && req.role !== 'editor'
+                ? req.role
+                : mapAppRoleToDisplayRole((req.assignedRole as UserRole) || 'EDITOR');
 
-              if (idx === -1) {
+            if (idx === -1) {
+              changed = true;
+              updated.push({
+                id: `emp-${req.id || Date.now()}`,
+                name,
+                email: req.email,
+                role,
+                primaryDiscipline: disc,
+                discipline: disc,
+                avatar: req.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+                weeklyCapacityHours: 40,
+                experienceYears: 4,
+                status: 'Active',
+                activeProjectIds: [projects[0]?.id || 'proj-1'],
+                skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+                phone: '+1 (555) 019-2834',
+              });
+            } else {
+              const roleChanged = Boolean(req.assignedRole && updated[idx].role !== role);
+              const discChanged = Boolean(
+                disc &&
+                  (updated[idx].discipline !== disc || updated[idx].primaryDiscipline !== disc)
+              );
+              if (roleChanged || discChanged) {
                 changed = true;
-                updated.push({
-                  id: `emp-${req.id || Date.now()}`,
-                  name,
-                  email: req.email,
-                  role,
-                  primaryDiscipline: disc,
-                  discipline: disc,
-                  avatar: req.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
-                  weeklyCapacityHours: 40,
-                  experienceYears: 4,
-                  status: 'Active',
-                  activeProjectIds: [projects[0]?.id || 'proj-1'],
-                  skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
-                  phone: '+1 (555) 019-2834',
-                });
-              } else {
-                const roleChanged = Boolean(req.assignedRole && updated[idx].role !== role);
-                const discChanged = Boolean(
-                  disc &&
-                    (updated[idx].discipline !== disc || updated[idx].primaryDiscipline !== disc)
-                );
-                if (roleChanged || discChanged) {
-                  changed = true;
-                  updated[idx] = {
-                    ...updated[idx],
-                    ...(roleChanged ? { role } : {}),
-                    ...(discChanged ? { discipline: disc, primaryDiscipline: disc } : {}),
-                  };
-                }
+                updated[idx] = {
+                  ...updated[idx],
+                  ...(roleChanged ? { role } : {}),
+                  ...(discChanged ? { discipline: disc, primaryDiscipline: disc } : {}),
+                };
               }
-            });
-            return changed ? updated : currentEmployees;
+            }
           });
-        }
+          return changed ? updated : currentEmployees;
+        });
       };
 
       // Real-time onSnapshot listener on access_requests
@@ -1061,6 +1228,31 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         colRef,
         { includeMetadataChanges: true },
         (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            const cData = change.doc.data();
+            if (
+              change.type === 'removed' ||
+              cData?.isDeleted ||
+              String(cData?.status || '').toLowerCase() === 'deleted'
+            ) {
+              const remEmail = String(cData?.email || cData?.userEmail || '').trim().toLowerCase();
+              const remName = String(cData?.fullName || cData?.name || '').trim();
+              registerDeletedMemberKeys({
+                id: change.doc.id,
+                email: remEmail,
+                name: remName,
+              });
+              setEmployees((prev) =>
+                prev.filter(
+                  (e) =>
+                    e.id !== change.doc.id &&
+                    e.id !== `emp-${change.doc.id}` &&
+                    (!remEmail || (e.email || '').toLowerCase().trim() !== remEmail) &&
+                    (!remName || (e.name || '').toLowerCase().trim() !== remName.toLowerCase())
+                )
+              );
+            }
+          });
           const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
           const list = deduplicateAndSortRequests(rawList);
           setOnboardingRequests([...list]);
@@ -1078,6 +1270,67 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (unsubscribe) unsubscribe();
     };
   }, []);
+
+  // Real-time onSnapshot listener on Firestore 'users' collection so deleted or updated user docs sync immediately
+  useEffect(() => {
+    let unsubUsers: (() => void) | undefined;
+    try {
+      unsubUsers = onSnapshot(
+        collection(db, 'users'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            const data = change.doc.data() || {};
+            const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+            const name = String(data.fullName || data.name || '').trim();
+            const docId = change.doc.id;
+            const empId = String(data.id || data.assignedTo || `emp-${docId}`).trim();
+
+            if (
+              change.type === 'removed' ||
+              data.isDeleted === true ||
+              String(data.status || '').toLowerCase() === 'deleted'
+            ) {
+              registerDeletedMemberKeys({ id: empId || docId, email, name });
+              setEmployees((prev) =>
+                prev.filter(
+                  (e) =>
+                    e.id !== docId &&
+                    e.id !== empId &&
+                    e.id.replace(/^emp-/, '') !== docId.replace(/^emp-/, '') &&
+                    (!email || (e.email || '').toLowerCase().trim() !== email) &&
+                    (!name || (e.name || '').toLowerCase().trim() !== name.toLowerCase())
+                )
+              );
+              setOnboardingRequests((prev) =>
+                prev.filter(
+                  (r) =>
+                    r.id !== docId &&
+                    (!email || (r.email || '').toLowerCase().trim() !== email)
+                )
+              );
+              setResourceAllocations((prev) =>
+                prev.filter(
+                  (a) =>
+                    a.employeeId !== empId &&
+                    a.employeeId !== docId &&
+                    (!email || (a.memberEmail || '').toLowerCase().trim() !== email) &&
+                    (!name || (a.employeeName || '').toLowerCase().trim() !== name.toLowerCase())
+                )
+              );
+            }
+          });
+        },
+        (err) => {
+          console.warn('Firestore users listener notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Firestore users setup notice:', e);
+    }
+    return () => {
+      if (unsubUsers) unsubUsers();
+    };
+  }, [registerDeletedMemberKeys]);
 
   // Real-time onSnapshot listener on Firestore 'disciplines' collection to hydrate assignment dropdowns
   useEffect(() => {
@@ -1375,9 +1628,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           : typeof data.createdAt?.seconds === 'number'
           ? new Date(data.createdAt.seconds * 1000).toISOString()
           : data.timestamp || new Date().toISOString();
+      const resolvedMemberId = data.employeeId || data.memberId || data.userId || '';
       return {
         id: docSnap.id,
-        employeeId: data.employeeId || data.userId || '',
+        employeeId: resolvedMemberId,
+        memberId: data.memberId || resolvedMemberId,
         employeeName: data.employeeName || 'BIM Modeler',
         projectId: data.projectId || '',
         projectName: data.projectName || 'BIM Project',
@@ -1392,7 +1647,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         timestamp: data.timestamp || resolvedCreatedAt,
         memberEmail: normalizedEmail,
         userEmail: normalizedEmail,
-        userId: data.userId || data.employeeId || '',
+        userId: data.userId || resolvedMemberId,
         isTestEntry: Boolean(data.isTestEntry ?? false),
         loggedBy: data.loggedBy || normalizedEmail || data.employeeName || '',
         createdAt: resolvedCreatedAt,
@@ -1416,7 +1671,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (list.length > 0) {
         setEmployees((currentEmployees) => {
           let changed = false;
-          const updated = [...currentEmployees];
+          const updated = currentEmployees.filter(
+            (e) => !e.isDeleted && e.status !== 'deleted' && !isMemberDeleted(e)
+          );
+          if (updated.length !== currentEmployees.length) {
+            changed = true;
+          }
 
           list.forEach((log) => {
             const emailKey = (log.memberEmail || log.userEmail || '').trim().toLowerCase();
@@ -1426,6 +1686,15 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
             if (!emailKey && !nameKey && !rawId) return;
             if (emailKey === 'sushovan.das@bimworkspace.com' || emailKey === 'aditi@bimworkspace.com') return;
+            if (
+              isMemberDeleted({
+                id: rawId,
+                email: emailKey,
+                name: log.employeeName,
+              })
+            ) {
+              return;
+            }
 
             const exists = updated.some((e) => {
               const eEmail = (e.email || '').trim().toLowerCase();
@@ -1535,14 +1804,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const parseAllocDoc = (docSnap: any): ResourceAllocationItem => {
       const data = docSnap.data();
+      const resolvedMemberId = data.memberId || data.employeeId || data.assignedTo || '';
+      const resolvedEmail = data.memberEmail || data.assignedToEmail || '';
       return {
         id: docSnap.id,
         projectId: data.projectId || '',
         projectName: data.projectName || 'Unassigned Project',
-        employeeId: data.employeeId || data.assignedTo || '',
+        employeeId: resolvedMemberId,
+        memberId: resolvedMemberId,
         employeeName: data.employeeName || '',
         employeeRole: data.employeeRole || 'Editor',
-        memberEmail: data.memberEmail || '',
+        memberEmail: resolvedEmail,
+        assignedToEmail: resolvedEmail,
         discipline: data.discipline || 'BIM - ACS',
         lod: data.lod || 'LOD 350',
         projectPhase: data.projectPhase || 'Design Development',
@@ -2141,6 +2414,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       // Identity Sync: strict field mapping between access request and member profile
       const applicantFullName = (effectiveReq.fullName || effectiveReq.name || effectiveReq.email.split('@')[0]).trim();
       const applicantEmail = effectiveReq.email.trim().toLowerCase();
+      unregisterDeletedMemberKeys({
+        id: effectiveReq.id,
+        email: applicantEmail,
+        name: applicantFullName,
+      });
 
       // 1. Dynamic Onboarding: Populate directly into active Team Member List (Team Efficiency)
       setEmployees((prev) => {
@@ -2353,30 +2631,60 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const deleteOnboardingRequest = (requestId: string) => {
-    const matchedEmp = employees.find((e) => e.id === requestId);
+    const strippedReqId = (requestId || '').replace(/^emp-/, '');
+    const matchedEmp = employees.find(
+      (e) => e.id === requestId || e.id.replace(/^emp-/, '') === strippedReqId
+    );
     const target =
-      onboardingRequests.find((r) => r.id === requestId) ||
+      onboardingRequests.find(
+        (r) => r.id === requestId || r.id.replace(/^emp-/, '') === strippedReqId
+      ) ||
       (matchedEmp
-        ? onboardingRequests.find((r) => r.email.trim().toLowerCase() === matchedEmp.email.trim().toLowerCase())
+        ? onboardingRequests.find(
+            (r) => r.email.trim().toLowerCase() === matchedEmp.email.trim().toLowerCase()
+          )
         : undefined);
 
     const targetEmail = (target?.email || matchedEmp?.email || '').trim().toLowerCase();
-    const targetName = target?.name || matchedEmp?.name || targetEmail;
-    if (!target && !targetEmail) return;
+    const targetName = (target?.name || matchedEmp?.name || targetEmail || '').trim();
+    if (!target && !matchedEmp && !targetEmail) return;
+
+    registerDeletedMemberKeys({
+      id: matchedEmp?.id || requestId,
+      email: targetEmail,
+      name: targetName,
+    });
 
     setOnboardingRequests((prev) =>
-      prev.filter((r) => r.id !== requestId && (!targetEmail || r.email.trim().toLowerCase() !== targetEmail))
+      prev.filter(
+        (r) =>
+          r.id !== requestId &&
+          r.id.replace(/^emp-/, '') !== strippedReqId &&
+          (!targetEmail || r.email.trim().toLowerCase() !== targetEmail)
+      )
+    );
+
+    setEmployees((prev) =>
+      prev.filter(
+        (e) =>
+          e.id !== requestId &&
+          e.id.replace(/^emp-/, '') !== strippedReqId &&
+          (!targetEmail || e.email.toLowerCase().trim() !== targetEmail) &&
+          (!targetName || e.name.toLowerCase().trim() !== targetName.toLowerCase())
+      )
     );
 
     try {
-      if (!requestId.startsWith('emp-')) {
-        deleteDoc(doc(db, 'access_requests', requestId)).catch(() => {});
-        deleteDoc(doc(db, 'users', requestId)).catch(() => {});
-      }
+      const detId = targetEmail ? generateRequestDocId(targetEmail) : strippedReqId;
+      const candidateDocIds = Array.from(
+        new Set([requestId, strippedReqId, `emp-${strippedReqId}`, detId, `emp-${detId}`].filter(Boolean))
+      );
+      candidateDocIds.forEach((cid) => {
+        deleteDoc(doc(db, 'access_requests', cid)).catch(() => {});
+        deleteDoc(doc(db, 'users', cid)).catch(() => {});
+      });
+
       if (targetEmail) {
-        const detId = generateRequestDocId(targetEmail);
-        deleteDoc(doc(db, 'access_requests', detId)).catch(() => {});
-        deleteDoc(doc(db, 'users', detId)).catch(() => {});
         getDocs(query(collection(db, 'access_requests'), where('email', '==', targetEmail)))
           .then((snap) => {
             snap.docs.forEach((d) => {
@@ -2786,9 +3094,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       '';
     const createdAtValue = logData.createdAt || isoNow;
 
+    const resolvedMemberId =
+      (logData as any).memberId || logData.employeeId || userId;
+
     const newLog: DailyWorkLog = {
       ...logData,
       id: logId,
+      employeeId: resolvedMemberId,
+      memberId: resolvedMemberId,
       hoursLogged: hoursValue,
       memberEmail: userEmail,
       userEmail: userEmail,
@@ -2807,6 +3120,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const sanitizedLog = JSON.parse(JSON.stringify(newLog));
       const payload = {
         ...sanitizedLog,
+        employeeId: resolvedMemberId,
+        memberId: resolvedMemberId,
         hours: hoursValue,
         hoursLogged: hoursValue,
         isTestEntry: isTestEntryFlag,
@@ -2993,7 +3308,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const newEmp: Employee = {
       ...empData,
       id: `emp-${Date.now()}`,
+      isDeleted: false,
     };
+    unregisterDeletedMemberKeys({
+      id: newEmp.id,
+      email: newEmp.email,
+      name: newEmp.name,
+    });
     setEmployees((prev) => [...prev, newEmp]);
 
     // Persist new team member and discipline assignment to Firestore
@@ -3009,6 +3330,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       primaryDiscipline: newEmp.primaryDiscipline || newEmp.discipline || 'BIM - ACS',
       assignedTo: newEmp.id,
       status: 'APPROVED',
+      isDeleted: false,
       updatedAt: new Date().toISOString(),
     };
     try {
@@ -3062,64 +3384,174 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const deleteEmployee = (id: string) => {
-    const targetEmp = employees.find((e) => e.id === id);
-    const targetName = targetEmp ? targetEmp.name.toLowerCase().trim() : '';
-    const targetEmail = targetEmp ? targetEmp.email.toLowerCase().trim() : '';
+    const strippedId = (id || '').replace(/^emp-/, '');
+    const targetEmp = employees.find(
+      (e) => e.id === id || e.id.replace(/^emp-/, '') === strippedId
+    );
+    const targetReq = onboardingRequests.find(
+      (r) =>
+        r.id === id ||
+        r.id === strippedId ||
+        (targetEmp?.email && r.email.toLowerCase().trim() === targetEmp.email.toLowerCase().trim())
+    );
+    const targetName = (targetEmp?.name || targetReq?.name || '').toLowerCase().trim();
+    const targetEmail = (targetEmp?.email || targetReq?.email || '').toLowerCase().trim();
+    const detEmailId = targetEmail ? generateRequestDocId(targetEmail) : '';
 
-    // 1. Remove from active employees state
+    registerDeletedMemberKeys({
+      id,
+      email: targetEmail,
+      name: targetEmp?.name || targetReq?.name,
+    });
+
+    const matchesDeletedTarget = (item: {
+      id?: string;
+      employeeId?: string;
+      memberId?: string;
+      userId?: string;
+      assignedTo?: string;
+      email?: string;
+      memberEmail?: string;
+      userEmail?: string;
+      assignedToEmail?: string;
+      name?: string;
+      employeeName?: string;
+    }) => {
+      const iId = String(
+        item.employeeId || item.memberId || item.userId || item.assignedTo || item.id || ''
+      ).trim();
+      const iStripped = iId.replace(/^emp-/, '');
+      const iEmail = String(
+        item.email || item.memberEmail || item.userEmail || item.assignedToEmail || ''
+      )
+        .toLowerCase()
+        .trim();
+      const iName = String(item.name || item.employeeName || '').toLowerCase().trim();
+
+      return (
+        (id && (iId === id || iStripped === strippedId)) ||
+        (detEmailId && iStripped === detEmailId) ||
+        (targetEmail && iEmail && iEmail === targetEmail) ||
+        (targetName && iName && iName === targetName)
+      );
+    };
+
+    // 1. Remove from active employees & onboardingRequests state
     setEmployees((prev) =>
-      prev.filter((e) => e.id !== id && (!targetEmail || e.email.toLowerCase() !== targetEmail))
+      prev.filter(
+        (e) =>
+          e.id !== id &&
+          e.id.replace(/^emp-/, '') !== strippedId &&
+          (!targetEmail || e.email.toLowerCase().trim() !== targetEmail) &&
+          (!targetName || e.name.toLowerCase().trim() !== targetName)
+      )
+    );
+    setOnboardingRequests((prev) =>
+      prev.filter(
+        (r) =>
+          r.id !== id &&
+          r.id.replace(/^emp-/, '') !== strippedId &&
+          (!targetEmail || r.email.toLowerCase().trim() !== targetEmail)
+      )
     );
 
     // 2. Cascade cleanup on projects: unlink member from project assignments and active task allocations
     setProjects((prev) =>
       prev.map((p) => ({
         ...p,
-        assignedEmployeeIds: p.assignedEmployeeIds.filter((empId) => empId !== id),
-        tasks: p.tasks.filter((t) => t.assignedEmployeeId !== id),
+        assignedEmployeeIds: p.assignedEmployeeIds.filter(
+          (empId) => empId !== id && empId.replace(/^emp-/, '') !== strippedId
+        ),
+        tasks: p.tasks.filter(
+          (t) => t.assignedEmployeeId !== id && t.assignedEmployeeId.replace(/^emp-/, '') !== strippedId
+        ),
         clashes: p.clashes.map((c) =>
-          c.assignedToEmployeeId === id ? { ...c, assignedToEmployeeId: '' } : c
+          c.assignedToEmployeeId === id || c.assignedToEmployeeId.replace(/^emp-/, '') === strippedId
+            ? { ...c, assignedToEmployeeId: '' }
+            : c
         ),
       }))
     );
 
     // 3. Cascade cleanup on workLogs: remove timesheet logs for deleted member
-    setAllWorkLogs((prev) =>
-      prev.filter(
-        (log) =>
-          log.employeeId !== id &&
-          (!targetName || log.employeeName.toLowerCase().trim() !== targetName) &&
-          (!targetEmail || ((log as any).memberEmail || '').toLowerCase().trim() !== targetEmail)
-      )
-    );
+    const logsToRemove = allWorkLogs.filter((log) => matchesDeletedTarget(log));
+    setAllWorkLogs((prev) => prev.filter((log) => !matchesDeletedTarget(log)));
 
-    // 4. Cascade cleanup on resource allocations in localStorage
-    try {
-      const savedAlloc = localStorage.getItem('bim_resource_allocations_v1');
-      if (savedAlloc) {
-        const parsed = JSON.parse(savedAlloc);
-        if (Array.isArray(parsed)) {
-          const filtered = parsed.filter(
-            (a) =>
-              a.employeeId !== id &&
-              (!targetName || (a.employeeName || '').toLowerCase().trim() !== targetName) &&
-              (!targetEmail || ((a as any).memberEmail || '').toLowerCase().trim() !== targetEmail)
-          );
-          localStorage.setItem('bim_resource_allocations_v1', JSON.stringify(filtered));
-          window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: filtered }));
+    // 4. Cascade cleanup on resourceAllocations & disciplineAssignments
+    const allocsToRemove = resourceAllocations.filter((a) => matchesDeletedTarget(a));
+    const remainingAllocs = resourceAllocations.filter((a) => !matchesDeletedTarget(a));
+    setResourceAllocations(remainingAllocs);
+
+    setDisciplineAssignments((prev) => {
+      const next = { ...prev };
+      Object.keys(next).forEach((k) => {
+        const val = String(next[k] || '').trim();
+        if (val === id || val.replace(/^emp-/, '') === strippedId || (detEmailId && val.replace(/^emp-/, '') === detEmailId)) {
+          delete next[k];
         }
-      }
+      });
+      try {
+        localStorage.setItem('bim_discipline_assignments_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    try {
+      ['bim_resource_allocations_v1', 'bim_resource_allocations_v2'].forEach((storageKey) => {
+        const savedAlloc = localStorage.getItem(storageKey);
+        if (savedAlloc) {
+          const parsed = JSON.parse(savedAlloc);
+          if (Array.isArray(parsed)) {
+            const filtered = parsed.filter((a) => !matchesDeletedTarget(a));
+            localStorage.setItem(storageKey, JSON.stringify(filtered));
+            window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: filtered }));
+          }
+        }
+      });
     } catch (e) {
       console.warn('Cascade allocation cleanup notice:', e);
     }
 
-    // 5. Add audit log
-    if (targetEmp) {
+    // 5. Cascade delete from Firestore collections (users, access_requests, assigned_hours, project_assignments, allocations, daily_logs, work_logs, disciplines)
+    try {
+      const candidateUserDocIds = Array.from(
+        new Set([id, strippedId, `emp-${strippedId}`, detEmailId, `emp-${detEmailId}`, targetReq?.id || ''].filter(Boolean))
+      );
+      candidateUserDocIds.forEach((docId) => {
+        deleteDoc(doc(db, 'users', docId)).catch(() => {});
+        deleteDoc(doc(db, 'access_requests', docId)).catch(() => {});
+      });
+
+      if (targetEmail) {
+        getDocs(query(collection(db, 'users'), where('email', '==', targetEmail)))
+          .then((snap) => snap.docs.forEach((d) => deleteDoc(doc(db, 'users', d.id)).catch(() => {})))
+          .catch(() => {});
+        getDocs(query(collection(db, 'access_requests'), where('email', '==', targetEmail)))
+          .then((snap) => snap.docs.forEach((d) => deleteDoc(doc(db, 'access_requests', d.id)).catch(() => {})))
+          .catch(() => {});
+      }
+
+      allocsToRemove.forEach((a) => {
+        deleteDoc(doc(db, 'assigned_hours', a.id)).catch(() => {});
+        deleteDoc(doc(db, 'project_assignments', a.id)).catch(() => {});
+        deleteDoc(doc(db, 'allocations', a.id)).catch(() => {});
+      });
+
+      logsToRemove.forEach((l) => {
+        deleteDoc(doc(db, 'daily_logs', l.id)).catch(() => {});
+        deleteDoc(doc(db, 'work_logs', l.id)).catch(() => {});
+      });
+    } catch (fsErr) {
+      console.warn('Firestore deleteEmployee cascade notice:', fsErr);
+    }
+
+    // 6. Add audit log
+    if (targetEmp || targetEmail || targetName) {
       const newAudit: AdminAuditLog = {
         id: `audit-${Date.now()}`,
         action: 'user_deleted',
-        targetUserEmail: targetEmp.email,
-        targetUserName: targetEmp.name,
+        targetUserEmail: targetEmp?.email || targetEmail || id,
+        targetUserName: targetEmp?.name || targetReq?.name || id,
         performedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
         timestamp: new Date().toLocaleString([], {
           year: 'numeric',
@@ -3128,7 +3560,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           hour: '2-digit',
           minute: '2-digit',
         }),
-        details: `Deleted team member ${targetEmp.name} (${targetEmp.email}). Cascaded cleanup across task allocations, timesheets, and project teams.`,
+        details: `Deleted team member ${targetEmp?.name || targetName || id} (${targetEmp?.email || targetEmail || id}). Cascaded cleanup across dropdowns, task allocations, timesheets, and project teams.`,
       };
       setAuditLogs((prev) => [newAudit, ...prev]);
     }
@@ -3426,19 +3858,19 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       hoursVariance,
       completionPercentage,
       activeProjectsCount: targetProjects.length,
-      totalEmployeesCount: employees.length,
+      totalEmployeesCount: activeTeamMembers.length,
       criticalClashesCount: criticalClashes,
       totalClashesCount: totalClashes,
       resolvedClashesCount: resolvedClashes,
       avgUtilizationRate,
     };
-  }, [projects, employees, workLogs, allWorkLogs, resourceAllocations, selectedProjectId]);
+  }, [projects, activeTeamMembers, workLogs, allWorkLogs, resourceAllocations, selectedProjectId]);
 
   return (
     <BimDataContext.Provider
       value={{
         projects,
-        employees,
+        employees: activeTeamMembers,
         workLogs,
         allWorkLogs,
         resourceAllocations,

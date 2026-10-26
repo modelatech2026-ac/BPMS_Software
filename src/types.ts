@@ -153,6 +153,7 @@ export interface DailyWorkLog {
   memberEmail?: string;
   userEmail?: string;
   userId?: string;
+  memberId?: string;
   isTestEntry?: boolean;
   loggedBy?: string;
   createdAt?: string;
@@ -171,7 +172,8 @@ export interface Employee {
   weeklyCapacityHours: number; // typically 40
   activeProjectIds: string[];
   skills: string[];
-  status: 'Active' | 'On Leave' | 'High Workload';
+  status: 'Active' | 'On Leave' | 'High Workload' | 'Suspended' | 'deleted';
+  isDeleted?: boolean;
   phone?: string;
 }
 
@@ -297,9 +299,11 @@ export interface ResourceAllocationItem {
   projectId: string;
   projectName: string;
   employeeId: string;
+  memberId?: string;
   employeeName: string;
   employeeRole: string;
   memberEmail?: string;
+  assignedToEmail?: string;
   discipline: 'BIM - ACS' | 'Architectural' | 'Structural' | 'MEP' | 'Infrastructure' | 'Coordination & QA' | 'AI & Automation' | Discipline;
   lod: 'LOD 200' | 'LOD 300' | 'LOD 350' | 'LOD 400';
   projectPhase: 'Schematic Design' | 'Design Development' | 'Construction Documentation' | 'Fabrication / As-Built';
@@ -398,6 +402,7 @@ export interface OnboardingRequest {
   notes?: string;
   organization?: string;
   accessReason?: string;
+  isDeleted?: boolean;
 }
 
 export type SecurityRole =

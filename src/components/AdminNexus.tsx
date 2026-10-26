@@ -158,11 +158,31 @@ export const AdminNexus: React.FC = () => {
 
   const normalizeRawRequest = (raw: any): OnboardingRequest | null => {
     if (!raw) return null;
+    const rawStatus = String(raw.status || 'pending').trim().toLowerCase();
+    if (raw.isDeleted === true || rawStatus === 'deleted') return null;
+
     const cleanEmail = String(raw.email || raw.userEmail || raw.memberEmail || '').trim().toLowerCase();
     if (!cleanEmail) return null;
 
+    try {
+      const saved = localStorage.getItem('bim_deleted_members_v1');
+      if (saved) {
+        const deletedSet = new Set<string>(
+          JSON.parse(saved).map((v: string) => String(v).trim().toLowerCase())
+        );
+        const rawId = String(raw.id || '').trim().toLowerCase();
+        const rawName = String(raw.fullName || raw.name || '').trim().toLowerCase();
+        if (
+          deletedSet.has(cleanEmail) ||
+          (rawId && deletedSet.has(rawId)) ||
+          (rawName && deletedSet.has(rawName))
+        ) {
+          return null;
+        }
+      }
+    } catch {}
+
     const isSuper = isSuperAdminEmail(cleanEmail);
-    const rawStatus = String(raw.status || 'pending').trim().toLowerCase();
     const mappedStatus = isSuper
       ? 'APPROVED'
       : rawStatus === 'approved' || rawStatus === 'active'
@@ -589,8 +609,32 @@ export const AdminNexus: React.FC = () => {
 
     if (confirm(`Are you sure you want to remove ${target?.name || 'this member'} from Admin Nexus and revoke access?`)) {
       if (target) {
+        const targetEmailLower = (target.email || '').trim().toLowerCase();
+        const targetNameLower = (target.name || '').trim().toLowerCase();
+
         deleteEmployee(userId);
         deleteOnboardingRequest(userId);
+
+        employees.forEach((emp) => {
+          if (
+            emp.id === userId ||
+            (targetEmailLower && (emp.email || '').trim().toLowerCase() === targetEmailLower) ||
+            (targetNameLower && (emp.name || '').trim().toLowerCase() === targetNameLower)
+          ) {
+            deleteEmployee(emp.id);
+          }
+        });
+
+        onboardingRequests.forEach((req) => {
+          if (
+            req.id === userId ||
+            (targetEmailLower && (req.email || '').trim().toLowerCase() === targetEmailLower) ||
+            (targetNameLower && (req.name || '').trim().toLowerCase() === targetNameLower)
+          ) {
+            deleteOnboardingRequest(req.id);
+          }
+        });
+
         setPermissionsMap((prev) => {
           const next = { ...prev };
           delete next[userId];

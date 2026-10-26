@@ -28,6 +28,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   const {
     projects,
     employees,
+    resourceAllocations,
     addWorkLog,
     currentUser,
     disciplineAssignments,
@@ -35,11 +36,39 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   } = useBimData();
   const isSuper = isUserSuperAdmin(currentUser);
 
+  // Resolve allocations belonging to the current logged-in user
+  const viewerAllocations = React.useMemo(() => {
+    if (!currentUser) return [];
+    const cleanEmail = (currentUser.email || '').trim().toLowerCase();
+    const userId = (currentUser.id || '').trim();
+    const userIdStripped = userId.replace(/^emp-/, '');
+    const detId = cleanEmail ? generateRequestDocId(cleanEmail) : '';
+    const userName = (currentUser.name || '').trim().toLowerCase();
+
+    return (resourceAllocations || []).filter((alloc) => {
+      const aId = (alloc.employeeId || alloc.memberId || '').trim();
+      const aIdStripped = aId.replace(/^emp-/, '');
+      const aEmail = (alloc.memberEmail || alloc.assignedToEmail || '').trim().toLowerCase();
+      const aName = (alloc.employeeName || '').trim().toLowerCase();
+      return (
+        (userId && (aId === userId || aIdStripped === userIdStripped)) ||
+        (detId && aIdStripped === detId) ||
+        (cleanEmail && aEmail && aEmail === cleanEmail) ||
+        (userName && aName && aName === userName)
+      );
+    });
+  }, [resourceAllocations, currentUser]);
+
+  const activeTeamMembers = React.useMemo(
+    () => (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted'),
+    [employees]
+  );
+
   const [projectId, setProjectId] = useState<string>(
-    preselectedProjectId || projects[0]?.id || ''
+    preselectedProjectId || viewerAllocations[0]?.projectId || projects[0]?.id || ''
   );
   const [employeeId, setEmployeeId] = useState<string>(
-    employees[0]?.id || currentUser?.id || ''
+    viewerAllocations[0]?.employeeId || activeTeamMembers[0]?.id || currentUser?.id || ''
   );
   const [date, setDate] = useState<string>(() => toLocalIsoDate(new Date()));
   const [hours, setHours] = useState<number>(4);
@@ -60,10 +89,15 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     }
     if (preselectedProjectId) {
       setProjectId(preselectedProjectId);
+    } else if (isOpen && !isSuper && viewerAllocations.length > 0) {
+      const hasCurrentInAssigned = viewerAllocations.some((a) => a.projectId === projectId);
+      if (!hasCurrentInAssigned && viewerAllocations[0]?.projectId) {
+        setProjectId(viewerAllocations[0].projectId);
+      }
     } else if (!projectId && projects.length > 0) {
       setProjectId(projects[0].id);
     }
-  }, [isOpen, preselectedProjectId, projects, projectId]);
+  }, [isOpen, preselectedProjectId, projects, projectId, isSuper, viewerAllocations]);
 
   // Auto-select current logged in user or hydrated discipline assignee when modal opens
   const wasOpenRef = React.useRef(false);
@@ -74,14 +108,6 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     }
     if (wasOpenRef.current) return;
     wasOpenRef.current = true;
-
-    const hydratedAssignee =
-      disciplineAssignments[`${projectId}__${discipline}`] ||
-      disciplineAssignments[discipline];
-    if (hydratedAssignee && employees.some((e) => e.id === hydratedAssignee)) {
-      setEmployeeId(hydratedAssignee);
-      return;
-    }
 
     if (currentUser?.email) {
       const cleanEmail = currentUser.email.trim().toLowerCase();
@@ -94,6 +120,29 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
           (e.email && e.email.trim().toLowerCase() === cleanEmail) ||
           (e.name && currentUser.name && e.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
       );
+      const allocMatch = viewerAllocations[0];
+
+      if (!isSuper) {
+        if (allocMatch?.employeeId) {
+          setEmployeeId(allocMatch.employeeId);
+        } else if (match) {
+          setEmployeeId(match.id);
+        } else if (currentUser.id) {
+          setEmployeeId(currentUser.id);
+        } else {
+          setEmployeeId(`emp-${detId}`);
+        }
+        return;
+      }
+
+      const hydratedAssignee =
+        disciplineAssignments[`${projectId}__${discipline}`] ||
+        disciplineAssignments[discipline];
+      if (hydratedAssignee && employees.some((e) => e.id === hydratedAssignee)) {
+        setEmployeeId(hydratedAssignee);
+        return;
+      }
+
       if (match) {
         setEmployeeId(match.id);
       } else if (employees.length > 0) {
@@ -106,24 +155,33 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     } else if (employees.length > 0 && !employeeId) {
       setEmployeeId(employees[0].id);
     }
-  }, [isOpen, currentUser, employees, disciplineAssignments, projectId, discipline, employeeId]);
+  }, [isOpen, currentUser, employees, disciplineAssignments, projectId, discipline, employeeId, isSuper, viewerAllocations]);
 
-  // Hydrate dropdown value from real-time onSnapshot disciplineAssignments when updated externally
+  // Hydrate dropdown value from real-time onSnapshot disciplineAssignments when updated externally (Super Admin only)
   useEffect(() => {
+    if (!isSuper) return;
+    if (employeeId && !activeTeamMembers.some((e) => e.id === employeeId)) {
+      if (activeTeamMembers.length > 0) {
+        setEmployeeId(activeTeamMembers[0].id);
+      }
+      return;
+    }
     const syncedMemberId =
       disciplineAssignments[`${projectId}__${discipline}`] ||
       disciplineAssignments[discipline];
-    if (syncedMemberId && syncedMemberId !== employeeId && employees.some((e) => e.id === syncedMemberId)) {
+    if (syncedMemberId && syncedMemberId !== employeeId && activeTeamMembers.some((e) => e.id === syncedMemberId)) {
       setEmployeeId(syncedMemberId);
     }
-  }, [disciplineAssignments, projectId, discipline]);
+  }, [disciplineAssignments, projectId, discipline, isSuper, activeTeamMembers, employeeId]);
 
   const selectedProject = projects.find((p) => p.id === projectId) || projects[0];
   const assignedMemberId =
     employeeId ||
-    disciplineAssignments[`${projectId}__${discipline}`] ||
-    disciplineAssignments[discipline] ||
-    '';
+    (isSuper
+      ? disciplineAssignments[`${projectId}__${discipline}`] ||
+        disciplineAssignments[discipline] ||
+        ''
+      : viewerAllocations[0]?.employeeId || currentUser?.id || '');
   const selectedEmployee = employees.find((e) => e.id === assignedMemberId);
 
   const handleMemberSelect = async (disciplineKey: string, memberId: string) => {
@@ -140,20 +198,29 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     }
   };
 
-  // Auto-fill task if project has tasks
+  // Auto-fill task if project has tasks or matching assignment
   useEffect(() => {
+    const matchedAllocForProj = viewerAllocations.find((a) => a.projectId === projectId);
+    if (matchedAllocForProj) {
+      setDiscipline((matchedAllocForProj.discipline as Discipline) || 'BIM - ACS');
+      setLodStage((matchedAllocForProj.lod as LODLevel) || 'LOD 350');
+      if (!taskName) {
+        setTaskName(matchedAllocForProj.taskType || `${matchedAllocForProj.discipline} Modeling Task`);
+      }
+      return;
+    }
     if (selectedProject?.tasks && selectedProject.tasks.length > 0 && selectedProject.tasks[0]) {
       setTaskName(selectedProject.tasks[0].name || '');
       setDiscipline(selectedProject.tasks[0].discipline || 'MEP - HVAC');
       setLodStage(selectedProject.tasks[0].lod || 'LOD 350');
     }
-  }, [projectId, selectedProject]);
+  }, [projectId, selectedProject, viewerAllocations]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const resolvedProjectId = projectId || projects[0]?.id || '';
+    const resolvedProjectId = projectId || viewerAllocations[0]?.projectId || projects[0]?.id || '';
     if (!resolvedProjectId || hours <= 0) return;
 
     const cleanCurrentEmail = (currentUser?.email || '').trim().toLowerCase();
@@ -172,13 +239,41 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       selectedEmp.id === currentUser?.id ||
       (selectedEmp.email && cleanCurrentEmail && selectedEmp.email.trim().toLowerCase() === cleanCurrentEmail);
 
-    const finalEmpId = selectedEmp?.id || effectiveEmployeeId;
+    // Match against active assignments in resourceAllocations so log.employeeId === assignment.memberId and log.projectId === assignment.projectId
+    const matchedAssignment = (resourceAllocations || []).find((alloc) => {
+      const sameProj =
+        alloc.projectId === resolvedProjectId ||
+        alloc.projectId.replace(/^p(\d+)$/, 'proj-$1') === resolvedProjectId.replace(/^p(\d+)$/, 'proj-$1');
+      if (!sameProj) return false;
+      const aId = (alloc.employeeId || alloc.memberId || '').trim();
+      const aIdStripped = aId.replace(/^emp-/, '');
+      const effIdStripped = effectiveEmployeeId.replace(/^emp-/, '');
+      const aEmail = (alloc.memberEmail || alloc.assignedToEmail || '').trim().toLowerCase();
+      const targetEmail = (selectedEmp?.email || (isLoggingForSelf ? cleanCurrentEmail : '')).trim().toLowerCase();
+      const aName = (alloc.employeeName || '').trim().toLowerCase();
+      const targetName = (selectedEmp?.name || (isLoggingForSelf ? currentUser?.name : '') || '').trim().toLowerCase();
+      return (
+        aId === effectiveEmployeeId ||
+        (aIdStripped && aIdStripped === effIdStripped) ||
+        (targetEmail && aEmail && aEmail === targetEmail) ||
+        (targetName && aName && aName === targetName)
+      );
+    });
+
+    const finalEmpId =
+      matchedAssignment?.memberId ||
+      matchedAssignment?.employeeId ||
+      selectedEmp?.id ||
+      effectiveEmployeeId;
+    const finalProjectId = matchedAssignment?.projectId || resolvedProjectId;
     const finalEmpName =
+      matchedAssignment?.employeeName ||
       selectedEmp?.name ||
       (isLoggingForSelf ? currentUser?.name : undefined) ||
       currentUser?.name ||
       (cleanCurrentEmail ? cleanCurrentEmail.split('@')[0] : 'BIM Modeler');
     const memberEmail = (
+      matchedAssignment?.memberEmail ||
       selectedEmp?.email ||
       (isLoggingForSelf ? cleanCurrentEmail : '') ||
       cleanCurrentEmail ||
@@ -201,9 +296,10 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
 
     addWorkLog({
       employeeId: finalEmpId,
+      memberId: finalEmpId,
       employeeName: finalEmpName,
-      projectId: resolvedProjectId,
-      projectName: selectedProject?.name || 'BIM Project',
+      projectId: finalProjectId,
+      projectName: matchedAssignment?.projectName || selectedProject?.name || 'BIM Project',
       date,
       hoursLogged: Number(hours),
       discipline,
@@ -271,13 +367,13 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
                 className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                 required
               >
-                {employees.map((emp) => (
+                {activeTeamMembers.map((emp) => (
                   <option key={emp.id} value={emp.id}>
                     {emp.name} ({emp.role})
                   </option>
                 ))}
                 {currentUser &&
-                  !employees.some(
+                  !activeTeamMembers.some(
                     (e) =>
                       e.id === currentUser.id ||
                       (e.email &&
