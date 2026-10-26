@@ -1432,7 +1432,7 @@ export const AdminNexus: React.FC = () => {
                                   (req.primaryDiscipline as Discipline) ||
                                   'BIM - ACS'
                                 }
-                                onChange={(e) => {
+                                onChange={async (e) => {
                                   const newDiscipline = e.target.value as Discipline;
                                   setPendingDisciplineMap((prev) => ({
                                     ...prev,
@@ -1443,6 +1443,17 @@ export const AdminNexus: React.FC = () => {
                                     const accessLevel = mapAppRoleToAccessLevel(currentRole);
                                     approveOnboardingRequest(req.id, currentRole, accessLevel, newDiscipline);
                                     showNotification(`Updated ${req.name}'s discipline to ${newDiscipline}`);
+                                  } else {
+                                    try {
+                                      await updateDoc(doc(db, 'access_requests', req.id), {
+                                        discipline: newDiscipline,
+                                        primaryDiscipline: newDiscipline,
+                                        assignedTo: req.id,
+                                        updatedAt: new Date().toISOString(),
+                                      });
+                                    } catch (err) {
+                                      console.warn('Firestore discipline updateDoc notice:', err);
+                                    }
                                   }
                                 }}
                                 disabled={isRejected}

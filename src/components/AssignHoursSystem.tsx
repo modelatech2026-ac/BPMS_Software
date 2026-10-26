@@ -31,6 +31,7 @@ import {
   doc,
   onSnapshot,
   setDoc,
+  updateDoc,
   deleteDoc,
 } from 'firebase/firestore';
 import {
@@ -58,7 +59,15 @@ const matchProjectId = (idA?: string, idB?: string): boolean => {
 const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [];
 
 export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectProject }) => {
-  const { projects, employees, workLogs, theme, currentUser } = useBimData();
+  const {
+    projects,
+    employees,
+    workLogs,
+    theme,
+    currentUser,
+    disciplineAssignments,
+    handleMemberSelect: syncDisciplineMemberToFirestore,
+  } = useBimData();
   const isLight = theme === 'light';
   const isSuperAdmin = isUserSuperAdmin(currentUser);
   const activeMembers = employees;
@@ -113,15 +122,21 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           const remoteAllocations: ResourceAllocationItem[] = snapshot.docs.map((docSnap) => {
             const data = docSnap.data();
             const matchedProj = projects.find((p) => matchProjectId(p.id, data.projectId));
+            const resolvedEmpId = data.assignedTo || data.employeeId || '';
+            const matchedEmp = employees.find(
+              (e) =>
+                e.id === resolvedEmpId ||
+                e.id.replace(/^emp-/, '') === String(resolvedEmpId).replace(/^emp-/, '')
+            );
             return {
               id: docSnap.id,
               projectId: data.projectId || matchedProj?.id || '',
               projectName: data.projectName || matchedProj?.name || 'Unassigned Project',
-              employeeId: data.employeeId || '',
-              employeeName: data.employeeName || '',
-              employeeRole: data.employeeRole || 'Editor',
-              memberEmail: data.memberEmail || '',
-              discipline: data.discipline || 'BIM - ACS',
+              employeeId: matchedEmp?.id || resolvedEmpId,
+              employeeName: data.employeeName || matchedEmp?.name || '',
+              employeeRole: data.employeeRole || matchedEmp?.role || 'Editor',
+              memberEmail: data.memberEmail || matchedEmp?.email || '',
+              discipline: data.discipline || matchedEmp?.discipline || 'BIM - ACS',
               lod: data.lod || 'LOD 350',
               projectPhase: data.projectPhase || 'Design Development',
               taskType: data.taskType || '3D Modeling',
@@ -231,13 +246,96 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: newAllocations }));
     if (changedItem) {
       try {
-        const sanitized = JSON.parse(JSON.stringify(changedItem));
-        setDoc(doc(db, 'project_assignments', changedItem.id), sanitized, { merge: true }).catch((err) =>
-          console.warn('Firestore saveAllocation sync notice:', err)
-        );
+        const sanitized = {
+          ...JSON.parse(JSON.stringify(changedItem)),
+          assignedTo: changedItem.employeeId,
+          discipline: changedItem.discipline || 'BIM - ACS',
+          updatedAt: new Date().toISOString(),
+        };
+        const targetRef = doc(db, 'project_assignments', changedItem.id);
+        updateDoc(targetRef, sanitized).catch(() => {
+          setDoc(targetRef, sanitized, { merge: true }).catch((err) =>
+            console.warn('Firestore saveAllocation sync notice:', err)
+          );
+        });
       } catch (e) {
         console.warn('Firestore saveAllocation error:', e);
       }
+    }
+  };
+
+  // Handle team member selection for a discipline or allocation row and persist via updateDoc in try/catch
+  const handleMemberSelect = async (
+    disciplineKey: string,
+    memberId: string,
+    allocationId?: string
+  ) => {
+    const emp = employees.find(
+      (e) => e.id === memberId || e.id.replace(/^emp-/, '') === memberId.replace(/^emp-/, '')
+    );
+    const resolvedDiscipline = (
+      emp?.discipline ||
+      emp?.primaryDiscipline ||
+      disciplineKey ||
+      'BIM - ACS'
+    ) as ResourceAllocationItem['discipline'];
+
+    if (!allocationId) {
+      setFormEmployee(memberId);
+      if (emp?.discipline || emp?.primaryDiscipline) {
+        setFormDiscipline(resolvedDiscipline);
+      }
+      try {
+        await syncDisciplineMemberToFirestore(resolvedDiscipline, memberId, formProject);
+      } catch (err) {
+        console.warn('Firestore modal member select sync notice:', err);
+      }
+      return;
+    }
+
+    let updatedTarget: ResourceAllocationItem | undefined;
+    const updatedList = allocations.map((item) => {
+      if (item.id === allocationId) {
+        updatedTarget = {
+          ...item,
+          employeeId: emp?.id || memberId,
+          employeeName: emp?.name || item.employeeName,
+          employeeRole: emp?.role || item.employeeRole,
+          memberEmail: emp?.email || item.memberEmail,
+          discipline: resolvedDiscipline,
+        };
+        return updatedTarget;
+      }
+      return item;
+    });
+
+    setAllocations(updatedList);
+    localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(updatedList));
+    window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: updatedList }));
+
+    try {
+      const assignRef = doc(db, 'project_assignments', allocationId);
+      const updatePayload = {
+        assignedTo: emp?.id || memberId,
+        employeeId: emp?.id || memberId,
+        employeeName: emp?.name || updatedTarget?.employeeName || '',
+        employeeRole: emp?.role || updatedTarget?.employeeRole || 'Editor',
+        memberEmail: emp?.email || updatedTarget?.memberEmail || '',
+        discipline: resolvedDiscipline,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await updateDoc(assignRef, updatePayload);
+      } catch {
+        await setDoc(assignRef, { ...(updatedTarget || {}), ...updatePayload }, { merge: true });
+      }
+      await syncDisciplineMemberToFirestore(
+        resolvedDiscipline,
+        emp?.id || memberId,
+        updatedTarget?.projectId
+      );
+    } catch (err) {
+      console.warn('Firestore handleMemberSelect updateDoc notice:', err);
     }
   };
 
@@ -798,16 +896,48 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                       key={alloc.id}
                       className="hover:bg-slate-800/40 transition group"
                     >
-                      {/* Team Member (Name and avatar only, no designation, no capacity indicators) */}
+                      {/* Team Member (Synced with Firestore assignedTo / discipline) */}
                       <td className="py-3 px-3.5">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-bold text-white text-[11px] shrink-0 shadow-xs">
                             {(alloc.employeeName || 'U').split(' ').map((n) => n[0]).join('')}
                           </div>
                           <div>
-                            <div className="font-semibold text-white text-[13px]">
-                              {alloc.employeeName}
-                            </div>
+                            {isSuperAdmin && employees.length > 0 ? (
+                              <select
+                                aria-label={`Assigned team member for ${alloc.discipline || 'BIM - ACS'}`}
+                                value={
+                                  alloc.employeeId ||
+                                  disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
+                                  disciplineAssignments[alloc.discipline] ||
+                                  ''
+                                }
+                                onChange={(e) =>
+                                  handleMemberSelect(
+                                    alloc.discipline || 'BIM - ACS',
+                                    e.target.value,
+                                    alloc.id
+                                  )
+                                }
+                                className="px-2 py-1 text-[13px] font-semibold rounded bg-slate-800 border border-slate-700 text-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                              >
+                                {!employees.some((emp) => emp.id === alloc.employeeId) &&
+                                  alloc.employeeId && (
+                                    <option value={alloc.employeeId} className="bg-slate-900">
+                                      {alloc.employeeName || 'Assigned Member'}
+                                    </option>
+                                  )}
+                                {employees.map((emp) => (
+                                  <option key={emp.id} value={emp.id} className="bg-slate-900">
+                                    {emp.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="font-semibold text-white text-[13px]">
+                                {alloc.employeeName}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1022,8 +1152,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     Assignee Specialist *
                   </label>
                   <select
-                    value={formEmployee}
-                    onChange={(e) => setFormEmployee(e.target.value)}
+                    value={formEmployee || ''}
+                    onChange={(e) => handleMemberSelect(formDiscipline, e.target.value)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     {employees.map((e) => {

@@ -32,6 +32,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   onOpenLogModalWithProject,
 }) => {
   const {
+    projects,
     getProjectCompletedHours,
     employees,
     updateMilestoneStatus,
@@ -40,7 +41,11 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     addMilestone,
     updateProjectStatus,
     currentUser,
+    disciplineAssignments,
+    handleMemberSelect: syncDisciplineMemberToFirestore,
   } = useBimData();
+
+  const liveProject = projects.find((p) => p.id === project?.id) || project;
 
   const isSuperAdmin = isUserSuperAdmin(currentUser);
   const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'milestones' | 'clashes'>('overview');
@@ -48,29 +53,49 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
 
   // New task form
   const [taskName, setTaskName] = useState('');
-  const [taskDiscipline, setTaskDiscipline] = useState(project?.disciplines?.[0] || 'BIM - ACS');
+  const [taskDiscipline, setTaskDiscipline] = useState(liveProject?.disciplines?.[0] || 'BIM - ACS');
   const [taskLOD, setTaskLOD] = useState<LODLevel>('LOD 350');
   const [taskEstHours, setTaskEstHours] = useState(80);
   const [taskAssignee, setTaskAssignee] = useState(employees[0]?.id || '');
   const [taskDueDate, setTaskDueDate] = useState('2026-09-30');
 
   useEffect(() => {
-    if (project?.disciplines && project.disciplines.length > 0) {
-      setTaskDiscipline(project.disciplines[0]);
+    if (liveProject?.disciplines && liveProject.disciplines.length > 0) {
+      setTaskDiscipline(liveProject.disciplines[0]);
     }
-  }, [project]);
+  }, [liveProject?.id]);
 
-  if (!project) return null;
+  if (!liveProject) return null;
 
-  const completedHours = getProjectCompletedHours(project.id);
-  const variance = project.totalEstimatedHours - completedHours;
-  const isOverBudget = completedHours > project.totalEstimatedHours;
-  const burnPct = project.totalEstimatedHours > 0
-    ? Math.min(100, Math.round((completedHours / project.totalEstimatedHours) * 100))
+  const handleMemberSelect = async (
+    disciplineKey: string,
+    memberId: string,
+    taskId?: string
+  ) => {
+    if (taskId) {
+      updateTask(liveProject.id, taskId, {
+        assignedEmployeeId: memberId,
+        discipline: disciplineKey as any,
+      });
+    } else {
+      setTaskAssignee(memberId);
+    }
+    try {
+      await syncDisciplineMemberToFirestore(disciplineKey, memberId, liveProject.id);
+    } catch (err) {
+      console.warn('Firestore discipline assignment sync notice:', err);
+    }
+  };
+
+  const completedHours = getProjectCompletedHours(liveProject.id);
+  const variance = liveProject.totalEstimatedHours - completedHours;
+  const isOverBudget = completedHours > liveProject.totalEstimatedHours;
+  const burnPct = liveProject.totalEstimatedHours > 0
+    ? Math.min(100, Math.round((completedHours / liveProject.totalEstimatedHours) * 100))
     : 0;
 
   const assignedStaff = employees.filter((e) =>
-    project.assignedEmployeeIds.includes(e.id)
+    liveProject.assignedEmployeeIds.includes(e.id)
   );
 
   const handleCreateTask = (e: React.FormEvent) => {
@@ -284,14 +309,36 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                   Active BIM Disciplines
                 </h4>
                 <div className="flex flex-wrap gap-2">
-                  {project.disciplines.map((disc) => (
-                    <span
-                      key={disc}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium"
-                    >
-                      {disc}
-                    </span>
-                  ))}
+                  {liveProject.disciplines.map((disc) => {
+                    const assignedMemberId =
+                      disciplineAssignments[`${liveProject.id}__${disc}`] ||
+                      disciplineAssignments[disc] ||
+                      liveProject.tasks.find((t) => t.discipline === disc)?.assignedEmployeeId ||
+                      '';
+                    return (
+                      <div
+                        key={disc}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium flex items-center gap-2"
+                      >
+                        <span>{disc}</span>
+                        {isSuperAdmin && employees.length > 0 && (
+                          <select
+                            aria-label={`Assign specialist for ${disc}`}
+                            value={assignedMemberId || ''}
+                            onChange={(e) => handleMemberSelect(disc, e.target.value)}
+                            className="bg-slate-900 text-slate-200 text-[11px] rounded px-1.5 py-0.5 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                          >
+                            <option value="">Unassigned</option>
+                            {employees.map((emp) => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -336,8 +383,13 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
               </div>
 
               <div className="space-y-3">
-                {project.tasks.map((task) => {
-                  const assignee = employees.find((e) => e.id === task.assignedEmployeeId);
+                {liveProject.tasks.map((task) => {
+                  const assignedMemberId =
+                    task.assignedEmployeeId ||
+                    disciplineAssignments[`${liveProject.id}__${task.discipline}`] ||
+                    disciplineAssignments[task.discipline] ||
+                    '';
+                  const assignee = employees.find((e) => e.id === assignedMemberId);
                   const isTaskOver = task.completedHours > task.estimatedHours;
                   const taskPct = task.estimatedHours > 0
                     ? Math.min(100, Math.round((task.completedHours / task.estimatedHours) * 100))
@@ -359,8 +411,28 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                               {task.lod}
                             </span>
                           </div>
-                          <div className="text-[11px] text-slate-400 mt-0.5">
-                            Assigned: <strong className="text-slate-300">{assignee?.name || 'Unassigned'}</strong> • Due: {task.dueDate}
+                          <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                            <span>Assigned:</span>
+                            {isSuperAdmin && employees.length > 0 ? (
+                              <select
+                                aria-label={`Assign team member for ${task.name}`}
+                                value={assignedMemberId || ''}
+                                onChange={(e) =>
+                                  handleMemberSelect(task.discipline, e.target.value, task.id)
+                                }
+                                className="bg-slate-800 text-slate-200 text-[11px] font-semibold rounded px-1.5 py-0.5 border border-slate-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              >
+                                <option value="">Unassigned</option>
+                                {employees.map((emp) => (
+                                  <option key={emp.id} value={emp.id}>
+                                    {emp.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <strong className="text-slate-300">{assignee?.name || 'Unassigned'}</strong>
+                            )}
+                            <span>• Due: {task.dueDate}</span>
                           </div>
                         </div>
 
@@ -369,7 +441,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                             aria-label="Change task status"
                             value={task.status}
                             onChange={(e) =>
-                              updateTask(project.id, task.id, {
+                              updateTask(liveProject.id, task.id, {
                                 status: e.target.value as TaskItem['status'],
                               })
                             }
@@ -467,8 +539,8 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                       <label className="block text-slate-400 mb-1">Assignee</label>
                       <select
                         aria-label="Select Task Assignee"
-                        value={taskAssignee}
-                        onChange={(e) => setTaskAssignee(e.target.value)}
+                        value={taskAssignee || ''}
+                        onChange={(e) => handleMemberSelect(taskDiscipline, e.target.value)}
                         className="w-full bg-slate-800 text-slate-200 rounded p-1.5 border border-slate-700"
                       >
                         {employees.map((e) => (

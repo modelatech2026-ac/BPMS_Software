@@ -25,7 +25,14 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   onClose,
   preselectedProjectId,
 }) => {
-  const { projects, employees, addWorkLog, currentUser } = useBimData();
+  const {
+    projects,
+    employees,
+    addWorkLog,
+    currentUser,
+    disciplineAssignments,
+    handleMemberSelect: syncDisciplineMemberToFirestore,
+  } = useBimData();
   const isSuper = isUserSuperAdmin(currentUser);
 
   const [projectId, setProjectId] = useState<string>(
@@ -58,9 +65,24 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     }
   }, [isOpen, preselectedProjectId, projects, projectId]);
 
-  // Auto-select current logged in user if available
+  // Auto-select current logged in user or hydrated discipline assignee when modal opens
+  const wasOpenRef = React.useRef(false);
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+
+    const hydratedAssignee =
+      disciplineAssignments[`${projectId}__${discipline}`] ||
+      disciplineAssignments[discipline];
+    if (hydratedAssignee && employees.some((e) => e.id === hydratedAssignee)) {
+      setEmployeeId(hydratedAssignee);
+      return;
+    }
+
     if (currentUser?.email) {
       const cleanEmail = currentUser.email.trim().toLowerCase();
       const detId = generateRequestDocId(cleanEmail);
@@ -74,6 +96,8 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       );
       if (match) {
         setEmployeeId(match.id);
+      } else if (employees.length > 0) {
+        setEmployeeId(employees[0].id);
       } else if (currentUser.id) {
         setEmployeeId(currentUser.id);
       } else {
@@ -82,10 +106,39 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     } else if (employees.length > 0 && !employeeId) {
       setEmployeeId(employees[0].id);
     }
-  }, [isOpen, currentUser, employees]);
+  }, [isOpen, currentUser, employees, disciplineAssignments, projectId, discipline, employeeId]);
+
+  // Hydrate dropdown value from real-time onSnapshot disciplineAssignments when updated externally
+  useEffect(() => {
+    const syncedMemberId =
+      disciplineAssignments[`${projectId}__${discipline}`] ||
+      disciplineAssignments[discipline];
+    if (syncedMemberId && syncedMemberId !== employeeId && employees.some((e) => e.id === syncedMemberId)) {
+      setEmployeeId(syncedMemberId);
+    }
+  }, [disciplineAssignments, projectId, discipline]);
 
   const selectedProject = projects.find((p) => p.id === projectId) || projects[0];
-  const selectedEmployee = employees.find((e) => e.id === employeeId);
+  const assignedMemberId =
+    employeeId ||
+    disciplineAssignments[`${projectId}__${discipline}`] ||
+    disciplineAssignments[discipline] ||
+    '';
+  const selectedEmployee = employees.find((e) => e.id === assignedMemberId);
+
+  const handleMemberSelect = async (disciplineKey: string, memberId: string) => {
+    setEmployeeId(memberId);
+    const chosenEmp = employees.find((e) => e.id === memberId);
+    const resolvedDiscipline = (chosenEmp?.discipline || chosenEmp?.primaryDiscipline || disciplineKey || discipline) as Discipline;
+    if (chosenEmp?.discipline || chosenEmp?.primaryDiscipline) {
+      setDiscipline(resolvedDiscipline);
+    }
+    try {
+      await syncDisciplineMemberToFirestore(resolvedDiscipline, memberId, projectId);
+    } catch (err) {
+      console.warn('Error syncing member selection to Firestore:', err);
+    }
+  };
 
   // Auto-fill task if project has tasks
   useEffect(() => {
@@ -106,7 +159,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     const cleanCurrentEmail = (currentUser?.email || '').trim().toLowerCase();
     const fallbackUserId =
       currentUser?.id || (cleanCurrentEmail ? `emp-${generateRequestDocId(cleanCurrentEmail)}` : 'emp-user');
-    const effectiveEmployeeId = employeeId || fallbackUserId;
+    const effectiveEmployeeId = assignedMemberId || fallbackUserId;
 
     const selectedEmp = employees.find(
       (emp) =>
@@ -213,34 +266,24 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
               </label>
               <select
                 aria-label="Select Modeler"
-                value={employeeId}
-                onChange={(e) => setEmployeeId(e.target.value)}
-                disabled={!isSuper && Boolean(currentUser)}
-                className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer disabled:opacity-80"
+                value={assignedMemberId || ''}
+                onChange={(e) => handleMemberSelect(discipline, e.target.value)}
+                className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                 required
               >
-                {isSuper &&
-                  employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.name} ({emp.role})
-                    </option>
-                  ))}
-                {!isSuper &&
-                  selectedEmployee && (
-                    <option value={selectedEmployee.id}>
-                      {selectedEmployee.name} ({selectedEmployee.role})
-                    </option>
-                  )}
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name} ({emp.role})
+                  </option>
+                ))}
                 {currentUser &&
-                  (!selectedEmployee ||
-                    (!employees.some(
-                      (e) =>
-                        e.id === currentUser.id ||
-                        (e.email &&
-                          currentUser.email &&
-                          e.email.trim().toLowerCase() === currentUser.email.trim().toLowerCase())
-                    ) &&
-                      isSuper)) && (
+                  !employees.some(
+                    (e) =>
+                      e.id === currentUser.id ||
+                      (e.email &&
+                        currentUser.email &&
+                        e.email.trim().toLowerCase() === currentUser.email.trim().toLowerCase())
+                  ) && (
                     <option
                       value={
                         selectedEmployee?.id ||

@@ -160,6 +160,10 @@ interface BimDataContextType {
   addTask: (projectId: string, task: Omit<TaskItem, 'id' | 'projectId'>) => void;
   updateTask: (projectId: string, taskId: string, updates: Partial<TaskItem>) => void;
 
+  // Discipline & Team Member Assignment State & Real-Time Firestore Sync
+  disciplineAssignments: Record<string, string>;
+  handleMemberSelect: (disciplineKey: string, memberId: string, projectId?: string) => Promise<void>;
+
   saveStakeholderReport: (report: GeneratedStakeholderReport) => void;
   resetToMockData: () => void;
 
@@ -671,6 +675,19 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     return [];
   });
 
+  const [disciplineAssignments, setDisciplineAssignments] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('bim_discipline_assignments_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch {}
+    return {};
+  });
+
   const [generatedReports, setGeneratedReports] = useState<
     GeneratedStakeholderReport[]
   >(() => {
@@ -1017,11 +1034,17 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                   phone: '+1 (555) 019-2834',
                 });
               } else {
-                if (req.assignedRole && updated[idx].role !== role) {
+                const roleChanged = Boolean(req.assignedRole && updated[idx].role !== role);
+                const discChanged = Boolean(
+                  disc &&
+                    (updated[idx].discipline !== disc || updated[idx].primaryDiscipline !== disc)
+                );
+                if (roleChanged || discChanged) {
                   changed = true;
                   updated[idx] = {
                     ...updated[idx],
-                    role,
+                    ...(roleChanged ? { role } : {}),
+                    ...(discChanged ? { discipline: disc, primaryDiscipline: disc } : {}),
                   };
                 }
               }
@@ -1049,6 +1072,51 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Firestore onSnapshot listener error:', e);
     }
 
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // Real-time onSnapshot listener on Firestore 'disciplines' collection to hydrate assignment dropdowns
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = onSnapshot(
+        collection(db, 'disciplines'),
+        (snapshot) => {
+          const nextMap: Record<string, string> = {};
+          snapshot.docs.forEach((d) => {
+            const data = d.data();
+            const assignedTo = String(
+              data.assignedTo || data.assignedMemberId || data.employeeId || ''
+            ).trim();
+            const discKey = String(data.discipline || data.disciplineKey || d.id).trim();
+            const projId = String(data.projectId || '').trim();
+            if (assignedTo) {
+              nextMap[d.id] = assignedTo;
+              if (discKey) {
+                nextMap[discKey] = assignedTo;
+              }
+              if (projId && discKey) {
+                nextMap[`${projId}__${discKey}`] = assignedTo;
+              }
+            }
+          });
+          setDisciplineAssignments((prev) => {
+            const merged = { ...prev, ...nextMap };
+            try {
+              localStorage.setItem('bim_discipline_assignments_v1', JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        },
+        (err) => {
+          console.warn('Firestore disciplines onSnapshot notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Firestore disciplines listener setup notice:', e);
+    }
     return () => {
       if (unsubscribe) unsubscribe();
     };
@@ -2857,13 +2925,70 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       id: `emp-${Date.now()}`,
     };
     setEmployees((prev) => [...prev, newEmp]);
+
+    // Persist new team member and discipline assignment to Firestore
+    const cleanEmail = (newEmp.email || '').trim().toLowerCase();
+    const docId = cleanEmail ? generateRequestDocId(cleanEmail) : newEmp.id;
+    const payload = {
+      id: newEmp.id,
+      name: newEmp.name,
+      fullName: newEmp.name,
+      email: cleanEmail || newEmp.email,
+      role: newEmp.role,
+      discipline: newEmp.discipline || newEmp.primaryDiscipline || 'BIM - ACS',
+      primaryDiscipline: newEmp.primaryDiscipline || newEmp.discipline || 'BIM - ACS',
+      assignedTo: newEmp.id,
+      status: 'APPROVED',
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      updateDoc(doc(db, 'users', docId), payload).catch(() => {
+        setDoc(doc(db, 'users', docId), payload, { merge: true }).catch(() => {});
+      });
+    } catch {}
     return newEmp;
   };
 
   const updateEmployee = (id: string, updates: Partial<Employee>) => {
+    let targetEmp: Employee | undefined;
     setEmployees((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, ...updates } : e))
+      prev.map((e) => {
+        if (e.id === id) {
+          targetEmp = { ...e, ...updates };
+          return targetEmp;
+        }
+        return e;
+      })
     );
+
+    const emp = targetEmp || employees.find((e) => e.id === id);
+    if (emp) {
+      const cleanEmail = (updates.email || emp.email || '').trim().toLowerCase();
+      const docId = cleanEmail ? generateRequestDocId(cleanEmail) : id.replace(/^emp-/, '');
+      const updatedDiscipline = updates.discipline || updates.primaryDiscipline || emp.discipline || emp.primaryDiscipline || 'BIM - ACS';
+      const firestoreUpdates: Record<string, any> = {
+        ...updates,
+        assignedTo: id,
+        discipline: updatedDiscipline,
+        primaryDiscipline: updatedDiscipline,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        updateDoc(doc(db, 'users', docId), firestoreUpdates).catch(() => {
+          setDoc(doc(db, 'users', docId), firestoreUpdates, { merge: true }).catch(() => {});
+        });
+        updateDoc(doc(db, 'access_requests', docId), {
+          discipline: updatedDiscipline,
+          primaryDiscipline: updatedDiscipline,
+          assignedTo: id,
+          ...(updates.role ? { role: updates.role } : {}),
+          ...(updates.name ? { name: updates.name, fullName: updates.name } : {}),
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      } catch (err) {
+        console.warn('Firestore updateEmployee sync notice:', err);
+      }
+    }
   };
 
   const deleteEmployee = (id: string) => {
@@ -3021,9 +3146,23 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       projectId,
     };
     setProjects((prev) =>
-      prev.map((p) =>
-        p.id === projectId ? { ...p, tasks: [...p.tasks, newTask] } : p
-      )
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        const nextTasks = [...p.tasks, newTask];
+        const nextAssignedIds =
+          newTask.assignedEmployeeId && !p.assignedEmployeeIds.includes(newTask.assignedEmployeeId)
+            ? [...p.assignedEmployeeIds, newTask.assignedEmployeeId]
+            : p.assignedEmployeeIds;
+        try {
+          updateDoc(doc(db, 'projects', projectId), {
+            tasks: nextTasks,
+            assignedEmployeeIds: nextAssignedIds,
+            assignedTo: newTask.assignedEmployeeId || '',
+            discipline: newTask.discipline,
+          }).catch(() => {});
+        } catch {}
+        return { ...p, tasks: nextTasks, assignedEmployeeIds: nextAssignedIds };
+      })
     );
   };
 
@@ -3035,12 +3174,112 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     setProjects((prev) =>
       prev.map((p) => {
         if (p.id !== projectId) return p;
-        const updated = p.tasks.map((t) =>
-          t.id === taskId ? { ...t, ...updates } : t
-        );
-        return { ...p, tasks: updated };
+        let updatedTaskItem: TaskItem | undefined;
+        const updated = p.tasks.map((t) => {
+          if (t.id === taskId) {
+            updatedTaskItem = { ...t, ...updates };
+            return updatedTaskItem;
+          }
+          return t;
+        });
+        const nextAssignedIds =
+          updates.assignedEmployeeId && !p.assignedEmployeeIds.includes(updates.assignedEmployeeId)
+            ? [...p.assignedEmployeeIds, updates.assignedEmployeeId]
+            : p.assignedEmployeeIds;
+        try {
+          updateDoc(doc(db, 'projects', projectId), {
+            tasks: updated,
+            assignedEmployeeIds: nextAssignedIds,
+            ...(updatedTaskItem?.assignedEmployeeId
+              ? { assignedTo: updatedTaskItem.assignedEmployeeId }
+              : {}),
+            ...(updatedTaskItem?.discipline ? { discipline: updatedTaskItem.discipline } : {}),
+          }).catch(() => {});
+        } catch (err) {
+          console.warn('Firestore updateTask sync notice:', err);
+        }
+        return { ...p, tasks: updated, assignedEmployeeIds: nextAssignedIds };
       })
     );
+  };
+
+  const handleMemberSelect = async (
+    disciplineKey: string,
+    memberId: string,
+    projectId?: string
+  ): Promise<void> => {
+    const cleanKey = (disciplineKey || 'BIM - ACS').trim();
+    const compositeKey = projectId ? `${projectId}__${cleanKey}` : cleanKey;
+    const docId = compositeKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    // 1. Immediate React state update for controlled select components
+    setDisciplineAssignments((prev) => {
+      const next = {
+        ...prev,
+        [cleanKey]: memberId,
+        [compositeKey]: memberId,
+        [docId]: memberId,
+      };
+      try {
+        localStorage.setItem('bim_discipline_assignments_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    const selectedEmp = employees.find(
+      (e) => e.id === memberId || e.id.replace(/^emp-/, '') === memberId.replace(/^emp-/, '')
+    );
+
+    // If projectId is provided, also keep project assignedEmployeeIds & matching discipline tasks synced
+    if (projectId && memberId) {
+      setProjects((prev) =>
+        prev.map((p) => {
+          if (p.id !== projectId) return p;
+          const nextAssigned = p.assignedEmployeeIds.includes(memberId)
+            ? p.assignedEmployeeIds
+            : [...p.assignedEmployeeIds, memberId];
+          const nextTasks = p.tasks.map((t) =>
+            t.discipline === cleanKey || t.id === cleanKey
+              ? { ...t, assignedEmployeeId: memberId }
+              : t
+          );
+          return { ...p, assignedEmployeeIds: nextAssigned, tasks: nextTasks };
+        })
+      );
+    }
+
+    // 2. Persist assignedTo and discipline to Firestore inside a try/catch block via updateDoc
+    const payload = {
+      assignedTo: memberId,
+      assignedMemberId: memberId,
+      employeeId: memberId,
+      employeeName: selectedEmp?.name || '',
+      memberEmail: selectedEmp?.email || '',
+      discipline: cleanKey,
+      disciplineKey: cleanKey,
+      ...(projectId ? { projectId } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      const discRef = doc(db, 'disciplines', docId);
+      try {
+        await updateDoc(discRef, payload);
+      } catch {
+        await setDoc(discRef, payload, { merge: true });
+      }
+
+      if (projectId) {
+        const projRef = doc(db, 'projects', projectId);
+        await updateDoc(projRef, {
+          assignedTo: memberId,
+          discipline: cleanKey,
+          [`disciplineAssignments.${cleanKey}`]: memberId,
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('Firestore handleMemberSelect persistence notice:', err);
+    }
   };
 
   const saveStakeholderReport = (report: GeneratedStakeholderReport) => {
@@ -3180,6 +3419,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         updateClashStatus,
         addTask,
         updateTask,
+        disciplineAssignments,
+        handleMemberSelect,
         saveStakeholderReport,
         resetToMockData,
         getProjectById,
