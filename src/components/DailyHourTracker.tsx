@@ -27,7 +27,9 @@ import {
   toLocalIsoDate,
   isUserSuperAdmin,
   cleanProjectName,
+  getMemberLabel,
 } from '../context/BimDataContext';
+import { normalizeUserRole } from '../auth/googleAuth';
 import { db } from '../firebase/config';
 import { collection, deleteDoc, doc, getDocs, onSnapshot } from 'firebase/firestore';
 import { DailyWorkLog, Discipline, ActivityType, LODLevel, Employee } from '../types';
@@ -501,19 +503,21 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
             if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
               return;
             }
-            const isSuper = email === 'modelatech2026@gmail.com';
-            const name = isSuper
-              ? 'Aditi Chakraborty'
-              : String(data.fullName || data.name || (email ? email.split('@')[0] : '')).trim();
+            const rawName = String(data.fullName || data.name || (email ? email.split('@')[0] : '')).trim();
+            const isSuper = email === 'modelatech2026@gmail.com' || rawName.toLowerCase() === 'aditi chakraborty';
+            const name = isSuper ? 'Aditi Chakraborty' : rawName;
             if (!name && !email) return;
             const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
+            const resolvedRole = isSuper
+              ? 'SUPER_ADMIN'
+              : normalizeUserRole(data.assignedRole || data.appRole || data.role || 'VIEWER', false);
             usersList.push({
               id: isSuper
                 ? 'emp-modelatech2026_gmail_com'
                 : String(data.id || (docSnap.id.startsWith('emp-') ? docSnap.id : `emp-${docSnap.id}`)).trim(),
               name,
               email: isSuper ? 'modelatech2026@gmail.com' : email,
-              role: (isSuper ? 'Super Admin' : data.role || data.assignedRole || 'BIM Modeler') as any,
+              role: resolvedRole as any,
               primaryDiscipline: disc,
               discipline: disc,
               avatar:
@@ -559,7 +563,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       name: 'Aditi Chakraborty',
       email: 'modelatech2026@gmail.com',
       avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Aditi%20Chakraborty',
-      role: 'Super Admin' as any,
+      role: 'SUPER_ADMIN' as any,
       primaryDiscipline: 'BIM - ACS',
       discipline: 'BIM - ACS',
       weeklyCapacityHours: 40,
@@ -630,7 +634,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
           `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
             currentUser.name || 'User'
           )}`,
-        role: (currentUser.role || 'BIM Modeler') as any,
+        role: (isSuperAdmin ? 'SUPER_ADMIN' : (currentUser.appRole || currentUser.role || 'VIEWER')) as any,
         primaryDiscipline: 'BIM - ACS',
         discipline: 'BIM - ACS',
         weeklyCapacityHours: 40,
@@ -1318,7 +1322,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   <option value="all">All Employees ({allTrackedEmployees.length})</option>
                   {allTrackedEmployees.map((e) => (
                     <option key={e.id} value={e.id}>
-                      {e.name} {e.role ? `(${e.role})` : ''}
+                      {getMemberLabel(e)}
                     </option>
                   ))}
                 </select>
@@ -1648,7 +1652,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     )}
                     {allTrackedEmployees.map((emp) => (
                       <option key={emp.id} value={emp.id}>
-                        {emp.name} ({emp.role})
+                        {getMemberLabel(emp)}
                       </option>
                     ))}
                   </select>

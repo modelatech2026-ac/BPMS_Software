@@ -357,24 +357,48 @@ export async function persistUserRoleToDatabase(params: {
     throw err;
   }
 
-  // 2. Update Firestore 'users' collection
+  // 2. Update Firestore 'users' collection (including any existing docs matching by email)
   try {
     const userPayload = {
       id: deterministicId,
       email: cleanEmail,
       name: params.name || cleanEmail.split('@')[0],
+      fullName: params.name || cleanEmail.split('@')[0],
       role: validatedRole,
       appRole: validatedRole,
+      assignedRole: validatedRole,
       status: normalizedStatus,
       accessLevel: calculatedAccessLevel,
+      assignedAccessLevel: calculatedAccessLevel,
       discipline: params.discipline || 'BIM - ACS',
+      primaryDiscipline: params.discipline || 'BIM - ACS',
+      isDeleted: false,
       updatedAt: nowIso,
     };
-    await setDoc(doc(db, 'users', deterministicId), userPayload, { merge: true });
-    if (targetId !== deterministicId) {
+    const usersCol = collection(db, 'users');
+    const userSnap = await getDocs(query(usersCol, where('email', '==', cleanEmail)));
+    const updatedUserDocIds = new Set<string>();
+
+    if (!userSnap.empty) {
+      await Promise.all(
+        userSnap.docs.map((d) => {
+          updatedUserDocIds.add(d.id);
+          return setDoc(d.ref, { ...userPayload, id: d.data()?.id || `emp-${d.id}` }, { merge: true });
+        })
+      );
+    }
+
+    if (!updatedUserDocIds.has(deterministicId)) {
+      await setDoc(
+        doc(db, 'users', deterministicId),
+        { ...userPayload, id: `emp-${deterministicId}` },
+        { merge: true }
+      );
+    }
+    if (targetId !== deterministicId && !updatedUserDocIds.has(targetId)) {
       await setDoc(
         doc(db, 'users', targetId),
-        { ...userPayload, id: targetId },
+        { ...userPayload, id: targetId.startsWith('emp-') ? targetId : `emp-${targetId}` },
         { merge: true }
       );
     }
@@ -398,7 +422,7 @@ export async function persistUserRoleToDatabase(params: {
         googleId: existing?.googleId || targetId,
         email: cleanEmail,
         name: params.name || existing?.name || cleanEmail.split('@')[0],
-        role: displayRole,
+        role: validatedRole,
         appRole: validatedRole,
         accessLevel: calculatedAccessLevel,
         securityRole: mapUserRoleToSecurityRole(validatedRole),
@@ -412,7 +436,58 @@ export async function persistUserRoleToDatabase(params: {
     console.warn('LocalStorage usersDb persistence notice:', e);
   }
 
-  // 4. If current logged in user is this user, update current user cache in localStorage
+  // 4. Synchronize cached employees list in localStorage and notify active listeners immediately
+  try {
+    const empRaw = localStorage.getItem('bim_tracker_employees_v7');
+    if (empRaw) {
+      const empList = JSON.parse(empRaw);
+      if (Array.isArray(empList)) {
+        const cleanNameLower = (params.name || '').trim().toLowerCase();
+        const updatedEmpList = empList.map((emp: any) => {
+          const eEmail = (emp?.email || '').trim().toLowerCase();
+          const eName = (emp?.name || '').trim().toLowerCase();
+          const eIdStripped = String(emp?.id || '').replace(/^emp-/, '');
+          if (
+            eEmail === cleanEmail ||
+            eIdStripped === deterministicId ||
+            eIdStripped === targetId.replace(/^emp-/, '') ||
+            (cleanNameLower && eName === cleanNameLower)
+          ) {
+            return {
+              ...emp,
+              role: validatedRole,
+              ...(params.discipline
+                ? { discipline: params.discipline, primaryDiscipline: params.discipline }
+                : {}),
+            };
+          }
+          return emp;
+        });
+        localStorage.setItem('bim_tracker_employees_v7', JSON.stringify(updatedEmpList));
+      }
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('bim_user_role_synced', {
+          detail: {
+            email: cleanEmail,
+            uid: targetId,
+            deterministicId,
+            name: params.name,
+            role: validatedRole,
+            displayRole,
+            status: normalizedStatus,
+            accessLevel: calculatedAccessLevel,
+            discipline: params.discipline,
+          },
+        })
+      );
+    }
+  } catch (e) {
+    console.warn('Employees localStorage role sync notice:', e);
+  }
+
+  // 5. If current logged in user is this user, update current user cache in localStorage
   try {
     const curRaw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
     if (curRaw) {
@@ -420,7 +495,7 @@ export async function persistUserRoleToDatabase(params: {
       if (cur?.email?.toLowerCase() === cleanEmail) {
         const updatedCur: AuthUser = {
           ...cur,
-          role: displayRole,
+          role: validatedRole,
           appRole: validatedRole,
           accessLevel: calculatedAccessLevel,
           securityRole: mapUserRoleToSecurityRole(validatedRole),

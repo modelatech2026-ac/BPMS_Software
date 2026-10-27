@@ -12,7 +12,7 @@ import {
   User,
   Building
 } from 'lucide-react';
-import { useBimData, cleanProjectName } from '../context/BimDataContext';
+import { useBimData, cleanProjectName, getMemberLabel } from '../context/BimDataContext';
 import { ClashRecord, Discipline, LODLevel } from '../types';
 
 export const ClashAndLODTracker: React.FC = () => {
@@ -427,7 +427,7 @@ export const ClashAndLODTracker: React.FC = () => {
                   >
                     {employees.map((e) => (
                       <option key={e.id} value={e.id}>
-                        {e.name} ({e.role})
+                        {getMemberLabel(e)}
                       </option>
                     ))}
                   </select>

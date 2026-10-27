@@ -24,7 +24,7 @@ import {
   Building,
   Briefcase
 } from 'lucide-react';
-import { useBimData, isUserSuperAdmin, getCurrentWeekRange, cleanProjectName } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin, getCurrentWeekRange, cleanProjectName, getMemberLabel } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import {
   collection,
@@ -119,10 +119,32 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     return Array.from(mergedMap.values());
   }, [workLogs, allWorkLogs, realtimeDailyLogs]);
 
-  const activeTeamMembers = useMemo(
-    () => (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted'),
-    [employees]
-  );
+  const activeTeamMembers = useMemo(() => {
+    const raw = (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted');
+    const seen = new Set<string>();
+    return raw.filter((member) => {
+      const emailKey = (member.email || '').trim().toLowerCase();
+      const idKey = (member.id || '').trim();
+      const strippedId = idKey.replace(/^emp-/, '');
+      const detId = emailKey ? generateRequestDocId(emailKey) : '';
+      const nameKey = (member.name || '').trim().toLowerCase();
+      if (
+        (emailKey && seen.has(emailKey)) ||
+        (idKey && seen.has(idKey)) ||
+        (strippedId && seen.has(strippedId)) ||
+        (detId && seen.has(detId)) ||
+        (nameKey && seen.has(nameKey))
+      ) {
+        return false;
+      }
+      if (emailKey) seen.add(emailKey);
+      if (idKey) seen.add(idKey);
+      if (strippedId) seen.add(strippedId);
+      if (detId) seen.add(detId);
+      if (nameKey) seen.add(nameKey);
+      return true;
+    });
+  }, [employees]);
   const activeMembers = activeTeamMembers;
 
   // Exclude allocations belonging to deleted members while keeping active allocations visible in real time
@@ -1828,7 +1850,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   >
                     {activeTeamMembers.map((e) => (
                       <option key={e.id} value={e.id}>
-                        {e.name} ({e.role})
+                        {getMemberLabel(e)}
                       </option>
                     ))}
                   </select>

@@ -619,16 +619,16 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
           <table className="w-full table-auto border-collapse text-left text-xs text-slate-300">
             <thead className="bg-slate-800/90 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-700 text-[11px]">
               <tr>
-                <th className="py-3.5 px-5 min-w-[240px] whitespace-nowrap align-middle">
+                <th className="w-[28%] min-w-[220px] py-3.5 px-5 whitespace-nowrap align-middle">
                   TEAM MANAGEMENT
                 </th>
-                <th className="py-3.5 px-5 min-w-[210px] whitespace-nowrap align-middle">
+                <th className="w-[20%] min-w-[170px] py-3.5 px-5 whitespace-nowrap align-middle">
                   PROJECT
                 </th>
-                <th className="py-3.5 px-5 min-w-[270px] whitespace-normal leading-snug align-middle">
-                  <span className="inline-block">LOGGED HOURS - ASSIGNED HOURS</span>
+                <th className="w-[32%] min-w-[300px] py-3.5 px-5 whitespace-normal break-words leading-relaxed align-middle">
+                  LOGGED HOURS - ASSIGNED HOURS
                 </th>
-                <th className="py-3.5 px-5 min-w-[210px] whitespace-nowrap align-middle">
+                <th className="w-[20%] min-w-[190px] py-3.5 px-5 whitespace-nowrap align-middle">
                   EFFICIENCY (%)
                 </th>
               </tr>

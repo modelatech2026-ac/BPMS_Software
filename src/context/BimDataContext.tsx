@@ -337,6 +337,9 @@ export const getEffectiveLogDate = (
   return rawDate;
 };
 
+export const getMemberLabel = (member: { name?: string; role?: string }): string =>
+  `${member.name} (${member.role || 'VIEWER'})`;
+
 export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
   if (!u) return false;
   // If user has an explicitly assigned non-admin role (e.g., switched role to Viewer/Editor/PM or standard user), respect it first
@@ -350,7 +353,9 @@ export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
     u.appRole === 'EDITOR' ||
     u.appRole === 'VIEWER' ||
     u.accessLevel === 'Viewer' ||
-    u.role === 'Viewer'
+    u.role === 'Viewer' ||
+    u.role === 'VIEWER' ||
+    u.role === 'EDITOR'
   ) {
     return false;
   }
@@ -362,7 +367,9 @@ export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
     u.accessLevel === 'Super Admin' ||
     u.accessLevel === 'Director' ||
     u.role === 'Super Admin' ||
-    u.role === 'Director'
+    u.role === 'SUPER_ADMIN' ||
+    u.role === 'Director' ||
+    u.role === 'DIRECTOR'
   ) {
     return true;
   }
@@ -791,7 +798,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       id: 'emp-modelatech2026_gmail_com',
       name: SUPER_ADMIN_NAME,
       email: SUPER_ADMIN_EMAIL,
-      role: 'Super Admin',
+      role: 'SUPER_ADMIN',
       primaryDiscipline: 'BIM - ACS',
       discipline: 'BIM - ACS',
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(SUPER_ADMIN_NAME)}`,
@@ -810,7 +817,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       id: 'emp-modelatech2026_gmail_com',
       name: SUPER_ADMIN_NAME,
       email: SUPER_ADMIN_EMAIL,
-      role: 'Super Admin',
+      role: 'SUPER_ADMIN',
       primaryDiscipline: 'BIM - ACS',
       discipline: 'BIM - ACS',
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(SUPER_ADMIN_NAME)}`,
@@ -830,23 +837,38 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          const filtered = parsed.filter((e) => {
-            if (!e || e.isDeleted || String(e.status || '').toLowerCase() === 'deleted') return false;
-            const email = (e.email || '').toLowerCase().trim();
-            if (email === 'modelatech2026@gmail.com') return true;
-            const name = (e.name || '').toLowerCase().trim();
-            const rawId = (e.id || '').trim();
-            const strippedId = rawId.replace(/^emp-/, '');
-            if (
-              (rawId && initialDeletedSet.has(rawId)) ||
-              (strippedId && initialDeletedSet.has(strippedId)) ||
-              (email && initialDeletedSet.has(email)) ||
-              (name && initialDeletedSet.has(`name:${name}`))
-            ) {
-              return false;
-            }
-            return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
-          });
+          const filtered = parsed
+            .filter((e) => {
+              if (!e || e.isDeleted || String(e.status || '').toLowerCase() === 'deleted') return false;
+              const email = (e.email || '').toLowerCase().trim();
+              if (email === 'modelatech2026@gmail.com') return true;
+              const name = (e.name || '').toLowerCase().trim();
+              const rawId = (e.id || '').trim();
+              const strippedId = rawId.replace(/^emp-/, '');
+              if (
+                (rawId && initialDeletedSet.has(rawId)) ||
+                (strippedId && initialDeletedSet.has(strippedId)) ||
+                (email && initialDeletedSet.has(email)) ||
+                (name && initialDeletedSet.has(`name:${name}`))
+              ) {
+                return false;
+              }
+              return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
+            })
+            .map((e) => {
+              const email = (e.email || '').toLowerCase().trim();
+              const name = (e.name || '').toLowerCase().trim();
+              if (email === 'modelatech2026@gmail.com' || name === SUPER_ADMIN_NAME.toLowerCase()) {
+                return {
+                  ...e,
+                  id: 'emp-modelatech2026_gmail_com',
+                  name: SUPER_ADMIN_NAME,
+                  email: SUPER_ADMIN_EMAIL,
+                  role: 'SUPER_ADMIN',
+                };
+              }
+              return e;
+            });
           const hasSuperAdmin = filtered.some(
             (e) => (e.email || '').toLowerCase().trim() === 'modelatech2026@gmail.com'
           );
@@ -856,21 +878,6 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch {}
     return [defaultSuperAdmin];
   });
-
-  // Global filtered active team members list used by all dropdowns, filters, and selectors
-  const activeTeamMembers = useMemo(() => {
-    const filtered = employees.filter(
-      (member) =>
-        !member.isDeleted &&
-        member.status !== 'deleted' &&
-        member.status !== 'Suspended' &&
-        !isMemberDeleted(member)
-    );
-    const hasSuperAdmin = filtered.some(
-      (m) => (m.email || '').toLowerCase().trim() === 'modelatech2026@gmail.com'
-    );
-    return hasSuperAdmin ? filtered : [SUPER_ADMIN_EMPLOYEE_PROFILE, ...filtered];
-  }, [employees, isMemberDeleted, SUPER_ADMIN_EMPLOYEE_PROFILE]);
 
   const [allWorkLogs, setAllWorkLogs] = useState<DailyWorkLog[]>(() => {
     try {
@@ -975,6 +982,117 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }
     return DEFAULT_ONBOARDING_REQUESTS;
   });
+
+  // Global filtered, deduplicated, and role-synchronized active team members list used by all dropdowns, filters, and selectors
+  const activeTeamMembers = useMemo(() => {
+    const filtered = employees.filter(
+      (member) =>
+        !member.isDeleted &&
+        member.status !== 'deleted' &&
+        member.status !== 'Suspended' &&
+        !isMemberDeleted(member)
+    );
+    const hasSuperAdmin = filtered.some(
+      (m) =>
+        (m.email || '').toLowerCase().trim() === 'modelatech2026@gmail.com' ||
+        (m.name || '').toLowerCase().trim() === SUPER_ADMIN_NAME.toLowerCase()
+    );
+    const baseList = hasSuperAdmin ? filtered : [SUPER_ADMIN_EMPLOYEE_PROFILE, ...filtered];
+
+    // Map latest synced roles from onboardingRequests (Admin Nexus Access Review) & deduplicate by normalized email / ID / name
+    const reqRoleByEmail = new Map<string, UserRole>();
+    const reqRoleByName = new Map<string, UserRole>();
+    onboardingRequests.forEach((req) => {
+      if (req.isDeleted || (req.status || '').toUpperCase() === 'REJECTED') return;
+      const rEmail = (req.email || '').trim().toLowerCase();
+      const rName = (req.fullName || req.name || '').trim().toLowerCase();
+      const isSuperReq =
+        isSuperAdminEmail(rEmail) || rName === SUPER_ADMIN_NAME.toLowerCase();
+      const syncedRole = normalizeUserRole(req.assignedRole || req.role, isSuperReq);
+      if (rEmail) {
+        const prev = reqRoleByEmail.get(rEmail);
+        if (!prev || syncedRole === 'SUPER_ADMIN') {
+          reqRoleByEmail.set(rEmail, syncedRole);
+        }
+      }
+      if (rName) {
+        const prev = reqRoleByName.get(rName);
+        if (!prev || syncedRole === 'SUPER_ADMIN') {
+          reqRoleByName.set(rName, syncedRole);
+        }
+      }
+    });
+
+    const seenEmails = new Set<string>();
+    const seenIds = new Set<string>();
+    const seenNames = new Set<string>();
+    const deduplicated: Employee[] = [];
+
+    // Sort so Super Admin / canonical email records come first before deduplication
+    const prioritized = [...baseList].sort((a, b) => {
+      const aSuper =
+        isSuperAdminEmail(a.email) ||
+        (a.name || '').trim().toLowerCase() === SUPER_ADMIN_NAME.toLowerCase() ||
+        String(a.role || '').toUpperCase() === 'SUPER_ADMIN';
+      const bSuper =
+        isSuperAdminEmail(b.email) ||
+        (b.name || '').trim().toLowerCase() === SUPER_ADMIN_NAME.toLowerCase() ||
+        String(b.role || '').toUpperCase() === 'SUPER_ADMIN';
+      if (aSuper !== bSuper) return aSuper ? -1 : 1;
+      const aCanonical = (a.email || '').trim().toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+      const bCanonical = (b.email || '').trim().toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+      if (aCanonical !== bCanonical) return aCanonical ? -1 : 1;
+      return 0;
+    });
+
+    for (const member of prioritized) {
+      const cleanEmail = (member.email || '').trim().toLowerCase();
+      const cleanName = (member.name || '').trim().toLowerCase();
+      const isAditi =
+        cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+        cleanName === SUPER_ADMIN_NAME.toLowerCase();
+
+      const normEmail = isAditi ? SUPER_ADMIN_EMAIL.toLowerCase() : cleanEmail;
+      const normId = isAditi
+        ? 'modelatech2026_gmail_com'
+        : (member.id || '').trim().replace(/^emp-/, '').toLowerCase();
+      const detId = normEmail ? generateRequestDocId(normEmail).toLowerCase() : '';
+
+      if (
+        (normEmail && seenEmails.has(normEmail)) ||
+        (normId && seenIds.has(normId)) ||
+        (detId && seenIds.has(detId)) ||
+        (cleanName && seenNames.has(cleanName))
+      ) {
+        continue;
+      }
+
+      if (normEmail) seenEmails.add(normEmail);
+      if (normId) seenIds.add(normId);
+      if (detId) seenIds.add(detId);
+      if (cleanName) seenNames.add(cleanName);
+
+      const syncedRole: UserRole = isAditi
+        ? 'SUPER_ADMIN'
+        : (normEmail && reqRoleByEmail.get(normEmail)) ||
+          (cleanName && reqRoleByName.get(cleanName)) ||
+          normalizeUserRole(member.role || 'VIEWER', isSuperAdminEmail(normEmail));
+
+      deduplicated.push({
+        ...member,
+        ...(isAditi
+          ? {
+              id: 'emp-modelatech2026_gmail_com',
+              name: SUPER_ADMIN_NAME,
+              email: SUPER_ADMIN_EMAIL,
+            }
+          : {}),
+        role: syncedRole,
+      });
+    }
+
+    return deduplicated;
+  }, [employees, onboardingRequests, isMemberDeleted, SUPER_ADMIN_EMPLOYEE_PROFILE]);
 
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>(() => {
     try {
@@ -1123,7 +1241,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         return null;
       }
 
-      const isSuper = isSuperAdminEmail(cleanEmail);
+      const fullName = String(data.fullName || data.name || cleanEmail.split('@')[0]).trim();
+      const isSuper =
+        isSuperAdminEmail(cleanEmail) ||
+        fullName.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase();
       const rawStatus = String(data.status || 'pending').trim().toLowerCase();
       const mappedStatus: UserApprovalStatus = isSuper
         ? 'APPROVED'
@@ -1133,7 +1254,6 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         ? 'REJECTED'
         : 'pending';
 
-      const fullName = String(data.fullName || data.name || cleanEmail.split('@')[0]).trim();
       const discipline = String(data.discipline || data.primaryDiscipline || data.organization || 'BIM - ACS');
       const reasonForAccess = String(
         data.reasonForAccess || data.accessReason || 'Sign-in Access Request for ProductionPulse BPMS'
@@ -1162,8 +1282,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         name: fullName,
         fullName: fullName,
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
-        role: data.role || mapAppRoleToDisplayRole(normalizedRole),
-        requestedRole: data.requestedRole || data.role || mapAppRoleToDisplayRole(normalizedRole),
+        role: normalizedRole,
+        requestedRole: data.requestedRole || mapAppRoleToDisplayRole(normalizedRole),
         assignedRole: normalizedRole,
         assignedAccessLevel: calculatedAccessLevel,
         primaryDiscipline: discipline,
@@ -1191,8 +1311,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         return 1;
       };
 
-      // Prioritize pending requests and newest timestamps so newly submitted pending requests always appear immediately
       const sorted = [...rawList].sort((a, b) => {
+        const aRoleSuper = a.assignedRole === 'SUPER_ADMIN' || normalizeUserRole(a.role) === 'SUPER_ADMIN';
+        const bRoleSuper = b.assignedRole === 'SUPER_ADMIN' || normalizeUserRole(b.role) === 'SUPER_ADMIN';
+        if (aRoleSuper !== bRoleSuper) return aRoleSuper ? -1 : 1;
+
         const rA = rank(a.status);
         const rB = rank(b.status);
         if (rA !== rB) {
@@ -1200,16 +1323,17 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           const otherItem = pendingItem === a ? b : a;
           if (pendingItem) {
             const pendingCreatedMs = new Date(pendingItem.createdAt || pendingItem.timestamp || 0).getTime() || 0;
-            const otherReviewedMs = new Date(otherItem.reviewedAt || 0).getTime() || 0;
-            if (otherReviewedMs > pendingCreatedMs + 1000) {
+            const otherUpdatedMs =
+              new Date(otherItem.reviewedAt || otherItem.timestamp || otherItem.createdAt || 0).getTime() || 0;
+            if (otherUpdatedMs >= pendingCreatedMs || (otherItem.status || '').toUpperCase() === 'APPROVED') {
               return otherItem === b ? 1 : -1;
             }
             return pendingItem === b ? 1 : -1;
           }
           return rB - rA;
         }
-        const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
-        const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
+        const tA = new Date(a.timestamp || a.reviewedAt || a.createdAt || 0).getTime() || 0;
+        const tB = new Date(b.timestamp || b.reviewedAt || b.createdAt || 0).getTime() || 0;
         return tB - tA;
       });
 
@@ -1231,13 +1355,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const colRef = collection(db, 'access_requests');
 
-      // Helper to synchronize approved access requests into active employees list
-      const syncApprovedToEmployees = (reqList: OnboardingRequest[]) => {
-        const approvedFromFirestore = reqList.filter(
+      // Helper to synchronize access requests and role updates into active employees list
+      const syncRequestsToEmployees = (reqList: OnboardingRequest[]) => {
+        const activeReqs = reqList.filter(
           (r) =>
             !r.isDeleted &&
             !isMemberDeleted(r) &&
-            ((r.status || '').toUpperCase() === 'APPROVED' || (r.status || '').toLowerCase() === 'approved')
+            (r.status || '').toUpperCase() !== 'REJECTED'
         );
         setEmployees((currentEmployees) => {
           let changed = false;
@@ -1248,23 +1372,34 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             changed = true;
           }
           const updated = [...filteredCurrent];
-          approvedFromFirestore.forEach((req) => {
+          activeReqs.forEach((req) => {
             const email = (req.email || '').toLowerCase().trim();
             if (!email || isMemberDeleted(req)) return;
-            const idx = updated.findIndex((e) => (e.email || '').toLowerCase().trim() === email);
             const name = (req.fullName || req.name || email.split('@')[0]).trim();
+            const isSuper =
+              isSuperAdminEmail(email) ||
+              name.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase() ||
+              req.assignedRole === 'SUPER_ADMIN';
+            const isApproved =
+              isSuper ||
+              (req.status || '').toUpperCase() === 'APPROVED' ||
+              (req.status || '').toLowerCase() === 'approved';
             const disc = ((req.discipline || req.primaryDiscipline || 'BIM - ACS') as Discipline);
-            const role =
-              req.role && req.role !== 'Editor' && req.role !== 'editor'
-                ? req.role
-                : mapAppRoleToDisplayRole((req.assignedRole as UserRole) || 'EDITOR');
+            const role: UserRole = normalizeUserRole(req.assignedRole || req.role || 'EDITOR', isSuper);
 
-            if (idx === -1) {
+            const idx = updated.findIndex(
+              (e) =>
+                (e.email || '').toLowerCase().trim() === email ||
+                (name && (e.name || '').toLowerCase().trim() === name.toLowerCase()) ||
+                (req.id && (e.id === req.id || e.id === `emp-${req.id}`))
+            );
+
+            if (idx === -1 && isApproved) {
               changed = true;
               updated.push({
-                id: `emp-${req.id || Date.now()}`,
-                name,
-                email: req.email,
+                id: isSuper ? 'emp-modelatech2026_gmail_com' : `emp-${req.id || generateRequestDocId(email)}`,
+                name: isSuper ? SUPER_ADMIN_NAME : name,
+                email: isSuper ? SUPER_ADMIN_EMAIL : req.email,
                 role,
                 primaryDiscipline: disc,
                 discipline: disc,
@@ -1276,8 +1411,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
                 phone: '+1 (555) 019-2834',
               });
-            } else {
-              const roleChanged = Boolean(req.assignedRole && updated[idx].role !== role);
+            } else if (idx !== -1) {
+              const roleChanged = updated[idx].role !== role;
               const discChanged = Boolean(
                 disc &&
                   (updated[idx].discipline !== disc || updated[idx].primaryDiscipline !== disc)
@@ -1329,7 +1464,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
           const list = deduplicateAndSortRequests(rawList);
           setOnboardingRequests([...list]);
-          syncApprovedToEmployees(list);
+          syncRequestsToEmployees(list);
         },
         (err) => {
           console.warn('Firestore access_requests listener notice:', err);
@@ -1341,6 +1476,70 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     return () => {
       if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // Synchronize role changes from onboardingRequests state and real-time 'bim_user_role_synced' events into employees immediately
+  useEffect(() => {
+    const handleRoleSyncedEvent = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      if (!detail || !detail.email) return;
+      const cleanEmail = String(detail.email).trim().toLowerCase();
+      const cleanName = String(detail.name || '').trim().toLowerCase();
+      const isSuper =
+        isSuperAdminEmail(cleanEmail) ||
+        cleanName === SUPER_ADMIN_NAME.toLowerCase() ||
+        detail.role === 'SUPER_ADMIN';
+      const syncedRole: UserRole = normalizeUserRole(detail.role, isSuper);
+      const syncedAccessLevel: AccessLevel =
+        detail.accessLevel || mapAppRoleToAccessLevel(syncedRole);
+
+      setOnboardingRequests((prev) =>
+        prev.map((r) => {
+          const rEmail = (r.email || '').trim().toLowerCase();
+          const rName = (r.fullName || r.name || '').trim().toLowerCase();
+          if (rEmail === cleanEmail || (cleanName && rName === cleanName)) {
+            return {
+              ...r,
+              role: syncedRole,
+              assignedRole: syncedRole,
+              assignedAccessLevel: syncedAccessLevel,
+              ...(detail.discipline
+                ? { discipline: detail.discipline, primaryDiscipline: detail.discipline }
+                : {}),
+            };
+          }
+          return r;
+        })
+      );
+
+      setEmployees((prev) =>
+        prev.map((emp) => {
+          const eEmail = (emp.email || '').trim().toLowerCase();
+          const eName = (emp.name || '').trim().toLowerCase();
+          const eIdStripped = (emp.id || '').replace(/^emp-/, '');
+          if (
+            eEmail === cleanEmail ||
+            (detail.deterministicId && eIdStripped === detail.deterministicId) ||
+            (detail.uid && eIdStripped === String(detail.uid).replace(/^emp-/, '')) ||
+            (cleanName && eName === cleanName)
+          ) {
+            return {
+              ...emp,
+              role: syncedRole,
+              ...(detail.discipline
+                ? { discipline: detail.discipline, primaryDiscipline: detail.discipline }
+                : {}),
+            };
+          }
+          return emp;
+        })
+      );
+    };
+
+    window.addEventListener('bim_user_role_synced', handleRoleSyncedEvent);
+    return () => {
+      window.removeEventListener('bim_user_role_synced', handleRoleSyncedEvent);
     };
   }, []);
 
@@ -1356,8 +1555,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           name: SUPER_ADMIN_NAME,
           fullName: SUPER_ADMIN_NAME,
           email: SUPER_ADMIN_EMAIL,
-          role: 'Super Admin',
+          role: 'SUPER_ADMIN',
+          appRole: 'SUPER_ADMIN',
           assignedRole: 'SUPER_ADMIN',
+          accessLevel: 'Super Admin',
+          assignedAccessLevel: 'Super Admin',
           discipline: 'BIM - ACS',
           primaryDiscipline: 'BIM - ACS',
           status: 'Active',
@@ -1434,27 +1636,63 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             });
 
           if (activeUserDocs.length > 0) {
+            // Sort user docs so SUPER_ADMIN / newest updatedAt docs take precedence over stale duplicate docs
+            const sortedUserDocs = [...activeUserDocs].sort((a, b) => {
+              const aRole = normalizeUserRole(
+                a.data.assignedRole || a.data.appRole || a.data.role,
+                isSuperAdminEmail(a.data.email)
+              );
+              const bRole = normalizeUserRole(
+                b.data.assignedRole || b.data.appRole || b.data.role,
+                isSuperAdminEmail(b.data.email)
+              );
+              if ((aRole === 'SUPER_ADMIN') !== (bRole === 'SUPER_ADMIN')) {
+                return aRole === 'SUPER_ADMIN' ? -1 : 1;
+              }
+              const aTime = new Date(a.data.updatedAt || a.data.createdAt || 0).getTime() || 0;
+              const bTime = new Date(b.data.updatedAt || b.data.createdAt || 0).getTime() || 0;
+              return bTime - aTime;
+            });
+
+            const dedupedUserDocs: Array<{ docId: string; data: any }> = [];
+            const seenUserKeys = new Set<string>();
+            for (const item of sortedUserDocs) {
+              const email = String(item.data.email || item.data.userEmail || '').trim().toLowerCase();
+              const name = String(item.data.fullName || item.data.name || '').trim().toLowerCase();
+              const isAditi =
+                email === SUPER_ADMIN_EMAIL.toLowerCase() ||
+                name === SUPER_ADMIN_NAME.toLowerCase();
+              const keyEmail = isAditi ? SUPER_ADMIN_EMAIL.toLowerCase() : email;
+              const keyName = isAditi ? SUPER_ADMIN_NAME.toLowerCase() : name;
+              if ((keyEmail && seenUserKeys.has(keyEmail)) || (keyName && seenUserKeys.has(`name:${keyName}`))) {
+                continue;
+              }
+              if (keyEmail) seenUserKeys.add(keyEmail);
+              if (keyName) seenUserKeys.add(`name:${keyName}`);
+              dedupedUserDocs.push(item);
+            }
+
             setEmployees((currentEmployees) => {
               let changed = false;
               const updated = [...currentEmployees];
 
-              activeUserDocs.forEach(({ docId, data }) => {
+              dedupedUserDocs.forEach(({ docId, data }) => {
                 const email = String(data.email || data.userEmail || '').trim().toLowerCase();
                 const name = String(
                   data.fullName || data.name || (email ? email.split('@')[0] : '')
                 ).trim();
                 if (!name && !email) return;
 
-                const isSuper = isSuperAdminEmail(email);
+                const isSuper =
+                  isSuperAdminEmail(email) ||
+                  name.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase();
                 const empId = isSuper
                   ? 'emp-modelatech2026_gmail_com'
                   : String(data.id || (docId.startsWith('emp-') ? docId : `emp-${docId}`)).trim();
                 const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
-                const resolvedRole = isSuper
-                  ? 'Super Admin'
-                  : data.role && data.role !== 'Editor' && data.role !== 'editor'
-                  ? String(data.role)
-                  : mapAppRoleToDisplayRole((data.assignedRole as UserRole) || 'VIEWER');
+                const resolvedRole: UserRole = isSuper
+                  ? 'SUPER_ADMIN'
+                  : normalizeUserRole(data.assignedRole || data.appRole || data.role || 'VIEWER', false);
 
                 const idx = updated.findIndex(
                   (e) =>
@@ -1470,7 +1708,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                     id: empId,
                     name: isSuper ? SUPER_ADMIN_NAME : name,
                     email: isSuper ? SUPER_ADMIN_EMAIL : email,
-                    role: resolvedRole as any,
+                    role: resolvedRole,
                     primaryDiscipline: disc,
                     discipline: disc,
                     avatar:
@@ -1490,13 +1728,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 } else {
                   const currentEmp = updated[idx];
                   const nextName = isSuper ? SUPER_ADMIN_NAME : name || currentEmp.name;
-                  const nextRole = isSuper ? 'Super Admin' : resolvedRole || currentEmp.role;
+                  const nextRole = isSuper ? 'SUPER_ADMIN' : resolvedRole || currentEmp.role;
                   if (currentEmp.name !== nextName || currentEmp.role !== nextRole) {
                     changed = true;
                     updated[idx] = {
                       ...currentEmp,
                       name: nextName,
-                      role: nextRole as any,
+                      role: nextRole,
                     };
                   }
                 }
@@ -2632,7 +2870,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       // 1. Dynamic Onboarding: Populate directly into active Team Member List (Team Efficiency)
       setEmployees((prev) => {
         const existingIdx = prev.findIndex(
-          (e) => (e.email || '').toLowerCase() === applicantEmail
+          (e) =>
+            (e.email || '').toLowerCase().trim() === applicantEmail ||
+            (applicantFullName && (e.name || '').toLowerCase().trim() === applicantFullName.toLowerCase()) ||
+            e.id === effectiveReq.id ||
+            e.id === `emp-${effectiveReq.id}`
         );
         if (existingIdx >= 0) {
           const updated = [...prev];
@@ -2640,7 +2882,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             ...updated[existingIdx],
             name: applicantFullName,
             email: applicantEmail,
-            role: displayRole,
+            role: validatedRole,
             discipline: targetDiscipline,
             primaryDiscipline: targetDiscipline,
             status: 'Active',
@@ -2648,9 +2890,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           return updated;
         } else {
           const newEmp: Employee = {
-            id: `emp-${Date.now()}`,
+            id: `emp-${generateRequestDocId(applicantEmail) || Date.now()}`,
             name: applicantFullName,
-            role: displayRole,
+            role: validatedRole,
             email: applicantEmail,
             avatar:
               effectiveReq.avatar ||

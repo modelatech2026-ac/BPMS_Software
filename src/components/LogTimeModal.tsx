@@ -10,7 +10,7 @@ import {
   FileText
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useBimData, isUserSuperAdmin, toLocalIsoDate, cleanProjectName } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin, toLocalIsoDate, cleanProjectName, getMemberLabel } from '../context/BimDataContext';
 import { generateRequestDocId } from '../auth/roleSync';
 import { Discipline, ActivityType, LODLevel } from '../types';
 
@@ -59,10 +59,32 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     });
   }, [resourceAllocations, currentUser]);
 
-  const activeTeamMembers = React.useMemo(
-    () => (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted'),
-    [employees]
-  );
+  const activeTeamMembers = React.useMemo(() => {
+    const raw = (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted');
+    const seen = new Set<string>();
+    return raw.filter((member) => {
+      const emailKey = (member.email || '').trim().toLowerCase();
+      const idKey = (member.id || '').trim();
+      const strippedId = idKey.replace(/^emp-/, '');
+      const detId = emailKey ? generateRequestDocId(emailKey) : '';
+      const nameKey = (member.name || '').trim().toLowerCase();
+      if (
+        (emailKey && seen.has(emailKey)) ||
+        (idKey && seen.has(idKey)) ||
+        (strippedId && seen.has(strippedId)) ||
+        (detId && seen.has(detId)) ||
+        (nameKey && seen.has(nameKey))
+      ) {
+        return false;
+      }
+      if (emailKey) seen.add(emailKey);
+      if (idKey) seen.add(idKey);
+      if (strippedId) seen.add(strippedId);
+      if (detId) seen.add(detId);
+      if (nameKey) seen.add(nameKey);
+      return true;
+    });
+  }, [employees]);
 
   const [projectId, setProjectId] = useState<string>(
     preselectedProjectId || viewerAllocations[0]?.projectId || projects[0]?.id || ''
@@ -367,17 +389,25 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
               >
                 {activeTeamMembers.map((emp) => (
                   <option key={emp.id} value={emp.id}>
-                    {emp.name} ({emp.role})
+                    {getMemberLabel(emp)}
                   </option>
                 ))}
                 {currentUser &&
-                  !activeTeamMembers.some(
-                    (e) =>
-                      e.id === currentUser.id ||
-                      (e.email &&
-                        currentUser.email &&
-                        e.email.trim().toLowerCase() === currentUser.email.trim().toLowerCase())
-                  ) && (
+                  !activeTeamMembers.some((e) => {
+                    const eEmail = (e.email || '').trim().toLowerCase();
+                    const uEmail = (currentUser.email || '').trim().toLowerCase();
+                    const eId = (e.id || '').trim().replace(/^emp-/, '');
+                    const uId = (currentUser.id || '').trim().replace(/^emp-/, '');
+                    const uDetId = uEmail ? generateRequestDocId(uEmail) : '';
+                    const eName = (e.name || '').trim().toLowerCase();
+                    const uName = (currentUser.name || '').trim().toLowerCase();
+                    return (
+                      (uId && eId === uId) ||
+                      (uDetId && eId === uDetId) ||
+                      (uEmail && eEmail && eEmail === uEmail) ||
+                      (uName && eName && eName === uName)
+                    );
+                  }) && (
                     <option
                       value={
                         selectedEmployee?.id ||
@@ -385,7 +415,10 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
                         (currentUser.email ? `emp-${generateRequestDocId(currentUser.email)}` : 'emp-user')
                       }
                     >
-                      {currentUser.name || currentUser.email} ({currentUser.role || 'Member'})
+                      {getMemberLabel({
+                        name: currentUser.name || currentUser.email,
+                        role: isSuper ? 'SUPER_ADMIN' : (currentUser.appRole || currentUser.role || 'VIEWER'),
+                      })}
                     </option>
                   )}
               </select>
