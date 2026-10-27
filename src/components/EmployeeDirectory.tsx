@@ -263,6 +263,18 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
             return false;
           }
 
+          const itemNameNorm = (item.employeeName || '').trim().toLowerCase();
+          const wNameNorm = (w.employeeName || '').trim().toLowerCase();
+          if (
+            itemNameNorm &&
+            wNameNorm &&
+            wNameNorm !== 'bim modeler' &&
+            wNameNorm !== 'team member' &&
+            itemNameNorm !== wNameNorm
+          ) {
+            return false;
+          }
+
           const itemEmpIdStripped = (item.employeeId || '').replace(/^emp-/, '').toLowerCase();
           const wEmpIdStripped = (w.employeeId || '').replace(/^emp-/, '').toLowerCase();
           const matchId =
@@ -273,10 +285,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
             Boolean(item.employeeEmail) &&
             ((w.memberEmail || (w as any).userEmail || '').trim().toLowerCase() ===
               item.employeeEmail.trim().toLowerCase());
-          const matchName =
-            Boolean(item.employeeName) &&
-            (w.employeeName || '').trim().toLowerCase() ===
-              item.employeeName.trim().toLowerCase();
+          const matchName = Boolean(itemNameNorm) && wNameNorm === itemNameNorm;
 
           return matchId || matchEmail || matchName;
         })

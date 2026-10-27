@@ -346,16 +346,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               parsedSession.token &&
               new Date(parsedSession.expiresAt).getTime() > Date.now()
             ) {
-              if (isSuperAdminEmail(parsed.email)) {
+              const cleanSavedEmail = String(parsed.email || '').trim().toLowerCase();
+              const lowerSavedName = String(parsed.name || '').trim().toLowerCase();
+              const isSushovan =
+                lowerSavedName.includes('sushovan') ||
+                lowerSavedName.includes('sushoovan') ||
+                cleanSavedEmail === 'sushoovandas@gmail.com' ||
+                cleanSavedEmail === 'sushovandas@gmail.com';
+              const isAditiSuper =
+                !isSushovan && cleanSavedEmail === SUPER_ADMIN_EMAIL.toLowerCase();
+              const canonicalSavedUser = isAditiSuper
+                ? {
+                    ...parsed,
+                    id: 'emp-modelatech2026_gmail_com',
+                    googleId: 'emp-modelatech2026_gmail_com',
+                    name: SUPER_ADMIN_NAME,
+                    email: SUPER_ADMIN_EMAIL,
+                  }
+                : isSushovan
+                ? {
+                    ...parsed,
+                    id: 'emp-sushoovan_das',
+                    googleId: 'emp-sushoovan_das',
+                    name: parsed.name || 'Sushovan Das',
+                    email:
+                      cleanSavedEmail && cleanSavedEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+                        ? cleanSavedEmail
+                        : 'sushoovandas@gmail.com',
+                  }
+                : parsed;
+              if (isSuperAdminEmail(canonicalSavedUser.email)) {
                 const roleOverride =
                   typeof window !== 'undefined'
                     ? (sessionStorage.getItem('bpms_active_security_role_override') as SecurityRole | null)
                     : null;
-                if (roleOverride && parsed.securityRole === roleOverride) {
-                  return parsed;
+                if (roleOverride && canonicalSavedUser.securityRole === roleOverride) {
+                  return canonicalSavedUser;
                 }
                 return {
-                  ...parsed,
+                  ...canonicalSavedUser,
                   status: 'APPROVED',
                   role: 'Super Administrator & Lead Architect',
                   appRole: 'SUPER_ADMIN',
@@ -365,7 +394,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   permissions: DEFAULT_PERMISSIONS_BY_ROLE['Super Admin'],
                 };
               }
-              return parsed;
+              return canonicalSavedUser;
             }
           }
         }
@@ -421,8 +450,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       try {
         const cleanEmail = firebaseUser.email.trim().toLowerCase();
-        const uid = firebaseUser.uid;
-        const displayName = firebaseUser.displayName || cleanEmail.split('@')[0];
+        const isAditiSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase();
+        const uid = isAditiSuper ? 'emp-modelatech2026_gmail_com' : firebaseUser.uid;
+        const displayName = isAditiSuper
+          ? SUPER_ADMIN_NAME
+          : firebaseUser.displayName || cleanEmail.split('@')[0];
 
         // Fetch user profile record from the users (or access_requests) database table
         const dbRecord = await fetchUserRoleFromDatabase(cleanEmail, uid);
@@ -702,11 +734,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const isSuper = isSuperAdminEmail(cleanEmail);
 
     if (isSuper) {
+      const isAditiSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase();
+      const canonicalSuperId = isAditiSuper
+        ? 'emp-modelatech2026_gmail_com'
+        : params.uid || generateRequestDocId(cleanEmail);
+      const canonicalSuperName = isAditiSuper
+        ? SUPER_ADMIN_NAME
+        : params.name || cleanEmail.split('@')[0];
       const adminUser: AuthUser = {
-        id: params.uid || generateRequestDocId(cleanEmail),
-        googleId: params.uid || generateRequestDocId(cleanEmail),
+        id: canonicalSuperId,
+        googleId: canonicalSuperId,
         email: cleanEmail,
-        name: params.name || SUPER_ADMIN_NAME,
+        name: canonicalSuperName,
         role: 'Super Administrator & Lead Architect',
         appRole: 'SUPER_ADMIN',
         status: 'APPROVED',
@@ -874,7 +913,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     extra?: { name?: string; role?: SecurityRole; organization?: string; accessReason?: string }
   ): Promise<{ requires2FA: boolean; status: UserApprovalStatus; user: AuthUser }> => {
     const cleanEmail = email.trim().toLowerCase();
-    const isSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() || (extra?.name || '').toLowerCase().includes('sushoovan');
+    const isAditiSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase();
+    const isSushoovan =
+      !isAditiSuper &&
+      (cleanEmail === 'sushoovandas@gmail.com' ||
+        (extra?.name || '').toLowerCase().includes('sushoovan'));
+    const isSuper = isAditiSuper || isSushoovan;
 
     // Authoritative lookup from Firestore users and access_requests
     const dbRecord = await fetchUserRoleFromDatabase(cleanEmail);
@@ -910,11 +954,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? 'Super Admin'
       : dbRecord.securityRole || mapUserRoleToSecurityRole(assignedAppRole);
 
+    const canonicalId = isAditiSuper
+      ? 'emp-modelatech2026_gmail_com'
+      : isSushoovan
+      ? 'emp-sushoovan_das'
+      : targetUser?.id && targetUser.id !== 'usr_super_admin_sushoovan'
+      ? targetUser.id
+      : `emp-${generateRequestDocId(cleanEmail)}`;
+
     targetUser = {
       ...(targetUser || {}),
-      id: targetUser?.id || (isSuper ? 'usr_super_admin_sushoovan' : `usr_${Date.now()}`),
-      email: cleanEmail,
-      name: extra?.name || targetUser?.name || (isSuper ? SUPER_ADMIN_NAME : cleanEmail.split('@')[0]),
+      id: canonicalId,
+      email: isSushoovan ? 'sushoovandas@gmail.com' : cleanEmail,
+      name: isAditiSuper
+        ? SUPER_ADMIN_NAME
+        : isSushoovan
+        ? 'Sushoovan Das'
+        : extra?.name || targetUser?.name || cleanEmail.split('@')[0],
       role: assignedDisplayRole,
       appRole: assignedAppRole,
       status: assignedStatus,
@@ -987,7 +1043,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     accessReason?: string;
   }): Promise<{ requires2FA: boolean; status: UserApprovalStatus; user: AuthUser }> => {
     const cleanEmail = profile.email.trim().toLowerCase();
-    const isSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() || (profile.name || '').toLowerCase().includes('sushoovan');
+    const isAditiSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase();
+    const isSushoovan =
+      !isAditiSuper &&
+      (cleanEmail === 'sushoovandas@gmail.com' ||
+        (profile.name || '').toLowerCase().includes('sushoovan'));
+    const isSuper = isAditiSuper || isSushoovan;
 
     // Authoritative lookup from Firestore users and access_requests
     const dbRecord = await fetchUserRoleFromDatabase(cleanEmail, profile.googleId);
@@ -1022,12 +1083,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? 'Super Admin'
       : dbRecord.securityRole || mapUserRoleToSecurityRole(assignedAppRole);
 
+    const canonicalId = isAditiSuper
+      ? 'emp-modelatech2026_gmail_com'
+      : isSushoovan
+      ? 'emp-sushoovan_das'
+      : targetUser?.id && targetUser.id !== 'usr_super_admin_sushoovan'
+      ? targetUser.id
+      : `emp-${generateRequestDocId(cleanEmail)}`;
+
     targetUser = {
       ...(targetUser || {}),
-      id: targetUser?.id || (isSuper ? 'usr_super_admin_sushoovan' : `usr_${Date.now()}`),
-      googleId: profile.googleId || targetUser?.googleId || (isSuper ? 'google_super_admin_sushoovan' : `google_${Date.now()}`),
-      email: cleanEmail,
-      name: profile.name || targetUser?.name || (isSuper ? SUPER_ADMIN_NAME : cleanEmail.split('@')[0]),
+      id: canonicalId,
+      googleId: profile.googleId || targetUser?.googleId || canonicalId,
+      email: isSushoovan ? 'sushoovandas@gmail.com' : cleanEmail,
+      name: isAditiSuper
+        ? SUPER_ADMIN_NAME
+        : isSushoovan
+        ? 'Sushoovan Das'
+        : profile.name || targetUser?.name || cleanEmail.split('@')[0],
       role: assignedDisplayRole,
       appRole: assignedAppRole,
       status: assignedStatus,

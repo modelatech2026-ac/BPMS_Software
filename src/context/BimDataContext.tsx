@@ -496,12 +496,31 @@ export const getDefaultTabForRole = (role: SecurityRole): ViewTab => {
 };
 
 export const isRecordOwnedByMember = (
-  log: DailyWorkLog,
+  rawLog: DailyWorkLog,
   user: AuthUser | null | undefined,
   allEmployees: Employee[]
 ): boolean => {
   if (!user) return false;
+  const log = sanitizeWorkLogRecord(rawLog);
+  const userName = (user.name || '').trim().toLowerCase();
+  const logName = (log.employeeName || '').trim().toLowerCase();
+  const isGenericLogName =
+    !logName ||
+    logName === 'bim modeler' ||
+    logName === 'team member' ||
+    logName === 'bim engineer';
+
+  // If both user and log have explicit names and they do not match, they belong to different users
+  if (userName && !isGenericLogName && userName !== logName) {
+    return false;
+  }
+
   const userEmail = (user.email || '').trim().toLowerCase();
+  const logEmail = (log.memberEmail || (log as any).userEmail || '').trim().toLowerCase();
+  if (userEmail && logEmail && userEmail !== logEmail) {
+    return false;
+  }
+
   const userId = (user.id || '').trim();
   const userIdStripped = userId.replace(/^emp-/, '');
   const userGoogleId = (user.googleId || '').trim();
@@ -512,9 +531,8 @@ export const isRecordOwnedByMember = (
   const logUserIdStripped = logUserId.replace(/^emp-/, '');
 
   // 1. Direct email match
-  if (userEmail) {
-    if (log.memberEmail && log.memberEmail.trim().toLowerCase() === userEmail) return true;
-    if ((log as any).userEmail && (log as any).userEmail.trim().toLowerCase() === userEmail) return true;
+  if (userEmail && logEmail && logEmail === userEmail) {
+    return true;
   }
 
   // 2. Direct user ID / deterministic ID match
@@ -531,23 +549,24 @@ export const isRecordOwnedByMember = (
   }
 
   // 3. Direct name match if user has a name
-  if (
-    user.name &&
-    log.employeeName &&
-    log.employeeName.trim().toLowerCase() === user.name.trim().toLowerCase()
-  ) {
+  if (userName && !isGenericLogName && logName === userName) {
     return true;
   }
 
-  // 4. Employee mapping match
-  const matchingEmp = allEmployees.find(
-    (e) =>
-      e.id === userId ||
-      e.id.replace(/^emp-/, '') === userIdStripped ||
-      (detEmailId && e.id.replace(/^emp-/, '') === detEmailId) ||
-      (e.email && userEmail && e.email.trim().toLowerCase() === userEmail) ||
-      (e.name && user.name && e.name.trim().toLowerCase() === user.name.trim().toLowerCase())
-  );
+  // 4. Employee mapping match (strictly enforcing name agreement)
+  const matchingEmp = allEmployees
+    .map((e) => sanitizeEmployeeRecord(e))
+    .find((e) => {
+      const eName = (e.name || '').trim().toLowerCase();
+      if (userName && eName && userName !== eName) return false;
+      return (
+        e.id === userId ||
+        e.id.replace(/^emp-/, '') === userIdStripped ||
+        (detEmailId && e.id.replace(/^emp-/, '') === detEmailId) ||
+        (e.email && userEmail && e.email.trim().toLowerCase() === userEmail) ||
+        (eName && userName && eName === userName)
+      );
+    });
   if (matchingEmp) {
     const matchEmpIdStripped = matchingEmp.id.replace(/^emp-/, '');
     if (
@@ -559,9 +578,9 @@ export const isRecordOwnedByMember = (
       return true;
     }
     if (
-      log.employeeName &&
+      !isGenericLogName &&
       matchingEmp.name &&
-      log.employeeName.trim().toLowerCase() === matchingEmp.name.trim().toLowerCase()
+      logName === matchingEmp.name.trim().toLowerCase()
     ) {
       return true;
     }
@@ -656,6 +675,166 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
   });
 
   return [...customProjects, ...masterMerged];
+};
+
+export const sanitizeEmployeeRecord = (emp: Employee): Employee => {
+  const rawName = (emp.name || '').trim();
+  const lowerName = rawName.toLowerCase();
+  const lowerEmail = (emp.email || '').trim().toLowerCase();
+  const rawId = (emp.id || '').trim();
+  const lowerId = rawId.toLowerCase();
+
+  const isGenericName =
+    !lowerName ||
+    lowerName === 'bim modeler' ||
+    lowerName === 'team member' ||
+    lowerName === 'bim engineer';
+
+  const isSushovan =
+    lowerName.includes('sushovan') ||
+    lowerName.includes('sushoovan') ||
+    lowerEmail === 'sushoovandas@gmail.com' ||
+    lowerEmail === 'sushovandas@gmail.com' ||
+    (isGenericName && (lowerId.includes('sushovan') || lowerId.includes('sushoovan')));
+
+  const isAditi =
+    !isSushovan &&
+    (lowerName === SUPER_ADMIN_NAME.toLowerCase() ||
+      lowerName.includes('aditi chakraborty') ||
+      lowerName.includes('aditi') ||
+      (isGenericName &&
+        (lowerEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+          lowerId.includes('modelatech2026'))));
+
+  if (isAditi) {
+    return {
+      ...emp,
+      id: 'emp-modelatech2026_gmail_com',
+      name: SUPER_ADMIN_NAME,
+      email: SUPER_ADMIN_EMAIL,
+      role: 'SUPER_ADMIN',
+    };
+  }
+
+  if (isSushovan) {
+    const cleanSushovanEmail =
+      lowerEmail && lowerEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+        ? lowerEmail
+        : 'sushoovandas@gmail.com';
+    return {
+      ...emp,
+      id: 'emp-sushoovan_das',
+      name: !isGenericName ? rawName : 'Sushovan Das',
+      email: cleanSushovanEmail,
+    };
+  }
+
+  const cleanEmail = lowerEmail === SUPER_ADMIN_EMAIL.toLowerCase() ? '' : lowerEmail;
+  let cleanId = rawId;
+  if (
+    !cleanId ||
+    lowerId.includes('modelatech2026') ||
+    lowerId.includes('sushovan') ||
+    lowerId.includes('sushoovan')
+  ) {
+    cleanId = cleanEmail
+      ? `emp-${generateRequestDocId(cleanEmail)}`
+      : !isGenericName
+      ? `emp-${lowerName.replace(/[^a-z0-9]+/g, '_')}`
+      : `emp-${Date.now()}`;
+  }
+
+  return {
+    ...emp,
+    id: cleanId,
+    email: cleanEmail,
+  };
+};
+
+export const sanitizeWorkLogRecord = (log: DailyWorkLog): DailyWorkLog => {
+  const rawName = String(log.employeeName || '').trim();
+  const lowerName = rawName.toLowerCase();
+  const rawEmail = String(log.memberEmail || (log as any).userEmail || '')
+    .trim()
+    .toLowerCase();
+  const rawEmpId = String(
+    log.employeeId || (log as any).memberId || (log as any).userId || ''
+  ).trim();
+  const lowerEmpId = rawEmpId.toLowerCase();
+
+  const isGenericName =
+    !lowerName ||
+    lowerName === 'bim modeler' ||
+    lowerName === 'team member' ||
+    lowerName === 'bim engineer';
+
+  const isSushovan =
+    lowerName.includes('sushovan') ||
+    lowerName.includes('sushoovan') ||
+    rawEmail === 'sushoovandas@gmail.com' ||
+    rawEmail === 'sushovandas@gmail.com' ||
+    (isGenericName && (lowerEmpId.includes('sushovan') || lowerEmpId.includes('sushoovan')));
+
+  const isAditi =
+    !isSushovan &&
+    (lowerName === SUPER_ADMIN_NAME.toLowerCase() ||
+      lowerName.includes('aditi chakraborty') ||
+      lowerName.includes('aditi') ||
+      (isGenericName &&
+        (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+          lowerEmpId.includes('modelatech2026'))));
+
+  if (isAditi) {
+    return {
+      ...log,
+      employeeId: 'emp-modelatech2026_gmail_com',
+      memberId: 'emp-modelatech2026_gmail_com',
+      userId: 'emp-modelatech2026_gmail_com',
+      employeeName: SUPER_ADMIN_NAME,
+      memberEmail: SUPER_ADMIN_EMAIL.toLowerCase(),
+      userEmail: SUPER_ADMIN_EMAIL.toLowerCase(),
+    };
+  }
+
+  if (isSushovan) {
+    const cleanSushovanEmail =
+      rawEmail && rawEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+        ? rawEmail
+        : 'sushoovandas@gmail.com';
+    return {
+      ...log,
+      employeeId: 'emp-sushoovan_das',
+      memberId: 'emp-sushoovan_das',
+      userId: 'emp-sushoovan_das',
+      employeeName: !isGenericName ? rawName : 'Sushovan Das',
+      memberEmail: cleanSushovanEmail,
+      userEmail: cleanSushovanEmail,
+    };
+  }
+
+  const cleanEmail = rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ? '' : rawEmail;
+  let cleanEmpId = rawEmpId;
+  if (
+    !cleanEmpId ||
+    lowerEmpId.includes('modelatech2026') ||
+    lowerEmpId.includes('sushovan') ||
+    lowerEmpId.includes('sushoovan')
+  ) {
+    cleanEmpId = cleanEmail
+      ? `emp-${generateRequestDocId(cleanEmail)}`
+      : !isGenericName
+      ? `emp-${lowerName.replace(/[^a-z0-9]+/g, '_')}`
+      : rawEmpId;
+  }
+
+  return {
+    ...log,
+    employeeId: cleanEmpId,
+    memberId: cleanEmpId,
+    userId: cleanEmpId,
+    memberEmail: cleanEmail,
+    userEmail: cleanEmail,
+  };
 };
 
 export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -855,20 +1034,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               }
               return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
             })
-            .map((e) => {
-              const email = (e.email || '').toLowerCase().trim();
-              const name = (e.name || '').toLowerCase().trim();
-              if (email === 'modelatech2026@gmail.com' || name === SUPER_ADMIN_NAME.toLowerCase()) {
-                return {
-                  ...e,
-                  id: 'emp-modelatech2026_gmail_com',
-                  name: SUPER_ADMIN_NAME,
-                  email: SUPER_ADMIN_EMAIL,
-                  role: 'SUPER_ADMIN',
-                };
-              }
-              return e;
-            });
+            .map((e) => sanitizeEmployeeRecord(e));
           const hasSuperAdmin = filtered.some(
             (e) => (e.email || '').toLowerCase().trim() === 'modelatech2026@gmail.com'
           );
@@ -885,7 +1051,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return parsed.map((w) => sanitizeWorkLogRecord(w));
         }
       }
     } catch {}
@@ -1045,12 +1211,16 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       return 0;
     });
 
-    for (const member of prioritized) {
+    for (const rawMember of prioritized) {
+      const member = sanitizeEmployeeRecord(rawMember);
       const cleanEmail = (member.email || '').trim().toLowerCase();
       const cleanName = (member.name || '').trim().toLowerCase();
+      const normNameKey = cleanName.replace(/sushoovan/g, 'sushovan');
       const isAditi =
-        cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
-        cleanName === SUPER_ADMIN_NAME.toLowerCase();
+        !cleanName.includes('sushoovan') &&
+        !cleanName.includes('sushovan') &&
+        (cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+          cleanName === SUPER_ADMIN_NAME.toLowerCase());
 
       const normEmail = isAditi ? SUPER_ADMIN_EMAIL.toLowerCase() : cleanEmail;
       const normId = isAditi
@@ -1062,7 +1232,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (normEmail && seenEmails.has(normEmail)) ||
         (normId && seenIds.has(normId)) ||
         (detId && seenIds.has(detId)) ||
-        (cleanName && seenNames.has(cleanName))
+        (normNameKey && seenNames.has(normNameKey))
       ) {
         continue;
       }
@@ -1070,7 +1240,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (normEmail) seenEmails.add(normEmail);
       if (normId) seenIds.add(normId);
       if (detId) seenIds.add(detId);
-      if (cleanName) seenNames.add(cleanName);
+      if (normNameKey) seenNames.add(normNameKey);
 
       const syncedRole: UserRole = isAditi
         ? 'SUPER_ADMIN'
@@ -1242,9 +1412,24 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       const fullName = String(data.fullName || data.name || cleanEmail.split('@')[0]).trim();
-      const isSuper =
-        isSuperAdminEmail(cleanEmail) ||
-        fullName.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase();
+      const lowerFullName = fullName.toLowerCase();
+      const isSushovan =
+        lowerFullName.includes('sushovan') ||
+        lowerFullName.includes('sushoovan') ||
+        cleanEmail === 'sushoovandas@gmail.com' ||
+        cleanEmail === 'sushovandas@gmail.com';
+      const isAditiSuper =
+        !isSushovan &&
+        (cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+          lowerFullName === SUPER_ADMIN_NAME.toLowerCase());
+      const effectiveEmail = isSushovan
+        ? cleanEmail && cleanEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+          ? cleanEmail
+          : 'sushoovandas@gmail.com'
+        : isAditiSuper
+        ? SUPER_ADMIN_EMAIL.toLowerCase()
+        : cleanEmail;
+      const isSuper = isAditiSuper || isSuperAdminEmail(effectiveEmail);
       const rawStatus = String(data.status || 'pending').trim().toLowerCase();
       const mappedStatus: UserApprovalStatus = isSuper
         ? 'APPROVED'
@@ -1276,11 +1461,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
 
       return {
-        id: d.id,
-        googleId: data.uid || d.id,
-        email: cleanEmail,
-        name: fullName,
-        fullName: fullName,
+        id: isSushovan ? 'sushoovan_das' : d.id,
+        googleId: isSushovan ? 'sushoovan_das' : data.uid || d.id,
+        email: effectiveEmail,
+        name: isAditiSuper ? SUPER_ADMIN_NAME : fullName,
+        fullName: isAditiSuper ? SUPER_ADMIN_NAME : fullName,
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
         role: normalizedRole,
         requestedRole: data.requestedRole || mapAppRoleToDisplayRole(normalizedRole),
@@ -1373,12 +1558,29 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           }
           const updated = [...filteredCurrent];
           activeReqs.forEach((req) => {
-            const email = (req.email || '').toLowerCase().trim();
-            if (!email || isMemberDeleted(req)) return;
-            const name = (req.fullName || req.name || email.split('@')[0]).trim();
+            const rawEmail = (req.email || '').toLowerCase().trim();
+            if (!rawEmail || isMemberDeleted(req)) return;
+            const name = (req.fullName || req.name || rawEmail.split('@')[0]).trim();
+            const lowerReqName = name.toLowerCase();
+            const isSushovan =
+              lowerReqName.includes('sushovan') ||
+              lowerReqName.includes('sushoovan') ||
+              rawEmail === 'sushoovandas@gmail.com' ||
+              rawEmail === 'sushovandas@gmail.com';
+            const isAditiSuper =
+              !isSushovan &&
+              (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+                lowerReqName === SUPER_ADMIN_NAME.toLowerCase());
+            const email = isSushovan
+              ? rawEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+                ? rawEmail
+                : 'sushoovandas@gmail.com'
+              : isAditiSuper
+              ? SUPER_ADMIN_EMAIL.toLowerCase()
+              : rawEmail;
             const isSuper =
+              isAditiSuper ||
               isSuperAdminEmail(email) ||
-              name.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase() ||
               req.assignedRole === 'SUPER_ADMIN';
             const isApproved =
               isSuper ||
@@ -1386,31 +1588,38 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               (req.status || '').toLowerCase() === 'approved';
             const disc = ((req.discipline || req.primaryDiscipline || 'BIM - ACS') as Discipline);
             const role: UserRole = normalizeUserRole(req.assignedRole || req.role || 'EDITOR', isSuper);
+            const targetEmpId = isAditiSuper
+              ? 'emp-modelatech2026_gmail_com'
+              : isSushovan
+              ? 'emp-sushoovan_das'
+              : `emp-${req.id || generateRequestDocId(email)}`;
 
             const idx = updated.findIndex(
               (e) =>
-                (e.email || '').toLowerCase().trim() === email ||
-                (name && (e.name || '').toLowerCase().trim() === name.toLowerCase()) ||
-                (req.id && (e.id === req.id || e.id === `emp-${req.id}`))
+                e.id === targetEmpId ||
+                (email && (e.email || '').toLowerCase().trim() === email) ||
+                (name && (e.name || '').toLowerCase().trim() === lowerReqName)
             );
 
             if (idx === -1 && isApproved) {
               changed = true;
-              updated.push({
-                id: isSuper ? 'emp-modelatech2026_gmail_com' : `emp-${req.id || generateRequestDocId(email)}`,
-                name: isSuper ? SUPER_ADMIN_NAME : name,
-                email: isSuper ? SUPER_ADMIN_EMAIL : req.email,
-                role,
-                primaryDiscipline: disc,
-                discipline: disc,
-                avatar: req.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
-                weeklyCapacityHours: 40,
-                experienceYears: 4,
-                status: 'Active',
-                activeProjectIds: [projects[0]?.id || 'proj-1'],
-                skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
-                phone: '+1 (555) 019-2834',
-              });
+              updated.push(
+                sanitizeEmployeeRecord({
+                  id: targetEmpId,
+                  name: isAditiSuper ? SUPER_ADMIN_NAME : name,
+                  email: isAditiSuper ? SUPER_ADMIN_EMAIL : email,
+                  role,
+                  primaryDiscipline: disc,
+                  discipline: disc,
+                  avatar: req.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+                  weeklyCapacityHours: 40,
+                  experienceYears: 4,
+                  status: 'Active',
+                  activeProjectIds: [projects[0]?.id || 'proj-1'],
+                  skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+                  phone: '+1 (555) 019-2834',
+                })
+              );
             } else if (idx !== -1) {
               const roleChanged = updated[idx].role !== role;
               const discChanged = Boolean(
@@ -1419,15 +1628,15 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               );
               if (roleChanged || discChanged) {
                 changed = true;
-                updated[idx] = {
+                updated[idx] = sanitizeEmployeeRecord({
                   ...updated[idx],
                   ...(roleChanged ? { role } : {}),
                   ...(discChanged ? { discipline: disc, primaryDiscipline: disc } : {}),
-                };
+                });
               }
             }
           });
-          return changed ? updated : currentEmployees;
+          return changed ? updated.map((e) => sanitizeEmployeeRecord(e)) : currentEmployees;
         });
       };
 
@@ -1657,13 +1866,27 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             const dedupedUserDocs: Array<{ docId: string; data: any }> = [];
             const seenUserKeys = new Set<string>();
             for (const item of sortedUserDocs) {
-              const email = String(item.data.email || item.data.userEmail || '').trim().toLowerCase();
+              const rawEmail = String(item.data.email || item.data.userEmail || '').trim().toLowerCase();
               const name = String(item.data.fullName || item.data.name || '').trim().toLowerCase();
+              const isSushovan =
+                name.includes('sushovan') ||
+                name.includes('sushoovan') ||
+                rawEmail === 'sushoovandas@gmail.com' ||
+                rawEmail === 'sushovandas@gmail.com';
               const isAditi =
-                email === SUPER_ADMIN_EMAIL.toLowerCase() ||
-                name === SUPER_ADMIN_NAME.toLowerCase();
-              const keyEmail = isAditi ? SUPER_ADMIN_EMAIL.toLowerCase() : email;
-              const keyName = isAditi ? SUPER_ADMIN_NAME.toLowerCase() : name;
+                !isSushovan &&
+                (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+                  name === SUPER_ADMIN_NAME.toLowerCase());
+              const keyEmail = isSushovan
+                ? 'sushoovandas@gmail.com'
+                : isAditi
+                ? SUPER_ADMIN_EMAIL.toLowerCase()
+                : rawEmail;
+              const keyName = isSushovan
+                ? 'sushovan das'
+                : isAditi
+                ? SUPER_ADMIN_NAME.toLowerCase()
+                : name;
               if ((keyEmail && seenUserKeys.has(keyEmail)) || (keyName && seenUserKeys.has(`name:${keyName}`))) {
                 continue;
               }
@@ -1674,66 +1897,99 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
             setEmployees((currentEmployees) => {
               let changed = false;
-              const updated = [...currentEmployees];
+              const updated = currentEmployees.map((e) => sanitizeEmployeeRecord(e));
 
               dedupedUserDocs.forEach(({ docId, data }) => {
-                const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+                const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
                 const name = String(
-                  data.fullName || data.name || (email ? email.split('@')[0] : '')
+                  data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')
                 ).trim();
-                if (!name && !email) return;
+                if (!name && !rawEmail) return;
 
-                const isSuper =
-                  isSuperAdminEmail(email) ||
-                  name.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase();
-                const empId = isSuper
+                const lowerDocName = name.toLowerCase();
+                const isSushovan =
+                  lowerDocName.includes('sushovan') ||
+                  lowerDocName.includes('sushoovan') ||
+                  rawEmail === 'sushoovandas@gmail.com' ||
+                  rawEmail === 'sushovandas@gmail.com';
+                const isAditiSuper =
+                  !isSushovan &&
+                  (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+                    lowerDocName === SUPER_ADMIN_NAME.toLowerCase());
+                const email = isSushovan
+                  ? rawEmail && rawEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+                    ? rawEmail
+                    : 'sushoovandas@gmail.com'
+                  : isAditiSuper
+                  ? SUPER_ADMIN_EMAIL
+                  : rawEmail;
+                const empId = isAditiSuper
                   ? 'emp-modelatech2026_gmail_com'
+                  : isSushovan
+                  ? 'emp-sushoovan_das'
                   : String(data.id || (docId.startsWith('emp-') ? docId : `emp-${docId}`)).trim();
                 const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
-                const resolvedRole: UserRole = isSuper
+                const resolvedRole: UserRole = isAditiSuper
                   ? 'SUPER_ADMIN'
-                  : normalizeUserRole(data.assignedRole || data.appRole || data.role || 'VIEWER', false);
+                  : normalizeUserRole(
+                      data.assignedRole || data.appRole || data.role || 'VIEWER',
+                      isSuperAdminEmail(email)
+                    );
+
+                const sanitizedCandidate = sanitizeEmployeeRecord({
+                  id: empId,
+                  name: isAditiSuper ? SUPER_ADMIN_NAME : name,
+                  email,
+                  role: resolvedRole,
+                  primaryDiscipline: disc,
+                  discipline: disc,
+                  avatar:
+                    data.avatar ||
+                    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                      isAditiSuper ? SUPER_ADMIN_NAME : name
+                    )}`,
+                  weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
+                  experienceYears: Number(data.experienceYears) || 4,
+                  status: 'Active',
+                  activeProjectIds: Array.isArray(data.activeProjectIds)
+                    ? data.activeProjectIds
+                    : ['proj-1'],
+                  skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+                  phone: data.phone || '+1 (555) 019-2834',
+                });
 
                 const idx = updated.findIndex(
                   (e) =>
-                    e.id === empId ||
-                    e.id.replace(/^emp-/, '') === empId.replace(/^emp-/, '') ||
-                    (email && (e.email || '').toLowerCase().trim() === email) ||
-                    (name && (e.name || '').toLowerCase().trim() === name.toLowerCase())
+                    e.id === sanitizedCandidate.id ||
+                    (sanitizedCandidate.email &&
+                      (e.email || '').toLowerCase().trim() ===
+                        sanitizedCandidate.email.toLowerCase().trim()) ||
+                    (sanitizedCandidate.name &&
+                      (e.name || '').toLowerCase().trim() ===
+                        sanitizedCandidate.name.toLowerCase().trim())
                 );
 
                 if (idx === -1) {
                   changed = true;
-                  updated.push({
-                    id: empId,
-                    name: isSuper ? SUPER_ADMIN_NAME : name,
-                    email: isSuper ? SUPER_ADMIN_EMAIL : email,
-                    role: resolvedRole,
-                    primaryDiscipline: disc,
-                    discipline: disc,
-                    avatar:
-                      data.avatar ||
-                      `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                        isSuper ? SUPER_ADMIN_NAME : name
-                      )}`,
-                    weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
-                    experienceYears: Number(data.experienceYears) || 4,
-                    status: 'Active',
-                    activeProjectIds: Array.isArray(data.activeProjectIds)
-                      ? data.activeProjectIds
-                      : ['proj-1'],
-                    skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
-                    phone: data.phone || '+1 (555) 019-2834',
-                  });
+                  updated.push(sanitizedCandidate);
                 } else {
                   const currentEmp = updated[idx];
-                  const nextName = isSuper ? SUPER_ADMIN_NAME : name || currentEmp.name;
-                  const nextRole = isSuper ? 'SUPER_ADMIN' : resolvedRole || currentEmp.role;
-                  if (currentEmp.name !== nextName || currentEmp.role !== nextRole) {
+                  const nextName = sanitizedCandidate.name || currentEmp.name;
+                  const nextRole = sanitizedCandidate.role || currentEmp.role;
+                  const nextId = sanitizedCandidate.id || currentEmp.id;
+                  const nextEmail = sanitizedCandidate.email || currentEmp.email;
+                  if (
+                    currentEmp.name !== nextName ||
+                    currentEmp.role !== nextRole ||
+                    currentEmp.id !== nextId ||
+                    currentEmp.email !== nextEmail
+                  ) {
                     changed = true;
                     updated[idx] = {
                       ...currentEmp,
+                      id: nextId,
                       name: nextName,
+                      email: nextEmail,
                       role: nextRole,
                     };
                   }
@@ -2056,7 +2312,16 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const parseLogDoc = (docSnap: any): DailyWorkLog => {
       const data = docSnap.data();
-      const normalizedEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
+      const rawEmployeeName = String(data.employeeName || 'BIM Modeler').trim();
+      const isNameSuperAdmin = rawEmployeeName.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase();
+      const rawEmail = String(data.memberEmail || data.userEmail || '').trim().toLowerCase();
+      // Prevent a non-Super-Admin employee log from inheriting Super Admin's email due to legacy fallback
+      const normalizedEmail =
+        !isNameSuperAdmin &&
+        rawEmployeeName !== 'BIM Modeler' &&
+        rawEmail === SUPER_ADMIN_EMAIL.toLowerCase()
+          ? ''
+          : rawEmail;
       const resolvedCreatedAt =
         typeof data.createdAt === 'string'
           ? data.createdAt
@@ -2066,29 +2331,38 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           ? new Date(data.createdAt.seconds * 1000).toISOString()
           : data.timestamp || new Date().toISOString();
       const resolvedMemberId = data.employeeId || data.memberId || data.userId || '';
-      return {
+      const resolvedUserId =
+        !isNameSuperAdmin &&
+        rawEmployeeName !== 'BIM Modeler' &&
+        (data.userId === 'usr_super_admin_sushoovan' ||
+          data.userId === 'usr_super_admin_modelatech' ||
+          data.userId === 'modelatech2026_gmail_com' ||
+          data.userId === 'emp-modelatech2026_gmail_com')
+          ? resolvedMemberId
+          : data.userId || resolvedMemberId;
+      return sanitizeWorkLogRecord({
         id: docSnap.id,
         employeeId: resolvedMemberId,
         memberId: data.memberId || resolvedMemberId,
-        employeeName: data.employeeName || 'BIM Modeler',
+        employeeName: rawEmployeeName,
         projectId: data.projectId || '',
         projectName: data.projectName || 'BIM Project',
         date: data.date || new Date().toISOString().slice(0, 10),
         hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
         discipline: (data.discipline as Discipline) || 'BIM - ACS',
         activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
-        taskName: data.taskName || 'BIM Modeling Task',
+        taskName: data.taskName || '',
         lodStage: (data.lodStage as LODLevel) || 'LOD 350',
         notes: data.notes || '',
         billable: data.billable !== undefined ? Boolean(data.billable) : true,
         timestamp: data.timestamp || resolvedCreatedAt,
         memberEmail: normalizedEmail,
         userEmail: normalizedEmail,
-        userId: data.userId || resolvedMemberId,
+        userId: resolvedUserId,
         isTestEntry: Boolean(data.isTestEntry ?? false),
-        loggedBy: data.loggedBy || normalizedEmail || data.employeeName || '',
+        loggedBy: data.loggedBy || normalizedEmail || rawEmployeeName || '',
         createdAt: resolvedCreatedAt,
-      };
+      });
     };
 
     const syncMergedLogs = () => {
@@ -2156,25 +2430,27 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               const displayName = log.employeeName || (emailKey ? emailKey.split('@')[0] : 'BIM Engineer');
               const disc = (log.discipline as Discipline) || 'BIM - ACS';
 
-              updated.push({
-                id: empId,
-                name: displayName,
-                email: emailKey,
-                role: 'BIM Modeler' as any,
-                primaryDiscipline: disc,
-                discipline: disc,
-                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
-                weeklyCapacityHours: 40,
-                experienceYears: 3,
-                status: 'Active',
-                activeProjectIds: log.projectId ? [log.projectId] : [],
-                skills: [disc],
-                phone: '',
-              });
+              updated.push(
+                sanitizeEmployeeRecord({
+                  id: empId,
+                  name: displayName,
+                  email: emailKey,
+                  role: 'BIM Modeler' as any,
+                  primaryDiscipline: disc,
+                  discipline: disc,
+                  avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
+                  weeklyCapacityHours: 40,
+                  experienceYears: 3,
+                  status: 'Active',
+                  activeProjectIds: log.projectId ? [log.projectId] : [],
+                  skills: [disc],
+                  phone: '',
+                })
+              );
             }
           });
 
-          return changed ? updated : currentEmployees;
+          return changed ? updated.map((e) => sanitizeEmployeeRecord(e)) : currentEmployees;
         });
       }
     };
@@ -2241,9 +2517,39 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const parseAllocDoc = (docSnap: any): ResourceAllocationItem => {
       const data = docSnap.data();
-      const resolvedMemberId = data.memberId || data.employeeId || data.assignedTo || '';
-      const resolvedEmail = data.assignedToEmail || data.memberEmail || '';
-      const resolvedName = data.assignedToName || data.memberName || data.employeeName || '';
+      const rawMemberId = String(data.memberId || data.employeeId || data.assignedTo || '').trim();
+      const rawEmail = String(data.assignedToEmail || data.memberEmail || '').trim().toLowerCase();
+      const resolvedName = String(data.assignedToName || data.memberName || data.employeeName || '').trim();
+      const lowerName = resolvedName.toLowerCase();
+      const isSushovan =
+        lowerName.includes('sushovan') ||
+        lowerName.includes('sushoovan') ||
+        rawEmail === 'sushoovandas@gmail.com' ||
+        rawEmail === 'sushovandas@gmail.com';
+      const isAditi =
+        !isSushovan &&
+        (lowerName === SUPER_ADMIN_NAME.toLowerCase() ||
+          rawEmail === SUPER_ADMIN_EMAIL.toLowerCase());
+      const resolvedMemberId = isAditi
+        ? 'emp-modelatech2026_gmail_com'
+        : isSushovan
+        ? 'emp-sushoovan_das'
+        : rawMemberId.toLowerCase().includes('modelatech2026') ||
+          rawMemberId.toLowerCase().includes('sushovan') ||
+          rawMemberId.toLowerCase().includes('sushoovan')
+        ? rawEmail && rawEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+          ? `emp-${generateRequestDocId(rawEmail)}`
+          : `emp-${lowerName.replace(/[^a-z0-9]+/g, '_')}`
+        : rawMemberId;
+      const resolvedEmail = isAditi
+        ? SUPER_ADMIN_EMAIL.toLowerCase()
+        : isSushovan
+        ? rawEmail && rawEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+          ? rawEmail
+          : 'sushoovandas@gmail.com'
+        : rawEmail === SUPER_ADMIN_EMAIL.toLowerCase()
+        ? ''
+        : rawEmail;
       return {
         id: docSnap.id,
         projectId: data.projectId || '',
@@ -2344,17 +2650,22 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     accessReason?: string;
   }): { status: UserApprovalStatus; user: AuthUser } => {
     const trimmedEmail = profile.email.trim().toLowerCase();
-    const isSuperAdminUser =
-      trimmedEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
-      profile.name?.toLowerCase().includes('sushoovan das');
+    const isAditiSuper = trimmedEmail === SUPER_ADMIN_EMAIL.toLowerCase();
+    const isSushoovan =
+      !isAditiSuper &&
+      (trimmedEmail === 'sushoovandas@gmail.com' ||
+        profile.name?.toLowerCase().includes('sushoovan das'));
+    const isSuperAdminUser = isAditiSuper || isSushoovan;
 
     // 1. Super Admin Bypass: immediate APPROVED + SUPER_ADMIN
     if (isSuperAdminUser) {
       const superAdminUser: AuthUser = {
-        id: 'usr_super_admin_sushoovan',
-        googleId: profile.googleId || 'google_super_admin_sushoovan',
-        email: SUPER_ADMIN_EMAIL,
-        name: SUPER_ADMIN_NAME,
+        id: isAditiSuper ? 'emp-modelatech2026_gmail_com' : 'emp-sushoovan_das',
+        googleId:
+          profile.googleId ||
+          (isAditiSuper ? 'emp-modelatech2026_gmail_com' : 'emp-sushoovan_das'),
+        email: isAditiSuper ? SUPER_ADMIN_EMAIL : 'sushoovandas@gmail.com',
+        name: isAditiSuper ? SUPER_ADMIN_NAME : profile.name || 'Sushoovan Das',
         role: 'Super Administrator & Lead Architect',
         appRole: 'SUPER_ADMIN',
         status: 'APPROVED',
@@ -3281,13 +3592,20 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     filterRange: string = 'this-week'
   ): number => {
     const strippedEmpId = (employeeId || '').trim().replace(/^emp-/, '');
-    const emp = employees.find(
-      (e) =>
-        e.id === employeeId ||
-        (e.id || '').replace(/^emp-/, '') === strippedEmpId
-    );
-    const empName = (emp?.name || '').toLowerCase().trim();
-    const empEmail = (emp?.email || '').toLowerCase().trim();
+    const emp =
+      activeTeamMembers.find(
+        (e) =>
+          e.id === employeeId ||
+          (e.id || '').replace(/^emp-/, '') === strippedEmpId
+      ) ||
+      employees.find(
+        (e) =>
+          e.id === employeeId ||
+          (e.id || '').replace(/^emp-/, '') === strippedEmpId
+      );
+    const sanitizedEmp = emp ? sanitizeEmployeeRecord(emp) : undefined;
+    const empName = (sanitizedEmp?.name || '').toLowerCase().trim();
+    const empEmail = (sanitizedEmp?.email || '').toLowerCase().trim();
     const detEmailId = empEmail ? generateRequestDocId(empEmail) : '';
 
     const matchesMember = (item: {
@@ -3297,19 +3615,29 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       memberEmail?: string;
       userEmail?: string;
     }): boolean => {
+      const itemName = (item.employeeName || '').toLowerCase().trim();
+      if (
+        empName &&
+        itemName &&
+        itemName !== 'bim modeler' &&
+        itemName !== 'team member' &&
+        empName !== itemName
+      ) {
+        return false;
+      }
+
+      const itemEmail = (item.memberEmail || item.userEmail || '').toLowerCase().trim();
+      if (empEmail && itemEmail && empEmail !== itemEmail) {
+        return false;
+      }
+
       const itemEmpId = (item.employeeId || '').trim();
       const itemEmpIdStripped = itemEmpId.replace(/^emp-/, '');
-      const itemUserId = (item.userId || '').trim();
-      const itemUserIdStripped = itemUserId.replace(/^emp-/, '');
-      const itemEmail = (item.memberEmail || item.userEmail || '').toLowerCase().trim();
-      const itemName = (item.employeeName || '').toLowerCase().trim();
 
       if (
-        (employeeId && (itemEmpId === employeeId || itemUserId === employeeId)) ||
-        (strippedEmpId &&
-          (itemEmpIdStripped === strippedEmpId || itemUserIdStripped === strippedEmpId)) ||
-        (detEmailId &&
-          (itemEmpIdStripped === detEmailId || itemUserIdStripped === detEmailId))
+        (employeeId && itemEmpId === employeeId) ||
+        (strippedEmpId && itemEmpIdStripped === strippedEmpId) ||
+        (detEmailId && itemEmpIdStripped === detEmailId)
       ) {
         return true;
       }
@@ -3326,7 +3654,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const todayIso = toLocalIsoDate(new Date());
 
     // Exclude test entries from operational employee logged hours & capacity calculations
-    const matchingLogs = (allWorkLogs || []).filter((w) => !w.isTestEntry && matchesMember(w));
+    const matchingLogs = (allWorkLogs || [])
+      .map((w) => sanitizeWorkLogRecord(w))
+      .filter((w) => !w.isTestEntry && matchesMember(w));
 
     if (filterRange === 'all') {
       return matchingLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
@@ -3528,21 +3858,83 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const addWorkLog = (
     logData: Omit<DailyWorkLog, 'id' | 'timestamp'>
   ): DailyWorkLog => {
-    const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    const userEmail = (
+    const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const rawTargetId = (
+      logData.employeeId ||
+      (logData as any).memberId ||
+      (logData as any).userId ||
+      ''
+    ).trim();
+    const rawTargetIdStripped = rawTargetId.replace(/^emp-/, '');
+    const rawTargetName = (logData.employeeName || '').trim();
+    const lowerTargetName = rawTargetName.toLowerCase();
+    const rawTargetEmail = (
       logData.memberEmail ||
       (logData as any).userEmail ||
-      currentUser?.email ||
       ''
     )
       .trim()
       .toLowerCase();
-    const userId =
-      (logData as any).userId ||
-      currentUser?.id ||
-      (userEmail ? generateRequestDocId(userEmail) : '') ||
-      logData.employeeId ||
+
+    const isGenericTargetName =
+      !lowerTargetName ||
+      lowerTargetName === 'bim modeler' ||
+      lowerTargetName === 'team member' ||
+      lowerTargetName === 'bim engineer';
+
+    // Match strictly against deduplicated/sanitized activeTeamMembers, enforcing name agreement when a name is provided
+    const matchedTargetEmp = activeTeamMembers.find((e) => {
+      const eName = (e.name || '').trim().toLowerCase();
+      const eEmail = (e.email || '').trim().toLowerCase();
+      if (!isGenericTargetName && eName && eName !== lowerTargetName) {
+        return false;
+      }
+      return (
+        (!isGenericTargetName && eName === lowerTargetName) ||
+        (rawTargetId &&
+          (e.id === rawTargetId || e.id.replace(/^emp-/, '') === rawTargetIdStripped)) ||
+        (rawTargetEmail && eEmail === rawTargetEmail)
+      );
+    });
+
+    const isForCurrentUser = Boolean(
+      !rawTargetId && isGenericTargetName && !rawTargetEmail
+        ? true
+        : (currentUser?.name &&
+            !isGenericTargetName &&
+            currentUser.name.trim().toLowerCase() === lowerTargetName) ||
+          (currentUser?.email &&
+            isGenericTargetName &&
+            rawTargetEmail &&
+            currentUser.email.trim().toLowerCase() === rawTargetEmail)
+    );
+
+    const userEmail = (
+      rawTargetEmail ||
+      matchedTargetEmp?.email ||
+      (isForCurrentUser ? currentUser?.email : '') ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+    const resolvedMemberId =
+      matchedTargetEmp?.id ||
+      rawTargetId ||
+      (isForCurrentUser ? currentUser?.id : '') ||
       '';
+
+    const resolvedEmployeeName = !isGenericTargetName
+      ? matchedTargetEmp?.name || rawTargetName
+      : matchedTargetEmp?.name ||
+        (isForCurrentUser ? currentUser?.name : '') ||
+        'BIM Modeler';
+
+    const userId =
+      resolvedMemberId ||
+      (logData as any).userId ||
+      '';
+
     const hoursValue = Number(logData.hoursLogged) || 0;
     const isoNow = new Date().toISOString();
     const isTestEntryFlag = Boolean(logData.isTestEntry ?? false);
@@ -3551,18 +3943,16 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       (currentUser?.email || '').trim().toLowerCase() ||
       currentUser?.name ||
       userEmail ||
-      logData.employeeName ||
+      resolvedEmployeeName ||
       '';
     const createdAtValue = logData.createdAt || isoNow;
 
-    const resolvedMemberId =
-      (logData as any).memberId || logData.employeeId || userId;
-
-    const newLog: DailyWorkLog = {
+    const newLog: DailyWorkLog = sanitizeWorkLogRecord({
       ...logData,
       id: logId,
       employeeId: resolvedMemberId,
       memberId: resolvedMemberId,
+      employeeName: resolvedEmployeeName,
       hoursLogged: hoursValue,
       memberEmail: userEmail,
       userEmail: userEmail,
@@ -3571,7 +3961,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       isTestEntry: isTestEntryFlag,
       loggedBy: loggedByValue,
       createdAt: createdAtValue,
-    };
+    });
 
     // 1. Optimistic state update in allWorkLogs
     setAllWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
@@ -3581,8 +3971,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const sanitizedLog = JSON.parse(JSON.stringify(newLog));
       const payload = {
         ...sanitizedLog,
-        employeeId: resolvedMemberId,
-        memberId: resolvedMemberId,
+        employeeId: newLog.employeeId,
+        memberId: newLog.employeeId,
+        userId: newLog.employeeId,
+        employeeName: newLog.employeeName,
+        memberEmail: newLog.memberEmail || '',
+        userEmail: newLog.userEmail || '',
         hours: hoursValue,
         hoursLogged: hoursValue,
         isTestEntry: isTestEntryFlag,
@@ -3631,21 +4025,31 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const updateWorkLog = (id: string, updates: Partial<DailyWorkLog>) => {
-    let previousLog: DailyWorkLog | undefined;
-    let fullUpdated: DailyWorkLog | undefined;
+    const previousLog = allWorkLogs.find((w) => w.id === id);
+    const fullUpdated: DailyWorkLog | undefined = previousLog
+      ? sanitizeWorkLogRecord({ ...previousLog, ...updates })
+      : undefined;
+
     setAllWorkLogs((prev) =>
       prev.map((w) => {
         if (w.id === id) {
-          previousLog = w;
-          fullUpdated = { ...w, ...updates };
-          return fullUpdated;
+          return sanitizeWorkLogRecord({ ...w, ...updates });
         }
         return w;
       })
     );
     try {
-      const payload = fullUpdated ? { ...fullUpdated, ...updates } : { id, ...updates };
-      const sanitizedUpdates = JSON.parse(JSON.stringify(payload));
+      const basePayload = fullUpdated
+        ? { ...fullUpdated }
+        : sanitizeWorkLogRecord({ ...(updates as DailyWorkLog), id });
+      const sanitizedUpdates = JSON.parse(
+        JSON.stringify({
+          ...basePayload,
+          ...(basePayload.hoursLogged !== undefined
+            ? { hours: Number(basePayload.hoursLogged) || 0, hoursLogged: Number(basePayload.hoursLogged) || 0 }
+            : {}),
+        })
+      );
       setDoc(doc(db, 'daily_logs', id), sanitizedUpdates, { merge: true }).catch((err) =>
         console.warn('Firestore daily_logs updateWorkLog sync notice:', err)
       );

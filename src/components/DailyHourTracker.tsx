@@ -28,8 +28,11 @@ import {
   isUserSuperAdmin,
   cleanProjectName,
   getMemberLabel,
+  sanitizeEmployeeRecord,
+  sanitizeWorkLogRecord,
 } from '../context/BimDataContext';
 import { normalizeUserRole } from '../auth/googleAuth';
+import { generateRequestDocId } from '../auth/roleSync';
 import { db } from '../firebase/config';
 import { collection, deleteDoc, doc, getDocs, onSnapshot } from 'firebase/firestore';
 import { DailyWorkLog, Discipline, ActivityType, LODLevel, Employee } from '../types';
@@ -111,63 +114,123 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const [editIsTestEntry, setEditIsTestEntry] = useState<boolean>(false);
 
   const openEditLogModal = (log: DailyWorkLog, candidates: DailyWorkLog[] = []) => {
-    setEditingLog(log);
-    setEditCandidateLogs(candidates);
-    setEditEmployeeId(log.employeeId || '');
-    setEditProjectId(log.projectId || projects[0]?.id || '');
-    setEditDate(log.date || toLocalIsoDate(new Date()));
-    setEditHours(Number(log.hoursLogged) || 0);
-    setEditLodStage(log.lodStage || 'LOD 350');
-    setEditDiscipline(log.discipline || 'BIM - ACS');
-    setEditActivityType(log.activityType || '3D Detailed Modeling');
+    const clonedLog: DailyWorkLog = sanitizeWorkLogRecord({ ...log });
+    const clonedCandidates = candidates.map((c) => sanitizeWorkLogRecord({ ...c }));
+    const matchedOwner = allTrackedEmployees.find((emp) => doesLogMatchEmployee(clonedLog, emp));
+    const resolvedEmpId = matchedOwner?.id || clonedLog.employeeId || '';
+    if (matchedOwner) {
+      clonedLog.employeeId = matchedOwner.id;
+      clonedLog.memberId = matchedOwner.id;
+      clonedLog.userId = matchedOwner.id;
+      clonedLog.employeeName = matchedOwner.name;
+      if (matchedOwner.email) {
+        clonedLog.memberEmail = matchedOwner.email;
+        clonedLog.userEmail = matchedOwner.email;
+      }
+    }
+    setEditingLog(clonedLog);
+    setEditCandidateLogs(clonedCandidates);
+    setEditEmployeeId(resolvedEmpId);
+    setEditProjectId(clonedLog.projectId || projects[0]?.id || '');
+    setEditDate(clonedLog.date || toLocalIsoDate(new Date()));
+    setEditHours(Number(clonedLog.hoursLogged) || 0);
+    setEditLodStage(clonedLog.lodStage || 'LOD 350');
+    setEditDiscipline(clonedLog.discipline || 'BIM - ACS');
+    setEditActivityType(clonedLog.activityType || '3D Detailed Modeling');
     setEditTaskName('');
-    setEditNotes(log.notes || '');
-    setEditBillable(log.billable !== undefined ? Boolean(log.billable) : true);
-    setEditIsTestEntry(Boolean(log.isTestEntry));
+    setEditNotes(clonedLog.notes || '');
+    setEditBillable(clonedLog.billable !== undefined ? Boolean(clonedLog.billable) : true);
+    setEditIsTestEntry(Boolean(clonedLog.isTestEntry));
   };
 
-  const openMatrixRowEditModal = (
-    emp: { id: string; name: string; email?: string; discipline?: Discipline },
-    empLogs: DailyWorkLog[],
-    preferredDate?: string
-  ) => {
-    const targetLog = preferredDate
-      ? empLogs.find((w) => getEffectiveLogDate(w, currentWeekRange) === preferredDate) ||
-        empLogs.find((w) => w.date === preferredDate)
-      : empLogs[0];
-
-    if (targetLog) {
-      openEditLogModal(targetLog, empLogs);
-      return;
-    }
-
-    const matchingAllocs = findMatchingAllocationsForMember(emp);
+  const buildCleanDraftLogForMember = (
+    emp: { id: string; name: string; email?: string; discipline?: Discipline; primaryDiscipline?: Discipline },
+    draftDate: string
+  ): DailyWorkLog => {
+    const cleanEmp = sanitizeEmployeeRecord(emp as Employee);
+    const matchingAllocs = findMatchingAllocationsForMember(cleanEmp);
     const primaryAlloc = matchingAllocs[0];
     const defaultProj =
       (primaryAlloc && projects.find((p) => p.id === primaryAlloc.projectId)) ||
       projects[0];
-    const draftDate = preferredDate || toLocalIsoDate(new Date());
-    const draftLog: DailyWorkLog = {
+    return sanitizeWorkLogRecord({
       id: '__new_matrix_log__',
-      employeeId: primaryAlloc?.memberId || primaryAlloc?.employeeId || emp.id,
-      memberId: primaryAlloc?.memberId || primaryAlloc?.employeeId || emp.id,
-      employeeName: primaryAlloc?.employeeName || emp.name,
-      memberEmail: emp.email || primaryAlloc?.memberEmail || '',
-      userEmail: emp.email || primaryAlloc?.memberEmail || '',
+      employeeId: cleanEmp.id,
+      memberId: cleanEmp.id,
+      userId: cleanEmp.id,
+      employeeName: cleanEmp.name,
+      memberEmail: cleanEmp.email || primaryAlloc?.memberEmail || '',
+      userEmail: cleanEmp.email || primaryAlloc?.memberEmail || '',
       projectId: primaryAlloc?.projectId || defaultProj?.id || '',
       projectName: primaryAlloc?.projectName || defaultProj?.name || 'BIM Project',
       date: draftDate,
       hoursLogged: 8,
-      discipline: (primaryAlloc?.discipline as Discipline) || emp.discipline || 'BIM - ACS',
+      discipline:
+        (primaryAlloc?.discipline as Discipline) ||
+        cleanEmp.discipline ||
+        cleanEmp.primaryDiscipline ||
+        'BIM - ACS',
       activityType: '3D Detailed Modeling',
-      taskName: primaryAlloc?.taskType || defaultProj?.tasks?.[0]?.name || 'BIM Modeling & Coordination',
+      taskName: '',
       lodStage: (primaryAlloc?.lod as LODLevel) || defaultProj?.currentLOD || 'LOD 350',
-      notes: 'Updated via Weekly Timesheet Matrix',
+      notes: '',
       billable: true,
       timestamp: new Date().toISOString(),
       isTestEntry: logTypeFilter === 'test',
-    };
-    openEditLogModal(draftLog, empLogs);
+    });
+  };
+
+  const openMatrixRowEditModal = (
+    emp: { id: string; name: string; email?: string; discipline?: Discipline; primaryDiscipline?: Discipline },
+    empLogs: DailyWorkLog[],
+    preferredDate?: string
+  ) => {
+    const cleanEmp = sanitizeEmployeeRecord(emp as Employee);
+    // Filter and bind logs strictly belonging to this specific member
+    const memberSpecificLogs = empLogs
+      .filter((w) => doesLogMatchEmployee(w, cleanEmp))
+      .map((w) => ({
+        ...sanitizeWorkLogRecord(w),
+        employeeId: cleanEmp.id,
+        memberId: cleanEmp.id,
+        userId: cleanEmp.id,
+        employeeName: cleanEmp.name,
+        memberEmail: cleanEmp.email || w.memberEmail || '',
+        userEmail: cleanEmp.email || w.userEmail || '',
+      }));
+
+    const matchingDayLogs = preferredDate
+      ? memberSpecificLogs.filter(
+          (w) =>
+            getEffectiveLogDate(w, currentWeekRange) === preferredDate || w.date === preferredDate
+        )
+      : [];
+    const targetLog = preferredDate ? matchingDayLogs[0] : memberSpecificLogs[0];
+
+    if (targetLog) {
+      const totalDayHours =
+        matchingDayLogs.length > 1
+          ? matchingDayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0)
+          : Number(targetLog.hoursLogged) || 0;
+      openEditLogModal(
+        {
+          ...targetLog,
+          employeeId: cleanEmp.id,
+          memberId: cleanEmp.id,
+          userId: cleanEmp.id,
+          employeeName: cleanEmp.name,
+          memberEmail: cleanEmp.email || targetLog.memberEmail || '',
+          userEmail: cleanEmp.email || targetLog.userEmail || '',
+          hoursLogged: totalDayHours,
+        },
+        memberSpecificLogs
+      );
+      return;
+    }
+
+    const draftDate = preferredDate || toLocalIsoDate(new Date());
+    const draftLog = buildCleanDraftLogForMember(cleanEmp, draftDate);
+    openEditLogModal(draftLog, memberSpecificLogs);
   };
 
   const findMatchingAllocationsForMember = (emp: { id: string; name?: string; email?: string }) => {
@@ -181,7 +244,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       const aId = (alloc.employeeId || raw.memberId || raw.assignedTo || '').trim();
       const aIdStripped = aId.replace(/^emp-/, '');
       const aEmail = (alloc.memberEmail || raw.assignedToEmail || '').toLowerCase().trim();
-      const aName = (alloc.employeeName || '').toLowerCase().trim();
+      const aName = (alloc.employeeName || raw.assignedToName || raw.memberName || '').toLowerCase().trim();
+
+      if (empName && aName && empName !== aName) {
+        return false;
+      }
 
       return (
         (empId && (aId === empId || (empIdStripped && aIdStripped === empIdStripped) || alloc.id === empId)) ||
@@ -233,39 +300,29 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     if (!editingLog) return;
 
     const matchedProj = projects.find((p) => p.id === editProjectId);
-    const matchedEmp = allTrackedEmployees.find(
+    const rawMatchedEmp = allTrackedEmployees.find(
       (emp) =>
         emp.id === editEmployeeId ||
         emp.id.replace(/^emp-/, '') === editEmployeeId.replace(/^emp-/, '')
     );
+    const matchedEmp = rawMatchedEmp ? sanitizeEmployeeRecord(rawMatchedEmp) : undefined;
 
-    const rawTargetEmpId = matchedEmp?.id || editEmployeeId || editingLog.employeeId;
-    const rawTargetProjId = matchedProj?.id || editProjectId || editingLog.projectId;
+    const isSameMemberAsOriginal = matchedEmp
+      ? doesLogMatchEmployee(editingLog, matchedEmp)
+      : editEmployeeId === editingLog.employeeId;
 
-    const matchingAssignment = (resourceAllocations || []).find((alloc) => {
-      const sameProj =
-        alloc.projectId === rawTargetProjId ||
-        alloc.projectId.replace(/^p(\d+)$/, 'proj-$1') === rawTargetProjId.replace(/^p(\d+)$/, 'proj-$1');
-      if (!sameProj) return false;
-      const aId = (alloc.memberId || alloc.employeeId || '').trim();
-      const aIdStripped = aId.replace(/^emp-/, '');
-      const tIdStripped = (rawTargetEmpId || '').replace(/^emp-/, '');
-      const aEmail = (alloc.memberEmail || alloc.assignedToEmail || '').toLowerCase().trim();
-      const tEmail = (matchedEmp?.email || editingLog.memberEmail || '').toLowerCase().trim();
-      const aName = (alloc.employeeName || '').toLowerCase().trim();
-      const tName = (matchedEmp?.name || editingLog.employeeName || '').toLowerCase().trim();
-      return (
-        (rawTargetEmpId && (aId === rawTargetEmpId || (aIdStripped && aIdStripped === tIdStripped))) ||
-        (tEmail && aEmail && aEmail === tEmail) ||
-        (tName && aName && aName === tName)
-      );
-    });
-
-    const targetEmpId =
-      matchingAssignment?.memberId ||
-      matchingAssignment?.employeeId ||
-      rawTargetEmpId;
-    const targetProjectId = matchingAssignment?.projectId || rawTargetProjId;
+    const targetEmpId = matchedEmp?.id || editEmployeeId || editingLog.employeeId;
+    const targetEmpName =
+      matchedEmp?.name || (isSameMemberAsOriginal ? editingLog.employeeName : 'BIM Modeler');
+    const targetEmpEmail = (
+      matchedEmp?.email ||
+      (isSameMemberAsOriginal ? editingLog.memberEmail || editingLog.userEmail : '') ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const targetProjectId = matchedProj?.id || editProjectId || editingLog.projectId;
+    const targetProjectName = matchedProj?.name || editingLog.projectName || 'BIM Project';
 
     if (targetEmpId) {
       setModifiedMatrixEmpIds((prev) =>
@@ -274,34 +331,72 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       setDeletedMatrixEmpIds((prev) => prev.filter((id) => id !== targetEmpId));
     }
 
-    if (editingLog.id === '__new_matrix_log__') {
-      addWorkLog({
-        employeeId: targetEmpId,
-        memberId: targetEmpId,
-        employeeName: matchingAssignment?.employeeName || matchedEmp?.name || editingLog.employeeName,
-        memberEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.memberEmail,
-        userEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.userEmail,
-        projectId: targetProjectId,
-        projectName: matchingAssignment?.projectName || matchedProj?.name || editingLog.projectName,
-        date: editDate,
-        hoursLogged: Number(editHours) || 0,
-        lodStage: editLodStage,
-        discipline: editDiscipline,
-        activityType: editActivityType,
-        taskName: editTaskName || '',
-        notes: editNotes,
-        billable: Boolean(editBillable),
-        isTestEntry: Boolean(editIsTestEntry),
-      });
+    const allSourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
+    const sameMemberSameDayLogs = matchedEmp
+      ? allSourceLogs.filter(
+          (w) =>
+            doesLogMatchEmployee(w, matchedEmp) &&
+            (getEffectiveLogDate(w, currentWeekRange) === editDate || w.date === editDate) &&
+            Boolean(w.isTestEntry) === Boolean(editIsTestEntry)
+        )
+      : [];
+
+    if (editingLog.id === '__new_matrix_log__' || !isSameMemberAsOriginal) {
+      const existingTargetDayLog = sameMemberSameDayLogs[0];
+      if (existingTargetDayLog) {
+        updateWorkLog(existingTargetDayLog.id, {
+          employeeId: targetEmpId,
+          memberId: targetEmpId,
+          userId: targetEmpId,
+          employeeName: targetEmpName,
+          memberEmail: targetEmpEmail,
+          userEmail: targetEmpEmail,
+          projectId: targetProjectId,
+          projectName: targetProjectName,
+          date: editDate,
+          hoursLogged: Number(editHours) || 0,
+          lodStage: editLodStage,
+          discipline: editDiscipline,
+          activityType: editActivityType,
+          taskName: editTaskName || '',
+          notes: editNotes,
+          billable: Boolean(editBillable),
+          isTestEntry: Boolean(editIsTestEntry),
+        });
+        sameMemberSameDayLogs.slice(1).forEach((dup) => {
+          deleteWorkLog(dup.id);
+        });
+      } else {
+        addWorkLog({
+          employeeId: targetEmpId,
+          memberId: targetEmpId,
+          userId: targetEmpId,
+          employeeName: targetEmpName,
+          memberEmail: targetEmpEmail,
+          userEmail: targetEmpEmail,
+          projectId: targetProjectId,
+          projectName: targetProjectName,
+          date: editDate,
+          hoursLogged: Number(editHours) || 0,
+          lodStage: editLodStage,
+          discipline: editDiscipline,
+          activityType: editActivityType,
+          taskName: editTaskName || '',
+          notes: editNotes,
+          billable: Boolean(editBillable),
+          isTestEntry: Boolean(editIsTestEntry),
+        });
+      }
     } else {
       updateWorkLog(editingLog.id, {
         employeeId: targetEmpId,
         memberId: targetEmpId,
-        employeeName: matchingAssignment?.employeeName || matchedEmp?.name || editingLog.employeeName,
-        memberEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.memberEmail,
-        userEmail: matchingAssignment?.memberEmail || matchedEmp?.email || editingLog.userEmail,
+        userId: targetEmpId,
+        employeeName: targetEmpName,
+        memberEmail: targetEmpEmail,
+        userEmail: targetEmpEmail,
         projectId: targetProjectId,
-        projectName: matchingAssignment?.projectName || matchedProj?.name || editingLog.projectName,
+        projectName: targetProjectName,
         date: editDate,
         hoursLogged: Number(editHours) || 0,
         lodStage: editLodStage,
@@ -312,6 +407,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         billable: Boolean(editBillable),
         isTestEntry: Boolean(editIsTestEntry),
       });
+      // Remove any duplicate same-day logs for this same user that were collapsed into the matrix cell
+      sameMemberSameDayLogs
+        .filter((dup) => dup.id !== editingLog.id)
+        .forEach((dup) => {
+          deleteWorkLog(dup.id);
+        });
     }
 
     setEditingLog(null);
@@ -447,33 +548,48 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     showMatrixDeleteNotice('Record successfully deleted');
   };
 
-  // Helper to match a work log to an employee record across all identifiers
+  // Helper to match a work log to an employee record across all identifiers without cross-user collision
   const doesLogMatchEmployee = (log: DailyWorkLog, emp: { id: string; name?: string; email?: string }): boolean => {
-    const empId = (emp.id || '').trim();
+    const cleanLog = sanitizeWorkLogRecord(log);
+    const cleanEmp = sanitizeEmployeeRecord(emp as Employee);
+
+    const empName = (cleanEmp.name || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
+    const logName = (cleanLog.employeeName || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
+    // If both log and employee have explicit names and they differ, they are distinct team members
+    if (
+      empName &&
+      logName &&
+      logName !== 'bim modeler' &&
+      logName !== 'team member' &&
+      logName !== 'bim engineer' &&
+      empName !== logName
+    ) {
+      return false;
+    }
+
+    const empEmail = (cleanEmp.email || '').toLowerCase().trim();
+    const logEmail = ((cleanLog as any).memberEmail || (cleanLog as any).userEmail || '').toLowerCase().trim();
+    // If both log and employee have explicit emails and they differ, they are distinct team members
+    if (empEmail && logEmail && empEmail !== logEmail) {
+      return false;
+    }
+
+    const empId = (cleanEmp.id || '').trim();
     const empIdStripped = empId.replace(/^emp-/, '');
-    const logEmpId = (log.employeeId || '').trim();
+    const logEmpId = (cleanLog.employeeId || '').trim();
     const logEmpIdStripped = logEmpId.replace(/^emp-/, '');
-    const logUserId = ((log as any).userId || '').trim();
-    const logUserIdStripped = logUserId.replace(/^emp-/, '');
 
     if (
       empId &&
-      (logEmpId === empId ||
-        (empIdStripped && logEmpIdStripped === empIdStripped) ||
-        logUserId === empId ||
-        (empIdStripped && logUserIdStripped === empIdStripped))
+      (logEmpId === empId || (empIdStripped && logEmpIdStripped === empIdStripped))
     ) {
       return true;
     }
 
-    const empEmail = (emp.email || '').toLowerCase().trim();
-    const logEmail = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
     if (empEmail && logEmail && empEmail === logEmail) {
       return true;
     }
 
-    const empName = (emp.name || '').toLowerCase().trim();
-    const logName = (log.employeeName || '').toLowerCase().trim();
     if (empName && logName && empName === logName) {
       return true;
     }
@@ -499,37 +615,57 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
             if (data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
               return;
             }
-            const email = String(data.email || data.userEmail || '').trim().toLowerCase();
-            if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
+            const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
+            if (rawEmail === 'sushovan.das@bimworkspace.com' || rawEmail === 'aditi@bimworkspace.com') {
               return;
             }
-            const rawName = String(data.fullName || data.name || (email ? email.split('@')[0] : '')).trim();
-            const isSuper = email === 'modelatech2026@gmail.com' || rawName.toLowerCase() === 'aditi chakraborty';
-            const name = isSuper ? 'Aditi Chakraborty' : rawName;
+            const rawName = String(data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')).trim();
+            const lowerRawName = rawName.toLowerCase();
+            const isSushovan =
+              lowerRawName.includes('sushovan') ||
+              lowerRawName.includes('sushoovan') ||
+              rawEmail === 'sushoovandas@gmail.com' ||
+              rawEmail === 'sushovandas@gmail.com';
+            const isAditiSuper =
+              !isSushovan &&
+              (rawEmail === 'modelatech2026@gmail.com' ||
+                lowerRawName === 'aditi chakraborty');
+            const name = isAditiSuper ? 'Aditi Chakraborty' : rawName;
+            const email = isSushovan
+              ? rawEmail && rawEmail !== 'modelatech2026@gmail.com'
+                ? rawEmail
+                : 'sushoovandas@gmail.com'
+              : isAditiSuper
+              ? 'modelatech2026@gmail.com'
+              : rawEmail;
             if (!name && !email) return;
             const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
-            const resolvedRole = isSuper
+            const resolvedRole = isAditiSuper
               ? 'SUPER_ADMIN'
               : normalizeUserRole(data.assignedRole || data.appRole || data.role || 'VIEWER', false);
-            usersList.push({
-              id: isSuper
-                ? 'emp-modelatech2026_gmail_com'
-                : String(data.id || (docSnap.id.startsWith('emp-') ? docSnap.id : `emp-${docSnap.id}`)).trim(),
-              name,
-              email: isSuper ? 'modelatech2026@gmail.com' : email,
-              role: resolvedRole as any,
-              primaryDiscipline: disc,
-              discipline: disc,
-              avatar:
-                data.avatar ||
-                `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
-              weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
-              experienceYears: Number(data.experienceYears) || 4,
-              status: 'Active',
-              activeProjectIds: Array.isArray(data.activeProjectIds) ? data.activeProjectIds : [],
-              skills: [disc],
-              phone: data.phone || '',
-            });
+            usersList.push(
+              sanitizeEmployeeRecord({
+                id: isAditiSuper
+                  ? 'emp-modelatech2026_gmail_com'
+                  : isSushovan
+                  ? 'emp-sushoovan_das'
+                  : String(data.id || (docSnap.id.startsWith('emp-') ? docSnap.id : `emp-${docSnap.id}`)).trim(),
+                name,
+                email,
+                role: resolvedRole as any,
+                primaryDiscipline: disc,
+                discipline: disc,
+                avatar:
+                  data.avatar ||
+                  `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+                weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
+                experienceYears: Number(data.experienceYears) || 4,
+                status: 'Active',
+                activeProjectIds: Array.isArray(data.activeProjectIds) ? data.activeProjectIds : [],
+                skills: [disc],
+                phone: data.phone || '',
+              })
+            );
           });
           setFirestoreUsers(usersList);
         },
@@ -581,20 +717,23 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const list: Employee[] = [];
     const knownKeys = new Set<string>();
 
-    const registerMember = (emp: Employee) => {
-      if (!emp || emp.isDeleted || emp.status === 'deleted') return;
+    const registerMember = (rawEmp: Employee) => {
+      if (!rawEmp || rawEmp.isDeleted || rawEmp.status === 'deleted') return;
+      const emp = sanitizeEmployeeRecord(rawEmp);
       const emailKey = (emp.email || '').toLowerCase().trim();
-      const nameKey = (emp.name || '').toLowerCase().trim();
+      const nameKey = (emp.name || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
       const idKey = (emp.id || '').trim();
       const idKeyLower = idKey.toLowerCase();
       const strippedIdKey = idKey.replace(/^emp-/, '');
       const strippedIdLower = strippedIdKey.toLowerCase();
+      const detIdLower = emailKey ? generateRequestDocId(emailKey).toLowerCase() : '';
 
       if (emailKey !== 'modelatech2026@gmail.com') {
         const isDeletedMember =
           deletedMatrixEmpIds.includes(emp.id) ||
           (idKeyLower && deletedSet.has(idKeyLower)) ||
           (strippedIdLower && deletedSet.has(strippedIdLower)) ||
+          (detIdLower && deletedSet.has(detIdLower)) ||
           (nameKey && deletedSet.has(nameKey)) ||
           (nameKey && deletedSet.has(`name:${nameKey}`)) ||
           (emailKey && deletedSet.has(emailKey));
@@ -602,17 +741,19 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
 
       const alreadyExists =
-        (idKey && knownKeys.has(idKey)) ||
-        (strippedIdKey && knownKeys.has(strippedIdKey)) ||
+        (idKeyLower && knownKeys.has(idKeyLower)) ||
+        (strippedIdLower && knownKeys.has(strippedIdLower)) ||
+        (detIdLower && knownKeys.has(detIdLower)) ||
         (nameKey && knownKeys.has(nameKey)) ||
         (emailKey && knownKeys.has(emailKey));
 
-      if (!alreadyExists && (nameKey || idKey || emailKey)) {
-        if (idKey) knownKeys.add(idKey);
-        if (strippedIdKey) knownKeys.add(strippedIdKey);
+      if (!alreadyExists && (nameKey || idKeyLower || emailKey)) {
+        if (idKeyLower) knownKeys.add(idKeyLower);
+        if (strippedIdLower) knownKeys.add(strippedIdLower);
+        if (detIdLower) knownKeys.add(detIdLower);
         if (nameKey) knownKeys.add(nameKey);
         if (emailKey) knownKeys.add(emailKey);
-        list.push(emp);
+        list.push({ ...emp });
       }
     };
 
@@ -709,7 +850,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   // Full Member Matrix Outer Join: maps directly from the complete list of active team members,
   // performing an outer join with daily_logs for the selected week range so 0.0h members are always rendered.
   const fullWeeklyMatrix = useMemo(() => {
-    const sourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
+    const rawSourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
+    const sourceLogs = rawSourceLogs.map((w) => sanitizeWorkLogRecord(w));
     const weeklyLogs = sourceLogs.filter((w) => {
       const matchesType =
         logTypeFilter === 'test'
@@ -725,12 +867,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const computeWeeklyTotals = (userLogs: DailyWorkLog[], user: Employee) => {
       let weekSum = 0;
       const dailyHours = weekDays.map((d) => {
-        const dayLogs = sourceLogs.filter(
-          (w) =>
-            (logTypeFilter === 'test' ? Boolean(w.isTestEntry) : !w.isTestEntry) &&
-            (w.employeeId === user.id || doesLogMatchEmployee(w, user)) &&
-            getEffectiveLogDate(w, currentWeekRange) === d.date
-        );
+        const dayLogs = sourceLogs
+          .filter(
+            (w) =>
+              (logTypeFilter === 'test' ? Boolean(w.isTestEntry) : !w.isTestEntry) &&
+              doesLogMatchEmployee(w, user) &&
+              getEffectiveLogDate(w, currentWeekRange) === d.date
+          )
+          .map((l) => ({ ...l }));
         const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
         weekSum += hours;
         return { date: d.date, hours, dayLogs };
@@ -738,19 +882,22 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       return { weekSum, dailyHours, userLogs };
     };
 
-    return allTrackedEmployees.map((user) => {
-      const empAllLogs = sourceLogs.filter(
-        (w) =>
-          (logTypeFilter === 'test'
-            ? Boolean(w.isTestEntry)
-            : logTypeFilter === 'operational'
-            ? !w.isTestEntry
-            : true) &&
-          (w.employeeId === user.id || doesLogMatchEmployee(w, user))
-      );
-      const userLogs = weeklyLogs.filter(
-        (log) => log.employeeId === user.id || doesLogMatchEmployee(log, user)
-      );
+    return allTrackedEmployees.map((rawUser) => {
+      const user = { ...sanitizeEmployeeRecord(rawUser) };
+      const empAllLogs = sourceLogs
+        .filter(
+          (w) =>
+            (logTypeFilter === 'test'
+              ? Boolean(w.isTestEntry)
+              : logTypeFilter === 'operational'
+              ? !w.isTestEntry
+              : true) &&
+            doesLogMatchEmployee(w, user)
+        )
+        .map((l) => ({ ...l }));
+      const userLogs = weeklyLogs
+        .filter((log) => doesLogMatchEmployee(log, user))
+        .map((l) => ({ ...l }));
       const empActionLogs = userLogs.length > 0 ? userLogs : empAllLogs;
 
       return {
@@ -802,8 +949,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       const matchesEmp =
         !isSuperAdmin ||
         selectedEmployeeFilter === 'all' ||
-        log.employeeId === selectedEmployeeFilter ||
-        (selectedEmpObj ? doesLogMatchEmployee(log, selectedEmpObj) : false);
+        (selectedEmpObj ? doesLogMatchEmployee(log, selectedEmpObj) : log.employeeId === selectedEmployeeFilter);
 
       const matchesProj =
         selectedProjectFilter === 'all' || log.projectId === selectedProjectFilter;
@@ -1597,7 +1743,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   <span className="text-[11px] text-blue-400 font-mono">{editDate}</span>
                 </div>
                 <div className="grid grid-cols-7 gap-1.5">
-                  {weekDays.map((wd) => {
+                    {weekDays.map((wd) => {
                     const matchingLogForDay = editCandidateLogs.find(
                       (l) => getEffectiveLogDate(l, currentWeekRange) === wd.date || l.date === wd.date
                     );
@@ -1610,12 +1756,20 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           if (matchingLogForDay) {
                             openEditLogModal(matchingLogForDay, editCandidateLogs);
                           } else {
-                            setEditDate(wd.date);
-                            if (editingLog.id !== '__new_matrix_log__' && editCandidateLogs.length > 0) {
+                            const currentMember = allTrackedEmployees.find((emp) => emp.id === editEmployeeId);
+                            if (currentMember) {
+                              const cleanDayDraft = buildCleanDraftLogForMember(currentMember, wd.date);
+                              openEditLogModal(cleanDayDraft, editCandidateLogs);
+                            } else {
+                              setEditDate(wd.date);
+                              setEditHours(8);
+                              setEditNotes('');
                               setEditingLog({
                                 ...editingLog,
                                 id: '__new_matrix_log__',
                                 date: wd.date,
+                                hoursLogged: 8,
+                                notes: '',
                               });
                             }
                           }
@@ -1643,7 +1797,32 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   <label className="block text-slate-400 font-medium mb-1">Team Member</label>
                   <select
                     value={editEmployeeId}
-                    onChange={(e) => setEditEmployeeId(e.target.value)}
+                    onChange={(e) => {
+                      const nextEmpId = e.target.value;
+                      const nextEmp = allTrackedEmployees.find((emp) => emp.id === nextEmpId);
+                      if (!nextEmp) {
+                        setEditEmployeeId(nextEmpId);
+                        return;
+                      }
+                      const sourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
+                      const nextEmpLogs = sourceLogs.filter(
+                        (w) =>
+                          (logTypeFilter === 'test' ? Boolean(w.isTestEntry) : !w.isTestEntry) &&
+                          doesLogMatchEmployee(w, nextEmp)
+                      );
+                      const existingOnDate = nextEmpLogs.find(
+                        (w) => getEffectiveLogDate(w, currentWeekRange) === editDate || w.date === editDate
+                      );
+                      if (existingOnDate) {
+                        openEditLogModal(existingOnDate, nextEmpLogs);
+                      } else {
+                        const cleanDraft = buildCleanDraftLogForMember(
+                          nextEmp,
+                          editDate || toLocalIsoDate(new Date())
+                        );
+                        openEditLogModal(cleanDraft, nextEmpLogs);
+                      }
+                    }}
                     disabled={!isSuperAdmin}
                     className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-75"
                   >
@@ -1680,7 +1859,40 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   <input
                     type="date"
                     value={editDate}
-                    onChange={(e) => setEditDate(e.target.value)}
+                    onChange={(e) => {
+                      const nextDate = e.target.value;
+                      setEditDate(nextDate);
+                      const currentEmp = allTrackedEmployees.find(
+                        (emp) => emp.id === editEmployeeId
+                      );
+                      if (currentEmp && editCandidateLogs.length > 0) {
+                        const existingDayLogs = editCandidateLogs.filter(
+                          (c) =>
+                            doesLogMatchEmployee(c, currentEmp) &&
+                            (getEffectiveLogDate(c, currentWeekRange) === nextDate ||
+                              c.date === nextDate)
+                        );
+                        if (existingDayLogs.length > 0) {
+                          const totalHrs = existingDayLogs.reduce(
+                            (sum, l) => sum + (Number(l.hoursLogged) || 0),
+                            0
+                          );
+                          openEditLogModal(
+                            {
+                              ...existingDayLogs[0],
+                              employeeId: currentEmp.id,
+                              memberId: currentEmp.id,
+                              userId: currentEmp.id,
+                              employeeName: currentEmp.name,
+                              memberEmail: currentEmp.email || existingDayLogs[0].memberEmail || '',
+                              userEmail: currentEmp.email || existingDayLogs[0].userEmail || '',
+                              hoursLogged: totalHrs,
+                            },
+                            editCandidateLogs
+                          );
+                        }
+                      }
+                    }}
                     className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     required
                   />

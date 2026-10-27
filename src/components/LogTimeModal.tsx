@@ -10,7 +10,14 @@ import {
   FileText
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useBimData, isUserSuperAdmin, toLocalIsoDate, cleanProjectName, getMemberLabel } from '../context/BimDataContext';
+import {
+  useBimData,
+  isUserSuperAdmin,
+  toLocalIsoDate,
+  cleanProjectName,
+  getMemberLabel,
+  sanitizeEmployeeRecord,
+} from '../context/BimDataContext';
 import { generateRequestDocId } from '../auth/roleSync';
 import { Discipline, ActivityType, LODLevel } from '../types';
 
@@ -31,12 +38,10 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     resourceAllocations,
     addWorkLog,
     currentUser,
-    disciplineAssignments,
-    handleMemberSelect: syncDisciplineMemberToFirestore,
   } = useBimData();
   const isSuper = isUserSuperAdmin(currentUser);
 
-  // Resolve allocations belonging to the current logged-in user
+  // Resolve allocations belonging strictly to the current logged-in user
   const viewerAllocations = React.useMemo(() => {
     if (!currentUser) return [];
     const cleanEmail = (currentUser.email || '').trim().toLowerCase();
@@ -50,6 +55,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       const aIdStripped = aId.replace(/^emp-/, '');
       const aEmail = (alloc.memberEmail || alloc.assignedToEmail || '').trim().toLowerCase();
       const aName = (alloc.employeeName || '').trim().toLowerCase();
+      if (userName && aName && userName !== aName) return false;
       return (
         (userId && (aId === userId || aIdStripped === userIdStripped)) ||
         (detId && aIdStripped === detId) ||
@@ -60,14 +66,16 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   }, [resourceAllocations, currentUser]);
 
   const activeTeamMembers = React.useMemo(() => {
-    const raw = (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted');
+    const raw = (employees || [])
+      .filter((member) => !member.isDeleted && member.status !== 'deleted')
+      .map((member) => sanitizeEmployeeRecord({ ...member }));
     const seen = new Set<string>();
     return raw.filter((member) => {
       const emailKey = (member.email || '').trim().toLowerCase();
-      const idKey = (member.id || '').trim();
+      const idKey = (member.id || '').trim().toLowerCase();
       const strippedId = idKey.replace(/^emp-/, '');
-      const detId = emailKey ? generateRequestDocId(emailKey) : '';
-      const nameKey = (member.name || '').trim().toLowerCase();
+      const detId = emailKey ? generateRequestDocId(emailKey).toLowerCase() : '';
+      const nameKey = (member.name || '').trim().toLowerCase().replace(/sushoovan/g, 'sushovan');
       if (
         (emailKey && seen.has(emailKey)) ||
         (idKey && seen.has(idKey)) ||
@@ -90,7 +98,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     preselectedProjectId || viewerAllocations[0]?.projectId || projects[0]?.id || ''
   );
   const [employeeId, setEmployeeId] = useState<string>(
-    viewerAllocations[0]?.employeeId || activeTeamMembers[0]?.id || currentUser?.id || ''
+    activeTeamMembers[0]?.id || currentUser?.id || ''
   );
   const [date, setDate] = useState<string>(() => toLocalIsoDate(new Date()));
   const [hours, setHours] = useState<number>(4);
@@ -104,137 +112,205 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
   const [billable, setBillable] = useState<boolean>(true);
   const [isTestEntry, setIsTestEntry] = useState<boolean>(false);
 
-  // Sync selected project when modal opens or preselectedProjectId/projects change
-  useEffect(() => {
-    if (isOpen) {
-      setIsTestEntry(false);
-    }
-    if (preselectedProjectId) {
-      setProjectId(preselectedProjectId);
-    } else if (isOpen && !isSuper && viewerAllocations.length > 0) {
-      const hasCurrentInAssigned = viewerAllocations.some((a) => a.projectId === projectId);
-      if (!hasCurrentInAssigned && viewerAllocations[0]?.projectId) {
-        setProjectId(viewerAllocations[0].projectId);
+  // Isolated per-employee draft map so switching team members never clones notes or fields across users
+  const memberFormDraftsRef = React.useRef<
+    Record<
+      string,
+      {
+        projectId: string;
+        date: string;
+        hours: number;
+        discipline: Discipline;
+        activityType: ActivityType;
+        lodStage: LODLevel;
+        notes: string;
+        billable: boolean;
+        isTestEntry: boolean;
       }
-    } else if (!projectId && projects.length > 0) {
-      setProjectId(projects[0].id);
-    }
-  }, [isOpen, preselectedProjectId, projects, projectId, isSuper, viewerAllocations]);
+    >
+  >({});
 
-  // Auto-select current logged in user or hydrated discipline assignee when modal opens
+  const getCleanDefaultsForMember = React.useCallback(
+    (targetEmpId: string) => {
+      const targetEmp =
+        activeTeamMembers.find(
+          (e) =>
+            e.id === targetEmpId ||
+            e.id.replace(/^emp-/, '') === targetEmpId.replace(/^emp-/, '')
+        ) ||
+        employees
+          .map((e) => sanitizeEmployeeRecord(e))
+          .find(
+            (e) =>
+              e.id === targetEmpId ||
+              e.id.replace(/^emp-/, '') === targetEmpId.replace(/^emp-/, '')
+          );
+      const targetEmail = (targetEmp?.email || '').trim().toLowerCase();
+      const targetName = (targetEmp?.name || '').trim().toLowerCase();
+
+      const memberAlloc = (resourceAllocations || []).find((a) => {
+        const aId = (a.employeeId || a.memberId || '').trim();
+        const aIdStripped = aId.replace(/^emp-/, '');
+        const tIdStripped = targetEmpId.replace(/^emp-/, '');
+        const aEmail = (a.memberEmail || a.assignedToEmail || '').trim().toLowerCase();
+        const aName = (a.employeeName || '').trim().toLowerCase();
+        if (aName && targetName && aName !== targetName) return false;
+        return (
+          (targetEmpId && (aId === targetEmpId || (aIdStripped && aIdStripped === tIdStripped))) ||
+          (targetEmail && aEmail && aEmail === targetEmail) ||
+          (targetName && aName && aName === targetName)
+        );
+      });
+
+      const resolvedProjId =
+        preselectedProjectId ||
+        memberAlloc?.projectId ||
+        targetEmp?.activeProjectIds?.[0] ||
+        projects[0]?.id ||
+        '';
+      const resolvedProj = projects.find((p) => p.id === resolvedProjId) || projects[0];
+      const resolvedDisc = (
+        memberAlloc?.discipline ||
+        targetEmp?.discipline ||
+        targetEmp?.primaryDiscipline ||
+        resolvedProj?.tasks?.[0]?.discipline ||
+        'BIM - ACS'
+      ) as Discipline;
+      const resolvedLod = (
+        memberAlloc?.lod ||
+        resolvedProj?.tasks?.[0]?.lod ||
+        resolvedProj?.currentLOD ||
+        'LOD 350'
+      ) as LODLevel;
+
+      return {
+        projectId: resolvedProjId,
+        date: toLocalIsoDate(new Date()),
+        hours: 4,
+        discipline: resolvedDisc,
+        activityType: '3D Detailed Modeling' as ActivityType,
+        lodStage: resolvedLod,
+        notes: '',
+        billable: true,
+        isTestEntry: false,
+      };
+    },
+    [activeTeamMembers, employees, resourceAllocations, preselectedProjectId, projects]
+  );
+
+  // Reset form to clean, isolated state each time the modal opens
   const wasOpenRef = React.useRef(false);
   useEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;
+      memberFormDraftsRef.current = {};
       return;
     }
     if (wasOpenRef.current) return;
     wasOpenRef.current = true;
+    memberFormDraftsRef.current = {};
 
+    let initialEmpId = activeTeamMembers[0]?.id || '';
     if (currentUser?.email) {
       const cleanEmail = currentUser.email.trim().toLowerCase();
+      const cleanUserName = (currentUser.name || '').trim().toLowerCase();
       const detId = generateRequestDocId(cleanEmail);
-      const match = employees.find(
-        (e) =>
+      const match = activeTeamMembers.find((e) => {
+        const eName = (e.name || '').trim().toLowerCase();
+        const eEmail = (e.email || '').trim().toLowerCase();
+        if (cleanUserName && eName && cleanUserName !== eName) return false;
+        return (
+          (eEmail && eEmail === cleanEmail) ||
+          (cleanUserName && eName === cleanUserName) ||
           e.id === currentUser.id ||
           e.id.replace(/^emp-/, '') === (currentUser.id || '').replace(/^emp-/, '') ||
-          e.id.replace(/^emp-/, '') === detId ||
-          (e.email && e.email.trim().toLowerCase() === cleanEmail) ||
-          (e.name && currentUser.name && e.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
-      );
+          e.id.replace(/^emp-/, '') === detId
+        );
+      });
       const allocMatch = viewerAllocations[0];
 
       if (!isSuper) {
-        if (allocMatch?.employeeId) {
-          setEmployeeId(allocMatch.employeeId);
-        } else if (match) {
-          setEmployeeId(match.id);
-        } else if (currentUser.id) {
-          setEmployeeId(currentUser.id);
-        } else {
-          setEmployeeId(`emp-${detId}`);
-        }
-        return;
-      }
-
-      const hydratedAssignee =
-        disciplineAssignments[`${projectId}__${discipline}`] ||
-        disciplineAssignments[discipline];
-      if (hydratedAssignee && employees.some((e) => e.id === hydratedAssignee)) {
-        setEmployeeId(hydratedAssignee);
-        return;
-      }
-
-      if (match) {
-        setEmployeeId(match.id);
-      } else if (employees.length > 0) {
-        setEmployeeId(employees[0].id);
-      } else if (currentUser.id) {
-        setEmployeeId(currentUser.id);
+        initialEmpId =
+          match?.id ||
+          allocMatch?.employeeId ||
+          currentUser.id ||
+          `emp-${detId}`;
       } else {
-        setEmployeeId(`emp-${detId}`);
+        initialEmpId =
+          match?.id ||
+          activeTeamMembers[0]?.id ||
+          currentUser.id ||
+          `emp-${detId}`;
       }
-    } else if (employees.length > 0 && !employeeId) {
-      setEmployeeId(employees[0].id);
     }
-  }, [isOpen, currentUser, employees, disciplineAssignments, projectId, discipline, employeeId, isSuper, viewerAllocations]);
 
-  // Hydrate dropdown value from real-time onSnapshot disciplineAssignments when updated externally (Super Admin only)
-  useEffect(() => {
-    if (!isSuper) return;
-    if (employeeId && !activeTeamMembers.some((e) => e.id === employeeId)) {
-      if (activeTeamMembers.length > 0) {
-        setEmployeeId(activeTeamMembers[0].id);
-      }
-      return;
-    }
-    const syncedMemberId =
-      disciplineAssignments[`${projectId}__${discipline}`] ||
-      disciplineAssignments[discipline];
-    if (syncedMemberId && syncedMemberId !== employeeId && activeTeamMembers.some((e) => e.id === syncedMemberId)) {
-      setEmployeeId(syncedMemberId);
-    }
-  }, [disciplineAssignments, projectId, discipline, isSuper, activeTeamMembers, employeeId]);
+    setEmployeeId(initialEmpId);
+    const cleanInit = getCleanDefaultsForMember(initialEmpId);
+    setProjectId(cleanInit.projectId);
+    setDate(cleanInit.date);
+    setHours(cleanInit.hours);
+    setDiscipline(cleanInit.discipline);
+    setActivityType(cleanInit.activityType);
+    setLodStage(cleanInit.lodStage);
+    setTaskName('');
+    setNotes('');
+    setBillable(true);
+    setIsTestEntry(false);
+  }, [isOpen, currentUser, activeTeamMembers, isSuper, viewerAllocations, getCleanDefaultsForMember]);
 
   const selectedProject = projects.find((p) => p.id === projectId) || projects[0];
   const assignedMemberId =
     employeeId ||
-    (isSuper
-      ? disciplineAssignments[`${projectId}__${discipline}`] ||
-        disciplineAssignments[discipline] ||
-        ''
-      : viewerAllocations[0]?.employeeId || currentUser?.id || '');
-  const selectedEmployee = employees.find((e) => e.id === assignedMemberId);
+    (!isSuper ? viewerAllocations[0]?.employeeId || currentUser?.id || '' : activeTeamMembers[0]?.id || '');
+  const selectedEmployee =
+    activeTeamMembers.find(
+      (e) =>
+        e.id === assignedMemberId ||
+        e.id.replace(/^emp-/, '') === assignedMemberId.replace(/^emp-/, '')
+    ) ||
+    employees
+      .map((e) => sanitizeEmployeeRecord(e))
+      .find(
+        (e) =>
+          e.id === assignedMemberId ||
+          e.id.replace(/^emp-/, '') === assignedMemberId.replace(/^emp-/, '')
+      );
 
-  const handleMemberSelect = async (disciplineKey: string, memberId: string) => {
+  const handleMemberSelect = (_disciplineKey: string, memberId: string) => {
+    if (assignedMemberId) {
+      // Save current member's draft in isolated slot before switching
+      memberFormDraftsRef.current[assignedMemberId] = {
+        projectId,
+        date,
+        hours,
+        discipline,
+        activityType,
+        lodStage,
+        notes,
+        billable,
+        isTestEntry,
+      };
+    }
+
     setEmployeeId(memberId);
-    const chosenEmp = employees.find((e) => e.id === memberId);
-    const resolvedDiscipline = (chosenEmp?.discipline || chosenEmp?.primaryDiscipline || disciplineKey || discipline) as Discipline;
-    if (chosenEmp?.discipline || chosenEmp?.primaryDiscipline) {
-      setDiscipline(resolvedDiscipline);
-    }
-    try {
-      await syncDisciplineMemberToFirestore(resolvedDiscipline, memberId, projectId);
-    } catch (err) {
-      console.warn('Error syncing member selection to Firestore:', err);
-    }
-  };
 
-  // Auto-fill discipline and LOD if project has tasks or matching assignment
-  useEffect(() => {
-    const matchedAllocForProj = viewerAllocations.find((a) => a.projectId === projectId);
-    if (matchedAllocForProj) {
-      setDiscipline((matchedAllocForProj.discipline as Discipline) || 'BIM - ACS');
-      setLodStage((matchedAllocForProj.lod as LODLevel) || 'LOD 350');
-      setTaskName('');
-      return;
-    }
-    if (selectedProject?.tasks && selectedProject.tasks.length > 0 && selectedProject.tasks[0]) {
-      setTaskName('');
-      setDiscipline(selectedProject.tasks[0].discipline || 'MEP - HVAC');
-      setLodStage(selectedProject.tasks[0].lod || 'LOD 350');
-    }
-  }, [projectId, selectedProject, viewerAllocations]);
+    // Load target member's own isolated draft or initialize fresh defaults for that member
+    const existingDraft = memberFormDraftsRef.current[memberId];
+    const nextState = existingDraft
+      ? { ...existingDraft }
+      : getCleanDefaultsForMember(memberId);
+
+    setProjectId(nextState.projectId);
+    setDate(nextState.date);
+    setHours(nextState.hours);
+    setDiscipline(nextState.discipline);
+    setActivityType(nextState.activityType);
+    setLodStage(nextState.lodStage);
+    setTaskName('');
+    setNotes(nextState.notes);
+    setBillable(nextState.billable);
+    setIsTestEntry(nextState.isTestEntry);
+  };
 
   if (!isOpen) return null;
 
@@ -248,18 +324,49 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       currentUser?.id || (cleanCurrentEmail ? `emp-${generateRequestDocId(cleanCurrentEmail)}` : 'emp-user');
     const effectiveEmployeeId = assignedMemberId || fallbackUserId;
 
-    const selectedEmp = employees.find(
-      (emp) =>
-        emp.id === effectiveEmployeeId ||
-        emp.id.replace(/^emp-/, '') === effectiveEmployeeId.replace(/^emp-/, '')
-    );
-    const isLoggingForSelf =
-      !isSuper ||
-      !selectedEmp ||
-      selectedEmp.id === currentUser?.id ||
-      (selectedEmp.email && cleanCurrentEmail && selectedEmp.email.trim().toLowerCase() === cleanCurrentEmail);
+    // Resolve the selected team member directly from sanitized activeTeamMembers
+    const rawSelectedEmp =
+      activeTeamMembers.find(
+        (emp) =>
+          emp.id === effectiveEmployeeId ||
+          emp.id.replace(/^emp-/, '') === effectiveEmployeeId.replace(/^emp-/, '')
+      ) ||
+      employees
+        .map((emp) => sanitizeEmployeeRecord(emp))
+        .find(
+          (emp) =>
+            emp.id === effectiveEmployeeId ||
+            emp.id.replace(/^emp-/, '') === effectiveEmployeeId.replace(/^emp-/, '')
+        );
+    const selectedEmp = rawSelectedEmp ? sanitizeEmployeeRecord(rawSelectedEmp) : undefined;
 
-    // Match against active assignments in resourceAllocations so log.employeeId === assignment.memberId and log.projectId === assignment.projectId
+    const isLoggingForSelf = Boolean(
+      !isSuper && !selectedEmp
+        ? true
+        : selectedEmp &&
+            ((currentUser?.name &&
+              selectedEmp.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase()) ||
+              (selectedEmp.email &&
+                cleanCurrentEmail &&
+                selectedEmp.email.trim().toLowerCase() === cleanCurrentEmail))
+    );
+
+    const targetEmpNameNorm = (
+      selectedEmp?.name ||
+      (isLoggingForSelf ? currentUser?.name : '') ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const targetEmpEmailNorm = (
+      selectedEmp?.email ||
+      (isLoggingForSelf ? cleanCurrentEmail : '') ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+    // Match against active assignments strictly belonging to the selected employee (for projectId/projectName only)
     const matchedAssignment = (resourceAllocations || []).find((alloc) => {
       const sameProj =
         alloc.projectId === resolvedProjectId ||
@@ -267,44 +374,33 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       if (!sameProj) return false;
       const aId = (alloc.employeeId || alloc.memberId || '').trim();
       const aIdStripped = aId.replace(/^emp-/, '');
-      const effIdStripped = effectiveEmployeeId.replace(/^emp-/, '');
+      const effIdStripped = (selectedEmp?.id || effectiveEmployeeId).replace(/^emp-/, '');
       const aEmail = (alloc.memberEmail || alloc.assignedToEmail || '').trim().toLowerCase();
-      const targetEmail = (selectedEmp?.email || (isLoggingForSelf ? cleanCurrentEmail : '')).trim().toLowerCase();
       const aName = (alloc.employeeName || '').trim().toLowerCase();
-      const targetName = (selectedEmp?.name || (isLoggingForSelf ? currentUser?.name : '') || '').trim().toLowerCase();
+      if (aName && targetEmpNameNorm && aName !== targetEmpNameNorm) return false;
       return (
-        aId === effectiveEmployeeId ||
+        aId === (selectedEmp?.id || effectiveEmployeeId) ||
         (aIdStripped && aIdStripped === effIdStripped) ||
-        (targetEmail && aEmail && aEmail === targetEmail) ||
-        (targetName && aName && aName === targetName)
+        (targetEmpEmailNorm && aEmail && aEmail === targetEmpEmailNorm) ||
+        (targetEmpNameNorm && aName && aName === targetEmpNameNorm)
       );
     });
 
-    const finalEmpId =
-      matchedAssignment?.memberId ||
-      matchedAssignment?.employeeId ||
-      selectedEmp?.id ||
-      effectiveEmployeeId;
+    // Strictly bind user identifiers to the selected dropdown member without allowing matchedAssignment to override
+    const finalEmpId = selectedEmp?.id || effectiveEmployeeId;
     const finalProjectId = matchedAssignment?.projectId || resolvedProjectId;
     const finalEmpName =
-      matchedAssignment?.employeeName ||
       selectedEmp?.name ||
       (isLoggingForSelf ? currentUser?.name : undefined) ||
-      currentUser?.name ||
-      (cleanCurrentEmail ? cleanCurrentEmail.split('@')[0] : 'BIM Modeler');
+      'BIM Modeler';
     const memberEmail = (
-      matchedAssignment?.memberEmail ||
       selectedEmp?.email ||
       (isLoggingForSelf ? cleanCurrentEmail : '') ||
-      cleanCurrentEmail ||
       ''
     )
       .trim()
       .toLowerCase();
-    const resolvedUserId =
-      (isLoggingForSelf && currentUser?.id) ||
-      (memberEmail ? generateRequestDocId(memberEmail) : '') ||
-      finalEmpId.replace(/^emp-/, '');
+    const resolvedUserId = finalEmpId;
 
     const loggedByIdentifier =
       cleanCurrentEmail ||
@@ -319,14 +415,14 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       memberId: finalEmpId,
       employeeName: finalEmpName,
       projectId: finalProjectId,
-      projectName: matchedAssignment?.projectName || selectedProject?.name || 'BIM Project',
+      projectName: selectedProject?.name || matchedAssignment?.projectName || 'BIM Project',
       date,
       hoursLogged: Number(hours),
       discipline,
       activityType,
       taskName: taskName || '',
       lodStage,
-      notes: notes || `Logged ${hours}h on ${activityType} for ${selectedProject?.name || 'BIM Project'}`,
+      notes: notes.trim() || `Logged ${hours}h on ${activityType} for ${selectedProject?.name || 'BIM Project'}`,
       billable,
       memberEmail,
       userEmail: memberEmail,
@@ -335,6 +431,10 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       loggedBy: loggedByIdentifier,
       createdAt: createdAtIso,
     });
+
+    // Clear isolated drafts after submission
+    memberFormDraftsRef.current = {};
+    setNotes('');
 
     try {
       confetti({

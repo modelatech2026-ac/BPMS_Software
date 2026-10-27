@@ -24,7 +24,15 @@ import {
   Building,
   Briefcase
 } from 'lucide-react';
-import { useBimData, isUserSuperAdmin, getCurrentWeekRange, cleanProjectName, getMemberLabel } from '../context/BimDataContext';
+import {
+  useBimData,
+  isUserSuperAdmin,
+  getCurrentWeekRange,
+  cleanProjectName,
+  getMemberLabel,
+  sanitizeEmployeeRecord,
+  sanitizeWorkLogRecord,
+} from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import {
   collection,
@@ -120,14 +128,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   }, [workLogs, allWorkLogs, realtimeDailyLogs]);
 
   const activeTeamMembers = useMemo(() => {
-    const raw = (employees || []).filter((member) => !member.isDeleted && member.status !== 'deleted');
+    const raw = (employees || [])
+      .filter((member) => !member.isDeleted && member.status !== 'deleted')
+      .map((member) => sanitizeEmployeeRecord({ ...member }));
     const seen = new Set<string>();
     return raw.filter((member) => {
       const emailKey = (member.email || '').trim().toLowerCase();
       const idKey = (member.id || '').trim();
       const strippedId = idKey.replace(/^emp-/, '');
       const detId = emailKey ? generateRequestDocId(emailKey) : '';
-      const nameKey = (member.name || '').trim().toLowerCase();
+      const nameKey = (member.name || '').trim().toLowerCase().replace(/sushoovan/g, 'sushovan');
       if (
         (emailKey && seen.has(emailKey)) ||
         (idKey && seen.has(idKey)) ||
@@ -208,39 +218,62 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     const parseSnapshotDoc = (docSnap: any): ResourceAllocationItem => {
       const data = docSnap.data();
       const matchedProj = projects.find((p) => matchProjectId(p.id, data.projectId));
-      const resolvedEmpId = data.memberId || data.employeeId || data.assignedTo || '';
+      const resolvedEmpId = String(data.memberId || data.employeeId || data.assignedTo || '').trim();
       const resolvedEmail = (data.assignedToEmail || data.memberEmail || '').trim().toLowerCase();
-      const rawDocName = data.assignedToName || data.memberName || data.employeeName || '';
+      const rawDocName = String(data.assignedToName || data.memberName || data.employeeName || '').trim();
+      const lowerDocName = rawDocName.toLowerCase();
 
-      const matchedEmpByIdOrEmail = employees.find(
-        (e) =>
+      const sanitizedEmployees = employees.map((e) => sanitizeEmployeeRecord(e));
+      const matchedEmpByName = lowerDocName
+        ? sanitizedEmployees.find((e) => (e.name || '').trim().toLowerCase() === lowerDocName)
+        : undefined;
+      const matchedEmpByIdOrEmail = sanitizedEmployees.find((e) => {
+        if (lowerDocName && (e.name || '').trim().toLowerCase() !== lowerDocName) {
+          return false;
+        }
+        return (
           (resolvedEmpId &&
             (e.id === resolvedEmpId ||
-              e.id.replace(/^emp-/, '') === String(resolvedEmpId).replace(/^emp-/, ''))) ||
+              e.id.replace(/^emp-/, '') === resolvedEmpId.replace(/^emp-/, ''))) ||
           (resolvedEmail && (e.email || '').trim().toLowerCase() === resolvedEmail)
-      );
-      const matchedEmp =
-        matchedEmpByIdOrEmail ||
-        employees.find(
-          (e) =>
-            rawDocName &&
-            (e.name || '').trim().toLowerCase() === String(rawDocName).trim().toLowerCase()
         );
-      const finalMemberId = matchedEmp?.id || resolvedEmpId;
-      const finalEmail = matchedEmp?.email || data.assignedToEmail || data.memberEmail || '';
+      });
+      const matchedEmp = matchedEmpByName || matchedEmpByIdOrEmail;
+      const isSushovan =
+        lowerDocName.includes('sushovan') ||
+        lowerDocName.includes('sushoovan') ||
+        resolvedEmail === 'sushoovandas@gmail.com' ||
+        resolvedEmail === 'sushovandas@gmail.com';
+      const isAditi =
+        !isSushovan &&
+        (lowerDocName === 'aditi chakraborty' ||
+          (!lowerDocName && resolvedEmail === 'modelatech2026@gmail.com'));
+      const finalMemberId =
+        matchedEmp?.id ||
+        (isAditi
+          ? 'emp-modelatech2026_gmail_com'
+          : isSushovan
+          ? 'emp-sushoovan_das'
+          : resolvedEmpId);
+      const finalEmail =
+        matchedEmp?.email ||
+        (isAditi
+          ? 'modelatech2026@gmail.com'
+          : isSushovan
+          ? 'sushoovandas@gmail.com'
+          : resolvedEmail === 'modelatech2026@gmail.com'
+          ? ''
+          : resolvedEmail);
       const finalName =
-        matchedEmpByIdOrEmail?.name ||
-        data.assignedToName ||
-        data.memberName ||
         matchedEmp?.name ||
-        data.employeeName ||
+        rawDocName ||
         '';
       const activeMatchedName =
         matchedEmp && !matchedEmp.isDeleted && matchedEmp.status !== 'deleted'
           ? matchedEmp.name
           : employees.length === 0
           ? finalName
-          : '';
+          : finalName;
       return {
         id: docSnap.id,
         projectId: data.projectId || matchedProj?.id || '',
@@ -272,8 +305,23 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     const parseDailyLogDoc = (docSnap: any): DailyWorkLog => {
       const data = docSnap.data();
-      const normalizedEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
+      const rawEmployeeName = (data.employeeName || 'BIM Modeler').trim();
+      const lowerEmpName = rawEmployeeName.toLowerCase();
+      const rawEmail = (data.memberEmail || data.userEmail || '').trim().toLowerCase();
+      const isDifferentNamedEmployee =
+        Boolean(lowerEmpName) &&
+        lowerEmpName !== 'bim modeler' &&
+        lowerEmpName !== 'team member' &&
+        !lowerEmpName.includes('aditi');
+      const normalizedEmail =
+        isDifferentNamedEmployee && rawEmail === 'modelatech2026@gmail.com' ? '' : rawEmail;
       const resolvedMemberId = data.employeeId || data.memberId || data.userId || '';
+      const rawUserId = data.userId || resolvedMemberId;
+      const sanitizedUserId =
+        isDifferentNamedEmployee &&
+        (rawUserId.includes('modelatech2026') || rawUserId === 'usr_super_admin_modelatech2026_gmail_com')
+          ? data.employeeId || data.memberId || ''
+          : rawUserId;
       const resolvedCreatedAt =
         typeof data.createdAt === 'string'
           ? data.createdAt
@@ -282,11 +330,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           : typeof data.createdAt?.seconds === 'number'
           ? new Date(data.createdAt.seconds * 1000).toISOString()
           : data.timestamp || new Date().toISOString();
-      return {
+      return sanitizeWorkLogRecord({
         id: docSnap.id,
         employeeId: resolvedMemberId,
         memberId: data.memberId || resolvedMemberId,
-        employeeName: data.employeeName || 'BIM Modeler',
+        employeeName: rawEmployeeName,
         projectId: data.projectId || '',
         projectName: data.projectName || 'BIM Project',
         date: data.date || new Date().toISOString().slice(0, 10),
@@ -300,11 +348,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         timestamp: data.timestamp || resolvedCreatedAt,
         memberEmail: normalizedEmail,
         userEmail: normalizedEmail,
-        userId: data.userId || resolvedMemberId,
+        userId: sanitizedUserId,
         isTestEntry: Boolean(data.isTestEntry ?? false),
-        loggedBy: data.loggedBy || normalizedEmail || data.employeeName || '',
+        loggedBy: data.loggedBy || normalizedEmail || rawEmployeeName || '',
         createdAt: resolvedCreatedAt,
-      };
+      });
     };
 
     const syncMerged = (fromCache: boolean) => {
@@ -451,30 +499,45 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         .trim()
         .toLowerCase();
 
-      const matchedById = rawRowMemberId
+      const matchedByName = rawRowName
         ? activeTeamMembers.find(
             (emp) =>
-              emp.id === rawRowMemberId || emp.id.replace(/^emp-/, '') === strippedRowMemberId
+              (emp.name || '').trim().toLowerCase().replace(/sushoovan/g, 'sushovan') ===
+              rawRowName.replace(/sushoovan/g, 'sushovan')
           )
         : undefined;
-      const matchedByEmail =
-        !matchedById && rawRowEmail
-          ? activeTeamMembers.find((emp) => (emp.email || '').trim().toLowerCase() === rawRowEmail)
+      const matchedById =
+        !matchedByName && rawRowMemberId
+          ? activeTeamMembers.find((emp) => {
+              if (rawRowName && (emp.name || '').trim().toLowerCase() !== rawRowName) {
+                return false;
+              }
+              return (
+                emp.id === rawRowMemberId || emp.id.replace(/^emp-/, '') === strippedRowMemberId
+              );
+            })
           : undefined;
-      const matchedByName =
-        !matchedById && !matchedByEmail && rawRowName
-          ? activeTeamMembers.find((emp) => (emp.name || '').trim().toLowerCase() === rawRowName)
+      const matchedByEmail =
+        !matchedByName && !matchedById && rawRowEmail
+          ? activeTeamMembers.find((emp) => {
+              if (rawRowName && (emp.name || '').trim().toLowerCase() !== rawRowName) {
+                return false;
+              }
+              return (emp.email || '').trim().toLowerCase() === rawRowEmail;
+            })
           : undefined;
 
-      const directRowMember = matchedById || matchedByEmail || matchedByName;
+      const directRowMember = matchedByName || matchedById || matchedByEmail;
+      // Only fall back to discipline assignment or first team member when the allocation has NO explicit employee name
       const selectedMember =
         directRowMember ||
-        activeTeamMembers.find(
-          (emp) =>
-            emp.id === disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
-            emp.id === disciplineAssignments[alloc.discipline]
-        ) ||
-        activeTeamMembers[0];
+        (!rawRowName
+          ? activeTeamMembers.find(
+              (emp) =>
+                emp.id === disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
+                emp.id === disciplineAssignments[alloc.discipline]
+            ) || activeTeamMembers[0]
+          : undefined);
 
       if (!selectedMember) return alloc;
 
@@ -878,6 +941,18 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         if (!sameProjId && !sameProjName) return false;
 
         // 2. Member match: log.employeeId === assignment.memberId (plus normalized ID, email, or name)
+        const logName = (log.employeeName || '').trim().toLowerCase();
+        // If both assignment and log have explicit employee names and they differ, they are distinct users
+        if (
+          targetName &&
+          logName &&
+          logName !== 'bim modeler' &&
+          logName !== 'team member' &&
+          targetName !== logName
+        ) {
+          return false;
+        }
+
         const logEmpId = (log.employeeId || '').trim();
         const logMemberId = ((log as any).memberId || log.userId || '').trim();
         const logEmpIdStripped = logEmpId.replace(/^emp-/, '');
@@ -903,12 +978,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             (logEmpId === matchedEmp.id ||
               logEmpIdStripped === matchedEmp.id.replace(/^emp-/, '')));
 
-        const logEmail = (log.memberEmail || (log as any).userEmail || log.loggedBy || '')
+        const logEmail = (log.memberEmail || (log as any).userEmail || '')
           .trim()
           .toLowerCase();
         const emailMatch = Boolean(targetEmail) && Boolean(logEmail) && logEmail === targetEmail;
 
-        const logName = (log.employeeName || '').trim().toLowerCase();
         const nameMatch = Boolean(targetName) && Boolean(logName) && logName === targetName;
 
         return directMemberMatch || strippedIdMatch || emailMatch || nameMatch;
