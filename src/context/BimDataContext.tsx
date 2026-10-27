@@ -1805,14 +1805,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const parseAllocDoc = (docSnap: any): ResourceAllocationItem => {
       const data = docSnap.data();
       const resolvedMemberId = data.memberId || data.employeeId || data.assignedTo || '';
-      const resolvedEmail = data.memberEmail || data.assignedToEmail || '';
+      const resolvedEmail = data.assignedToEmail || data.memberEmail || '';
+      const resolvedName = data.assignedToName || data.memberName || data.employeeName || '';
       return {
         id: docSnap.id,
         projectId: data.projectId || '',
         projectName: data.projectName || 'Unassigned Project',
         employeeId: resolvedMemberId,
         memberId: resolvedMemberId,
-        employeeName: data.employeeName || '',
+        assignedTo: resolvedMemberId,
+        employeeName: resolvedName,
+        assignedToName: resolvedName,
+        memberName: resolvedName,
         employeeRole: data.employeeRole || 'Editor',
         memberEmail: resolvedEmail,
         assignedToEmail: resolvedEmail,
@@ -1828,13 +1832,19 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         ...(data.priority ? { priority: data.priority } : {}),
         status: data.status || 'Allocated',
         notes: data.notes || '',
+        updatedAt: data.updatedAt || '',
       };
     };
 
     const syncMergedAllocations = () => {
       const combined = new Map<string, ResourceAllocationItem>();
       projectAssignmentsMap.forEach((v, k) => combined.set(k, v));
-      assignedHoursMap.forEach((v, k) => combined.set(k, v));
+      assignedHoursMap.forEach((v, k) => {
+        const existing = combined.get(k);
+        if (!existing || !existing.updatedAt || (v.updatedAt && v.updatedAt >= existing.updatedAt)) {
+          combined.set(k, v);
+        }
+      });
       const remoteAllocations = Array.from(combined.values());
 
       setResourceAllocations(remoteAllocations);

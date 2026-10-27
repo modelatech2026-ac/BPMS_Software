@@ -300,7 +300,10 @@ export interface ResourceAllocationItem {
   projectName: string;
   employeeId: string;
   memberId?: string;
+  assignedTo?: string;
   employeeName: string;
+  assignedToName?: string;
+  memberName?: string;
   employeeRole: string;
   memberEmail?: string;
   assignedToEmail?: string;
@@ -316,6 +319,7 @@ export interface ResourceAllocationItem {
   priority?: AllocationPriority;
   status: 'Allocated' | 'In Progress' | 'Completed' | 'Delayed';
   notes?: string;
+  updatedAt?: string;
 }
 
 export interface ProjectFeedbackItem {

@@ -59,6 +59,16 @@ const matchProjectId = (idA?: string, idB?: string): boolean => {
   return normA === normB;
 };
 
+const getInitials = (name = '') =>
+  name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2) || 'U';
+
 const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [];
 
 export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectProject }) => {
@@ -177,26 +187,49 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       const data = docSnap.data();
       const matchedProj = projects.find((p) => matchProjectId(p.id, data.projectId));
       const resolvedEmpId = data.memberId || data.employeeId || data.assignedTo || '';
-      const resolvedEmail = (data.memberEmail || data.assignedToEmail || '').trim().toLowerCase();
-      const matchedEmp = employees.find(
+      const resolvedEmail = (data.assignedToEmail || data.memberEmail || '').trim().toLowerCase();
+      const rawDocName = data.assignedToName || data.memberName || data.employeeName || '';
+
+      const matchedEmpByIdOrEmail = employees.find(
         (e) =>
           (resolvedEmpId &&
             (e.id === resolvedEmpId ||
               e.id.replace(/^emp-/, '') === String(resolvedEmpId).replace(/^emp-/, ''))) ||
-          (resolvedEmail && (e.email || '').trim().toLowerCase() === resolvedEmail) ||
-          (data.employeeName &&
-            (e.name || '').trim().toLowerCase() === String(data.employeeName).trim().toLowerCase())
+          (resolvedEmail && (e.email || '').trim().toLowerCase() === resolvedEmail)
       );
+      const matchedEmp =
+        matchedEmpByIdOrEmail ||
+        employees.find(
+          (e) =>
+            rawDocName &&
+            (e.name || '').trim().toLowerCase() === String(rawDocName).trim().toLowerCase()
+        );
       const finalMemberId = matchedEmp?.id || resolvedEmpId;
-      const finalEmail = data.memberEmail || data.assignedToEmail || matchedEmp?.email || '';
+      const finalEmail = matchedEmp?.email || data.assignedToEmail || data.memberEmail || '';
+      const finalName =
+        matchedEmpByIdOrEmail?.name ||
+        data.assignedToName ||
+        data.memberName ||
+        matchedEmp?.name ||
+        data.employeeName ||
+        '';
+      const activeMatchedName =
+        matchedEmp && !matchedEmp.isDeleted && matchedEmp.status !== 'deleted'
+          ? matchedEmp.name
+          : employees.length === 0
+          ? finalName
+          : '';
       return {
         id: docSnap.id,
         projectId: data.projectId || matchedProj?.id || '',
         projectName: data.projectName || matchedProj?.name || 'Unassigned Project',
         employeeId: finalMemberId,
-        memberId: data.memberId || finalMemberId,
-        employeeName: data.employeeName || matchedEmp?.name || '',
-        employeeRole: data.employeeRole || matchedEmp?.role || 'Editor',
+        memberId: finalMemberId,
+        assignedTo: finalMemberId,
+        employeeName: activeMatchedName || finalName,
+        assignedToName: activeMatchedName,
+        memberName: activeMatchedName || finalName,
+        employeeRole: matchedEmp?.role || data.employeeRole || 'Editor',
         memberEmail: finalEmail,
         assignedToEmail: finalEmail,
         discipline: data.discipline || matchedEmp?.discipline || 'BIM - ACS',
@@ -211,6 +244,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         ...(data.priority ? { priority: data.priority } : {}),
         status: data.status || 'Allocated',
         notes: data.notes || '',
+        updatedAt: data.updatedAt || '',
       };
     };
 
@@ -254,7 +288,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     const syncMerged = (fromCache: boolean) => {
       const combined = new Map<string, ResourceAllocationItem>();
       projectAssignmentsMap.forEach((v, k) => combined.set(k, v));
-      assignedHoursMap.forEach((v, k) => combined.set(k, v));
+      assignedHoursMap.forEach((v, k) => {
+        const existing = combined.get(k);
+        if (!existing || !existing.updatedAt || (v.updatedAt && v.updatedAt >= existing.updatedAt)) {
+          combined.set(k, v);
+        }
+      });
       const remoteAllocations = Array.from(combined.values());
 
       if (remoteAllocations.length > 0 || !fromCache) {
@@ -367,6 +406,113 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(allocations));
   }, [allocations]);
 
+  // Synchronize any rows with missing or legacy member bindings to their active selected member
+  useEffect(() => {
+    if (!canManageAllocations || activeTeamMembers.length === 0 || allocations.length === 0) return;
+
+    let hasChanges = false;
+    const itemsToSync: ResourceAllocationItem[] = [];
+
+    const normalizedList = allocations.map((alloc) => {
+      const matchedProject = projects.find((p) => matchProjectId(p.id, alloc.projectId));
+      const resolvedProjectId = matchedProject?.id || alloc.projectId;
+
+      const rawRowMemberId = (alloc.memberId || alloc.employeeId || alloc.assignedTo || '').trim();
+      const strippedRowMemberId = rawRowMemberId.replace(/^emp-/, '');
+      const rawRowEmail = (alloc.assignedToEmail || alloc.memberEmail || '').trim().toLowerCase();
+      const rawRowName = (
+        alloc.assignedToName ||
+        alloc.memberName ||
+        alloc.employeeName ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+
+      const matchedById = rawRowMemberId
+        ? activeTeamMembers.find(
+            (emp) =>
+              emp.id === rawRowMemberId || emp.id.replace(/^emp-/, '') === strippedRowMemberId
+          )
+        : undefined;
+      const matchedByEmail =
+        !matchedById && rawRowEmail
+          ? activeTeamMembers.find((emp) => (emp.email || '').trim().toLowerCase() === rawRowEmail)
+          : undefined;
+      const matchedByName =
+        !matchedById && !matchedByEmail && rawRowName
+          ? activeTeamMembers.find((emp) => (emp.name || '').trim().toLowerCase() === rawRowName)
+          : undefined;
+
+      const directRowMember = matchedById || matchedByEmail || matchedByName;
+      const selectedMember =
+        directRowMember ||
+        activeTeamMembers.find(
+          (emp) =>
+            emp.id === disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
+            emp.id === disciplineAssignments[alloc.discipline]
+        ) ||
+        activeTeamMembers[0];
+
+      if (!selectedMember) return alloc;
+
+      if (
+        alloc.employeeId !== selectedMember.id ||
+        alloc.memberId !== selectedMember.id ||
+        alloc.assignedToName !== selectedMember.name ||
+        alloc.employeeName !== selectedMember.name
+      ) {
+        hasChanges = true;
+        const healed: ResourceAllocationItem = {
+          ...alloc,
+          assignedTo: selectedMember.id,
+          employeeId: selectedMember.id,
+          memberId: selectedMember.id,
+          assignedToName: selectedMember.name,
+          memberName: selectedMember.name,
+          employeeName: selectedMember.name,
+          employeeRole: selectedMember.role || alloc.employeeRole,
+          memberEmail: selectedMember.email || alloc.memberEmail,
+          assignedToEmail: selectedMember.email || alloc.assignedToEmail,
+          updatedAt: new Date().toISOString(),
+        };
+        itemsToSync.push(healed);
+        return healed;
+      }
+      return alloc;
+    });
+
+    if (hasChanges) {
+      setAllocations(normalizedList);
+      localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(normalizedList));
+      window.dispatchEvent(
+        new CustomEvent('bim_resource_allocations_updated', { detail: normalizedList })
+      );
+      itemsToSync.forEach((healed) => {
+        const payload = {
+          assignedTo: healed.employeeId,
+          employeeId: healed.employeeId,
+          memberId: healed.memberId || healed.employeeId,
+          assignedToName: healed.assignedToName || healed.employeeName,
+          memberName: healed.memberName || healed.employeeName,
+          employeeName: healed.employeeName,
+          employeeRole: healed.employeeRole || 'Editor',
+          memberEmail: healed.memberEmail || '',
+          assignedToEmail: healed.assignedToEmail || healed.memberEmail || '',
+          updatedAt: healed.updatedAt || new Date().toISOString(),
+        };
+        const assignedHoursRef = doc(db, 'assigned_hours', healed.id);
+        const assignRef = doc(db, 'project_assignments', healed.id);
+        updateDoc(assignedHoursRef, payload).catch(() => {
+          setDoc(assignedHoursRef, { ...healed, ...payload }, { merge: true }).catch(() => {});
+        });
+        updateDoc(assignRef, payload).catch(() => {
+          setDoc(assignRef, { ...healed, ...payload }, { merge: true }).catch(() => {});
+        });
+      });
+    }
+  }, [allocations, activeTeamMembers, canManageAllocations, disciplineAssignments, projects]);
+
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
   const [filterDiscipline, setFilterDiscipline] = useState<string>('all');
@@ -424,12 +570,20 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: newAllocations }));
     if (changedItem) {
       try {
+        const resolvedName =
+          changedItem.assignedToName || changedItem.memberName || changedItem.employeeName || '';
+        const resolvedEmail = changedItem.assignedToEmail || changedItem.memberEmail || '';
+        const resolvedMemberId = changedItem.memberId || changedItem.employeeId;
         const sanitized = {
           ...JSON.parse(JSON.stringify(changedItem)),
-          assignedTo: changedItem.employeeId,
-          memberId: changedItem.memberId || changedItem.employeeId,
-          employeeId: changedItem.employeeId,
-          assignedToEmail: changedItem.memberEmail || '',
+          assignedTo: resolvedMemberId,
+          memberId: resolvedMemberId,
+          employeeId: resolvedMemberId,
+          assignedToName: resolvedName,
+          memberName: resolvedName,
+          employeeName: resolvedName,
+          memberEmail: resolvedEmail,
+          assignedToEmail: resolvedEmail,
           discipline: changedItem.discipline || 'BIM - ACS',
           updatedAt: new Date().toISOString(),
         };
@@ -457,9 +611,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     memberId: string,
     allocationId?: string
   ) => {
-    const emp = employees.find(
-      (e) => e.id === memberId || e.id.replace(/^emp-/, '') === memberId.replace(/^emp-/, '')
-    );
+    const emp =
+      activeTeamMembers.find(
+        (e) => e.id === memberId || e.id.replace(/^emp-/, '') === memberId.replace(/^emp-/, '')
+      ) ||
+      employees.find(
+        (e) => e.id === memberId || e.id.replace(/^emp-/, '') === memberId.replace(/^emp-/, '')
+      );
     const resolvedDiscipline = (
       emp?.discipline ||
       emp?.primaryDiscipline ||
@@ -480,16 +638,30 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       return;
     }
 
+    const nowIso = new Date().toISOString();
+    const resolvedId = emp?.id || memberId;
+    const resolvedName = emp?.name || '';
+    const resolvedRole = emp?.role || 'Editor';
+    const resolvedEmail = emp?.email || '';
+
     let updatedTarget: ResourceAllocationItem | undefined;
     const updatedList = allocations.map((item) => {
       if (item.id === allocationId) {
+        const finalName = resolvedName || item.assignedToName || item.employeeName;
+        const finalEmail = resolvedEmail || item.assignedToEmail || item.memberEmail;
         updatedTarget = {
           ...item,
-          employeeId: emp?.id || memberId,
-          employeeName: emp?.name || item.employeeName,
-          employeeRole: emp?.role || item.employeeRole,
-          memberEmail: emp?.email || item.memberEmail,
+          assignedTo: resolvedId,
+          employeeId: resolvedId,
+          memberId: resolvedId,
+          assignedToName: finalName,
+          memberName: finalName,
+          employeeName: finalName,
+          employeeRole: resolvedRole || item.employeeRole,
+          memberEmail: finalEmail,
+          assignedToEmail: finalEmail,
           discipline: resolvedDiscipline,
+          updatedAt: nowIso,
         };
         return updatedTarget;
       }
@@ -503,30 +675,32 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     try {
       const assignRef = doc(db, 'project_assignments', allocationId);
       const assignedHoursRef = doc(db, 'assigned_hours', allocationId);
+      const finalName = resolvedName || updatedTarget?.assignedToName || updatedTarget?.employeeName || '';
+      const finalEmail = resolvedEmail || updatedTarget?.assignedToEmail || updatedTarget?.memberEmail || '';
       const updatePayload = {
-        assignedTo: emp?.id || memberId,
-        employeeId: emp?.id || memberId,
-        memberId: emp?.id || memberId,
-        employeeName: emp?.name || updatedTarget?.employeeName || '',
-        employeeRole: emp?.role || updatedTarget?.employeeRole || 'Editor',
-        memberEmail: emp?.email || updatedTarget?.memberEmail || '',
-        assignedToEmail: emp?.email || updatedTarget?.memberEmail || '',
+        assignedTo: resolvedId,
+        employeeId: resolvedId,
+        memberId: resolvedId,
+        assignedToName: finalName,
+        memberName: finalName,
+        employeeName: finalName,
+        employeeRole: resolvedRole || updatedTarget?.employeeRole || 'Editor',
+        memberEmail: finalEmail,
+        assignedToEmail: finalEmail,
         discipline: resolvedDiscipline,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso,
       };
-      try {
-        await updateDoc(assignedHoursRef, updatePayload);
-      } catch {
-        await setDoc(assignedHoursRef, { ...(updatedTarget || {}), ...updatePayload }, { merge: true });
-      }
-      try {
-        await updateDoc(assignRef, updatePayload);
-      } catch {
-        await setDoc(assignRef, { ...(updatedTarget || {}), ...updatePayload }, { merge: true });
-      }
+      await Promise.all([
+        updateDoc(assignedHoursRef, updatePayload).catch(() =>
+          setDoc(assignedHoursRef, { ...(updatedTarget || {}), ...updatePayload }, { merge: true })
+        ),
+        updateDoc(assignRef, updatePayload).catch(() =>
+          setDoc(assignRef, { ...(updatedTarget || {}), ...updatePayload }, { merge: true })
+        ),
+      ]);
       await syncDisciplineMemberToFirestore(
         resolvedDiscipline,
-        emp?.id || memberId,
+        resolvedId,
         updatedTarget?.projectId
       );
     } catch (err) {
@@ -874,7 +1048,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       projectName: proj.name,
       employeeId: emp.id,
       memberId: emp.id,
+      assignedTo: emp.id,
       employeeName: emp.name,
+      assignedToName: emp.name,
+      memberName: emp.name,
       employeeRole: emp.role,
       memberEmail: emp.email,
       assignedToEmail: emp.email,
@@ -888,7 +1065,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       startDate: formStartDate,
       dueDate: formDueDate,
       status: 'Allocated',
-      notes: formNotes
+      notes: formNotes,
+      updatedAt: new Date().toISOString(),
     };
 
     saveAllocations([newItem, ...allocations], newItem);
@@ -1288,7 +1466,86 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   const resolvedProjectId = matchedProject?.id || alloc.projectId;
                   const resolvedProjectName = matchedProject?.name || alloc.projectName || 'Unassigned Project';
 
-                  const loggedHours = getLoggedHoursForAssignment(alloc);
+                  const rawRowMemberId = (alloc.memberId || alloc.employeeId || alloc.assignedTo || '').trim();
+                  const strippedRowMemberId = rawRowMemberId.replace(/^emp-/, '');
+                  const rawRowEmail = (alloc.assignedToEmail || alloc.memberEmail || '').trim().toLowerCase();
+                  const rawRowName = (
+                    alloc.assignedToName ||
+                    alloc.memberName ||
+                    alloc.employeeName ||
+                    ''
+                  )
+                    .trim()
+                    .toLowerCase();
+
+                  const matchedById = rawRowMemberId
+                    ? activeTeamMembers.find(
+                        (emp) =>
+                          emp.id === rawRowMemberId ||
+                          emp.id.replace(/^emp-/, '') === strippedRowMemberId
+                      ) ||
+                      employees.find(
+                        (emp) =>
+                          emp.id === rawRowMemberId ||
+                          emp.id.replace(/^emp-/, '') === strippedRowMemberId
+                      )
+                    : undefined;
+
+                  const matchedByEmail =
+                    !matchedById && rawRowEmail
+                      ? activeTeamMembers.find(
+                          (emp) => (emp.email || '').trim().toLowerCase() === rawRowEmail
+                        ) ||
+                        employees.find(
+                          (emp) => (emp.email || '').trim().toLowerCase() === rawRowEmail
+                        )
+                      : undefined;
+
+                  const matchedByName =
+                    !matchedById && !matchedByEmail && rawRowName
+                      ? activeTeamMembers.find(
+                          (emp) => (emp.name || '').trim().toLowerCase() === rawRowName
+                        ) ||
+                        employees.find(
+                          (emp) => (emp.name || '').trim().toLowerCase() === rawRowName
+                        )
+                      : undefined;
+
+                  const directRowMember = matchedById || matchedByEmail || matchedByName;
+                  const isDirectMemberActive =
+                    directRowMember && activeTeamMembers.some((emp) => emp.id === directRowMember.id);
+
+                  const selectedMember = isDirectMemberActive
+                    ? directRowMember
+                    : activeTeamMembers.find(
+                        (emp) =>
+                          emp.id ===
+                            disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
+                          emp.id === disciplineAssignments[alloc.discipline]
+                      ) ||
+                      activeTeamMembers[0] ||
+                      directRowMember;
+
+                  const row =
+                    selectedMember && alloc.assignedToName !== selectedMember.name
+                      ? {
+                          ...alloc,
+                          employeeId: selectedMember.id,
+                          memberId: selectedMember.id,
+                          assignedToName: selectedMember.name,
+                          memberName: selectedMember.name,
+                          employeeName: selectedMember.name,
+                          memberEmail: selectedMember.email || alloc.memberEmail,
+                          assignedToEmail: selectedMember.email || alloc.assignedToEmail,
+                        }
+                      : alloc;
+
+                  // Dynamic row-level name binding for status badge and avatar initials
+                  const assignedName = row.assignedToName || selectedMember?.name || 'Member';
+                  const badgeText = `Work Assigned to ${assignedName}`;
+                  const avatarInitials = getInitials(assignedName);
+
+                  const loggedHours = getLoggedHoursForAssignment(row);
 
                   return (
                     <tr
@@ -1299,24 +1556,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                       <td className="py-3 px-3.5">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-bold text-white text-[11px] shrink-0 shadow-xs">
-                            {(alloc.employeeName || 'U').split(' ').map((n) => n[0]).join('')}
+                            {avatarInitials}
                           </div>
                           <div>
                             {canManageAllocations && activeTeamMembers.length > 0 ? (
                               <select
                                 aria-label={`Assigned team member for ${alloc.discipline || 'BIM - ACS'}`}
-                                value={
-                                  activeTeamMembers.some((emp) => emp.id === alloc.employeeId)
-                                    ? alloc.employeeId
-                                    : activeTeamMembers.find(
-                                        (emp) =>
-                                          emp.id ===
-                                            disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
-                                          emp.id === disciplineAssignments[alloc.discipline]
-                                      )?.id ||
-                                      activeTeamMembers[0]?.id ||
-                                      ''
-                                }
+                                value={selectedMember?.id || row.employeeId || ''}
                                 onChange={(e) =>
                                   handleMemberSelect(
                                     alloc.discipline || 'BIM - ACS',
@@ -1334,7 +1580,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                               </select>
                             ) : (
                               <div className="font-semibold text-white text-[13px]">
-                                {alloc.employeeName}
+                                {assignedName}
                               </div>
                             )}
                           </div>
@@ -1347,7 +1593,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                           <div className="flex items-center gap-1.5">
                             <Building className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                             <select
-                              aria-label={`Assigned project for ${alloc.employeeName}`}
+                              aria-label={`Assigned project for ${assignedName}`}
                               value={resolvedProjectId}
                               onChange={(e) => handleInlineProjectChange(alloc.id, e.target.value)}
                               className="px-2 py-1 text-xs font-semibold rounded bg-slate-800 border border-slate-700 text-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer max-w-[200px] truncate"
@@ -1431,14 +1677,14 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         {canManageAllocations ? (
                           <div className="inline-flex items-center justify-end gap-2">
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30 whitespace-nowrap">
-                              Work Assigned to {employees.find((emp) => emp.id === alloc.employeeId)?.name || alloc.employeeName || 'Team Member'}
+                              {badgeText}
                             </span>
                             <button
                               type="button"
-                              onClick={() => setAllocationToDelete(alloc)}
+                              onClick={() => setAllocationToDelete(row)}
                               className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition inline-flex items-center justify-center shrink-0"
-                              title={`Delete allocation for ${alloc.employeeName}`}
-                              aria-label={`Delete allocation for ${alloc.employeeName}`}
+                              title={`Delete allocation for ${assignedName}`}
+                              aria-label={`Delete allocation for ${assignedName}`}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
