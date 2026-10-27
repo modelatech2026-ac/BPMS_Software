@@ -52,6 +52,9 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     projects,
     employees,
     workLogs,
+    allWorkLogs,
+    resourceAllocations,
+    disciplineAssignments,
     selectedProjectId,
     overallMetrics,
     setCurrentTab,
@@ -76,6 +79,232 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   // Billing rate constant for Financial mode ($85/hr blended agency rate)
   const HOURLY_BILLING_RATE = 85;
 
+  // Normalize project name helper for matching logs/allocations
+  const normalizeName = (name?: string) =>
+    (name || '')
+      .trim()
+      .replace(/^BIM[\s-_]+/i, '')
+      .trim()
+      .toLowerCase();
+
+  // 1. Scoped Projects based on global ACTIVE PROJECT SCOPE dropdown (selectedProjectId)
+  const scopedProjects = useMemo(() => {
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return projects || [];
+    }
+    const targetNorm = normalizeName(selectedProjectId);
+    return (projects || []).filter(
+      (p) =>
+        p.id === selectedProjectId ||
+        (targetNorm && normalizeName(p.name) === targetNorm)
+    );
+  }, [projects, selectedProjectId]);
+
+  // 2. Scoped Operational Work Logs & Resource Allocations for selectedProjectId
+  const scopedWorkLogs = useMemo(() => {
+    const validLogs = (allWorkLogs || workLogs || []).filter((w) => !w.isTestEntry);
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return validLogs;
+    }
+    const targetIds = new Set(scopedProjects.map((p) => p.id));
+    const targetNames = new Set(scopedProjects.map((p) => normalizeName(p.name)));
+    return validLogs.filter(
+      (w) =>
+        targetIds.has(w.projectId) ||
+        (w.projectName && targetNames.has(normalizeName(w.projectName)))
+    );
+  }, [allWorkLogs, workLogs, selectedProjectId, scopedProjects]);
+
+  const scopedAllocations = useMemo(() => {
+    const allocs = resourceAllocations || [];
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return allocs;
+    }
+    const targetIds = new Set(scopedProjects.map((p) => p.id));
+    const targetNames = new Set(scopedProjects.map((p) => normalizeName(p.name)));
+    return allocs.filter(
+      (a) =>
+        targetIds.has(a.projectId) ||
+        (a.projectName && targetNames.has(normalizeName(a.projectName)))
+    );
+  }, [resourceAllocations, selectedProjectId, scopedProjects]);
+
+  // 3. Scoped Employees / BIM Specialists linked to the active project scope
+  const scopedEmployees = useMemo(() => {
+    const allEmps = employees || [];
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return allEmps;
+    }
+    if (scopedProjects.length === 0) {
+      return [];
+    }
+
+    const targetIds = new Set(scopedProjects.map((p) => p.id));
+
+    return allEmps.filter((emp) => {
+      const empId = (emp.id || '').trim();
+      const empIdStripped = empId.replace(/^emp-/, '');
+      const empEmail = (emp.email || '').trim().toLowerCase();
+      const empName = (emp.name || '').trim().toLowerCase();
+
+      // Check activeProjectIds on employee
+      if (
+        Array.isArray(emp.activeProjectIds) &&
+        emp.activeProjectIds.some((pid) => targetIds.has(pid))
+      ) {
+        return true;
+      }
+
+      // Check project assignedEmployeeIds, tasks, or project-level assignedTo
+      const inProjectTeam = scopedProjects.some((p) => {
+        if (
+          Array.isArray(p.assignedEmployeeIds) &&
+          p.assignedEmployeeIds.some(
+            (id) =>
+              id === empId ||
+              (empIdStripped && id.replace(/^emp-/, '') === empIdStripped)
+          )
+        ) {
+          return true;
+        }
+        if (
+          (p as any).assignedTo &&
+          ((p as any).assignedTo === empId ||
+            (empIdStripped &&
+              String((p as any).assignedTo).replace(/^emp-/, '') === empIdStripped))
+        ) {
+          return true;
+        }
+        if (
+          Array.isArray(p.tasks) &&
+          p.tasks.some(
+            (t) =>
+              t.assignedEmployeeId === empId ||
+              (empIdStripped &&
+                (t.assignedEmployeeId || '').replace(/^emp-/, '') === empIdStripped)
+          )
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (inProjectTeam) return true;
+
+      // Check disciplineAssignments map for this project
+      if (disciplineAssignments) {
+        for (const [key, assignedVal] of Object.entries(disciplineAssignments)) {
+          const matchesProjPrefix = scopedProjects.some(
+            (p) => key.startsWith(`${p.id}__`) || key.startsWith(`${p.id}_`)
+          );
+          if (matchesProjPrefix && assignedVal) {
+            const valStripped = String(assignedVal).replace(/^emp-/, '');
+            if (
+              assignedVal === empId ||
+              (empIdStripped && valStripped === empIdStripped)
+            ) {
+              return true;
+            }
+          }
+        }
+      }
+
+      // Check resource allocations for this project
+      const inAllocations = scopedAllocations.some((a) => {
+        const aEmpId = (a.employeeId || a.assignedTo || '').trim();
+        const aEmpStripped = aEmpId.replace(/^emp-/, '');
+        const aEmail = (a.memberEmail || '').trim().toLowerCase();
+        const aName = (a.employeeName || '').trim().toLowerCase();
+        return (
+          (empId && aEmpId === empId) ||
+          (empIdStripped && aEmpStripped === empIdStripped) ||
+          (empEmail && aEmail && empEmail === aEmail) ||
+          (empName && aName && empName === aName)
+        );
+      });
+      if (inAllocations) return true;
+
+      // Check logged hours for this project
+      const inWorkLogs = scopedWorkLogs.some((w) => {
+        const wEmpId = (w.employeeId || w.userId || '').trim();
+        const wEmpStripped = wEmpId.replace(/^emp-/, '');
+        const wEmail = (w.memberEmail || w.userEmail || '').trim().toLowerCase();
+        const wName = (w.employeeName || '').trim().toLowerCase();
+        return (
+          (empId && wEmpId === empId) ||
+          (empIdStripped && wEmpStripped === empIdStripped) ||
+          (empEmail && wEmail && empEmail === wEmail) ||
+          (empName && wName && empName === wName)
+        );
+      });
+      return inWorkLogs;
+    });
+  }, [
+    employees,
+    selectedProjectId,
+    scopedProjects,
+    disciplineAssignments,
+    scopedAllocations,
+    scopedWorkLogs,
+  ]);
+
+  // Overall KPIs calculation (dynamically scoped to selectedProjectId)
+  const totalBudgetHours = useMemo(() => {
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return overallMetrics?.totalEstimatedHours ?? 0;
+    }
+    return scopedProjects.reduce(
+      (sum, p) => sum + (Number(p.totalEstimatedHours) || 0),
+      0
+    );
+  }, [selectedProjectId, overallMetrics, scopedProjects]);
+
+  const totalLoggedHours = useMemo(() => {
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return overallMetrics?.totalCompletedHours ?? 0;
+    }
+    return scopedProjects.reduce(
+      (sum, p) => sum + getProjectCompletedHours(p.id),
+      0
+    );
+  }, [selectedProjectId, overallMetrics, scopedProjects, getProjectCompletedHours, scopedWorkLogs]);
+
+  const scopedCriticalClashesCount = useMemo(() => {
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return overallMetrics?.criticalClashesCount ?? 0;
+    }
+    let count = 0;
+    scopedProjects.forEach((p) => {
+      (p.clashes || []).forEach((c) => {
+        if (c.severity === 'Critical' && c.status !== 'Resolved') {
+          count++;
+        }
+      });
+    });
+    return count;
+  }, [selectedProjectId, overallMetrics, scopedProjects]);
+
+  const totalPortfolioValue = totalBudgetHours * HOURLY_BILLING_RATE;
+  const totalRecognizedRevenue = totalLoggedHours * HOURLY_BILLING_RATE;
+  const totalTeamCapacity = scopedEmployees.reduce(
+    (sum, e) => sum + (e.weeklyCapacityHours || (e as any).capacityHoursPerWeek || 40),
+    0
+  );
+  const fleetUtilizationRate = useMemo(() => {
+    if (!selectedProjectId || selectedProjectId === 'all') {
+      return Math.min(
+        100,
+        Math.round((totalLoggedHours / Math.max(1, totalBudgetHours)) * 100) || 88
+      );
+    }
+    if (totalBudgetHours > 0) {
+      return Math.min(100, Math.round((totalLoggedHours / totalBudgetHours) * 100));
+    }
+    if (totalTeamCapacity > 0 && totalLoggedHours > 0) {
+      return Math.min(100, Math.round((totalLoggedHours / totalTeamCapacity) * 100));
+    }
+    return 0;
+  }, [selectedProjectId, totalLoggedHours, totalBudgetHours, totalTeamCapacity]);
+
   // AI insights state
   const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
   const [aiInsights, setAiInsights] = useState<Array<{
@@ -90,13 +319,14 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     setAiInsightsLoading(true);
     try {
       const summaryPayload = {
-        totalProjects: projects.length,
-        totalEstimatedHours: overallMetrics.totalEstimatedHours,
-        totalCompletedHours: overallMetrics.totalCompletedHours,
-        variance: overallMetrics.hoursVariance,
-        employeesCount: employees.length,
-        activeClashes: overallMetrics.criticalClashesCount,
-        sampleProjects: projects.map(p => ({
+        projectScope: selectedProjectId === 'all' ? 'All Projects' : (scopedProjects[0]?.name || selectedProjectId),
+        totalProjects: scopedProjects.length,
+        totalEstimatedHours: totalBudgetHours,
+        totalCompletedHours: totalLoggedHours,
+        variance: totalBudgetHours - totalLoggedHours,
+        employeesCount: scopedEmployees.length,
+        activeClashes: scopedCriticalClashesCount,
+        sampleProjects: scopedProjects.map(p => ({
           name: p.name,
           estimated: p.totalEstimatedHours,
           completed: getProjectCompletedHours(p.id),
@@ -123,6 +353,14 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     }
   };
 
+  // Re-evaluate AI insights automatically if already active when project scope changes
+  React.useEffect(() => {
+    if (aiInsights.length > 0) {
+      fetchLiveAiInsights();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
+
   // Helper to map project name / tags to the 4 primary BIM service types
   const mapProjectToService = (project: BimProject): BimServiceType => {
     const discStr = (project.disciplines || []).join(' ');
@@ -139,7 +377,16 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     return 'ACS'; // Default to Architectural, Coordination & Structure
   };
 
-  // Service Type Projections Calculation
+  // Helper to map discipline string from workLogs/allocations to BimServiceType
+  const mapDisciplineToService = (disc?: string): BimServiceType => {
+    const text = (disc || '').toUpperCase();
+    if (text.includes('SCAN') || text.includes('POINT CLOUD')) return 'SCAN TO BIM';
+    if (text.includes('MEP') || text.includes('HVAC') || text.includes('PLUMB') || text.includes('ELEC')) return 'MEP';
+    if (text.includes('CAD') || text.includes('DRAFT')) return 'CAD';
+    return 'ACS';
+  };
+
+  // Service Type Projections Calculation (dynamically scoped to selectedProjectId)
   const serviceTypeData = useMemo(() => {
     const services: BimServiceType[] = ['ACS', 'MEP', 'SCAN TO BIM', 'CAD'];
     const serviceLabels: Record<BimServiceType, { label: string; desc: string; color: string; bg: string; border: string }> = {
@@ -173,11 +420,30 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
       }
     };
 
+    const isSingleProjectScope = Boolean(selectedProjectId && selectedProjectId !== 'all');
+
     return services.map(svc => {
-      const projs = projects.filter(p => mapProjectToService(p) === svc);
-      const budgetHours = projs.reduce((sum, p) => sum + p.totalEstimatedHours, 0);
-      const completedHours = projs.reduce((sum, p) => sum + getProjectCompletedHours(p.id), 0);
-      const burnPct = budgetHours > 0 ? Math.round((completedHours / budgetHours) * 100) : 0;
+      const projs = scopedProjects.filter(p => mapProjectToService(p) === svc);
+      let budgetHours = projs.reduce((sum, p) => sum + (Number(p.totalEstimatedHours) || 0), 0);
+      let completedHours = projs.reduce((sum, p) => sum + getProjectCompletedHours(p.id), 0);
+
+      // When a single project is selected, also check if discipline-specific logs or allocations exist for this service pillar
+      if (isSingleProjectScope && projs.length === 0) {
+        const svcLogsHours = scopedWorkLogs
+          .filter(w => mapDisciplineToService(w.discipline) === svc)
+          .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+        const svcAllocHours = scopedAllocations
+          .filter(a => mapDisciplineToService(a.discipline) === svc)
+          .reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
+        completedHours += svcLogsHours;
+        budgetHours += svcAllocHours;
+      }
+
+      const burnPct = budgetHours > 0
+        ? Math.round((completedHours / budgetHours) * 100)
+        : completedHours > 0
+        ? 100
+        : 0;
       const budgetRevenue = budgetHours * HOURLY_BILLING_RATE;
       const completedRevenue = completedHours * HOURLY_BILLING_RATE;
       const margin = 32 + (burnPct <= 100 ? 5 : -8);
@@ -195,9 +461,9 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
         projectedMargin: Math.max(12, margin)
       };
     });
-  }, [projects, getProjectCompletedHours]);
+  }, [scopedProjects, selectedProjectId, getProjectCompletedHours, scopedWorkLogs, scopedAllocations]);
 
-  // Discipline Headcount & Distribution
+  // Discipline Headcount & Distribution (dynamically scoped to scopedEmployees)
   const disciplineHeadcountData = useMemo(() => {
     const disciplines: { id: PrimaryDiscipline; label: string; color: string; hex: string }[] = [
       { id: 'Architectural', label: 'Architectural', color: 'text-emerald-400', hex: '#10B981' },
@@ -209,7 +475,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     ];
 
     const mapEmpToPrimaryDisc = (role: string, disc: string): PrimaryDiscipline => {
-      const r = (role + ' ' + disc).toLowerCase();
+      const r = ((role || '') + ' ' + (disc || '')).toLowerCase();
       if (r.includes('scan') || r.includes('point cloud') || r.includes('as-built') || r.includes('laser')) {
         return 'Point Cloud / Scan to BIM Specialist';
       }
@@ -228,41 +494,35 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
       return 'Architectural';
     };
 
-    const totalEmps = employees.length || 1;
+    const totalEmps = scopedEmployees.length;
 
     return disciplines.map(d => {
-      const matchingEmps = employees.filter(e => mapEmpToPrimaryDisc(e.role, e.discipline) === d.id);
+      const matchingEmps = scopedEmployees.filter(e => mapEmpToPrimaryDisc(e.role, e.discipline) === d.id);
       const count = matchingEmps.length;
-      const pct = Math.round((count / totalEmps) * 100);
+      const pct = totalEmps > 0 ? Math.round((count / totalEmps) * 100) : 0;
       const totalWeeklyCap = matchingEmps.reduce((sum, e) => sum + (e.weeklyCapacityHours || (e as any).capacityHoursPerWeek || 40), 0);
-      const avgEfficiency = Math.round(92 + (matchingEmps.length > 0 ? (matchingEmps.reduce((s, e) => s + ((e as any).rating || 4.5), 0) / matchingEmps.length) * 1.5 : 3));
+      const avgEfficiency = count > 0
+        ? Math.min(99, Math.round(92 + (matchingEmps.reduce((s, e) => s + ((e as any).rating || 4.5), 0) / count) * 1.5))
+        : 0;
 
       return {
         ...d,
         count,
         percentage: pct,
         totalWeeklyCap,
-        avgEfficiency: Math.min(99, avgEfficiency),
+        avgEfficiency,
         members: matchingEmps
       };
     });
-  }, [employees]);
-
-  // Overall KPIs calculation
-  const totalBudgetHours = overallMetrics.totalEstimatedHours;
-  const totalLoggedHours = overallMetrics.totalCompletedHours;
-  const totalPortfolioValue = totalBudgetHours * HOURLY_BILLING_RATE;
-  const totalRecognizedRevenue = totalLoggedHours * HOURLY_BILLING_RATE;
-  const totalTeamCapacity = employees.reduce((sum, e) => sum + (e.weeklyCapacityHours || (e as any).capacityHoursPerWeek || 40), 0);
-  const fleetUtilizationRate = Math.min(100, Math.round((totalLoggedHours / Math.max(1, totalBudgetHours)) * 100) || 88);
+  }, [scopedEmployees]);
 
   // SVG Donut calculation
   const donutSegments = useMemo(() => {
     let accumulatedAngle = 0;
-    const totalCount = employees.length || 1;
+    const totalCount = scopedEmployees.length || 1;
 
     return disciplineHeadcountData.map(d => {
-      const sliceAngle = (d.count / totalCount) * 360;
+      const sliceAngle = scopedEmployees.length > 0 ? (d.count / totalCount) * 360 : 0;
       const startAngle = accumulatedAngle;
       accumulatedAngle += sliceAngle;
 
@@ -273,7 +533,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
         endAngle: accumulatedAngle
       };
     });
-  }, [disciplineHeadcountData, employees.length]);
+  }, [disciplineHeadcountData, scopedEmployees.length]);
 
   return (
     <div className="space-y-6 pb-12">
@@ -368,18 +628,18 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           <div className="mt-3">
             <div className="flex items-baseline gap-2">
               <span className="text-2xl font-bold text-white">
-                {projects.filter(p => p.status !== 'Completed' && p.status !== 'CLOSED').length}
+                {scopedProjects.filter(p => p.status !== 'Completed' && p.status !== 'CLOSED').length}
               </span>
-              <span className="text-xs text-slate-400">/ {projects.length} Total Projects</span>
+              <span className="text-xs text-slate-400">/ {scopedProjects.length} Total Projects</span>
             </div>
             <div className="flex items-center gap-2 mt-2 text-xs">
               <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
                 <CheckCircle2 className="w-3 h-3" />
-                {projects.filter(p => p.status === 'On Track' || p.status === 'WIP').length} On Schedule
+                {scopedProjects.filter(p => p.status === 'On Track' || p.status === 'WIP').length} On Schedule
               </span>
               <span className="text-slate-600">•</span>
               <span className="text-amber-400 font-medium">
-                {projects.filter(p => p.status === 'At Risk' || p.status === 'HOLD').length} Action Needed
+                {scopedProjects.filter(p => p.status === 'At Risk' || p.status === 'HOLD' || p.status === 'Delayed').length} Action Needed
               </span>
             </div>
           </div>
@@ -408,7 +668,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             </div>
             <div className="flex items-center justify-between mt-2 text-xs">
               <span className="text-slate-400">
-                Burn Rate: <strong className="text-emerald-400">{Math.round((totalLoggedHours / Math.max(1, totalBudgetHours)) * 100)}%</strong>
+                Burn Rate: <strong className="text-emerald-400">{totalBudgetHours > 0 ? Math.round((totalLoggedHours / totalBudgetHours) * 100) : (totalLoggedHours > 0 ? 100 : 0)}%</strong>
               </span>
               <span className="text-slate-400">
                 Rate: <strong className="text-slate-200">${HOURLY_BILLING_RATE}/h</strong>
@@ -430,9 +690,11 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           <div className="mt-3">
             <div className="flex items-baseline gap-2">
               <span className="text-2xl font-bold text-white">
-                {employees.length}
+                {scopedEmployees.length}
               </span>
-              <span className="text-xs text-emerald-400 font-medium">100% Assigned</span>
+              <span className="text-xs text-emerald-400 font-medium">
+                {scopedEmployees.length > 0 ? '100% Assigned' : 'No Specialists Assigned'}
+              </span>
             </div>
             <div className="flex items-center justify-between mt-2 text-xs text-slate-400">
               <span>{totalTeamCapacity}h / week total cap</span>
@@ -566,7 +828,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                   <span>Headcount by Primary Discipline</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  {employees.length} active BIM specialists mapped across trade specializations
+                  {scopedEmployees.length} active BIM specialists mapped across trade specializations
                 </p>
               </div>
             </div>
@@ -574,34 +836,44 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             {/* Interactive Donut Graphic */}
             <div className="flex items-center justify-center py-4 relative">
               <svg className="w-44 h-44 transform -rotate-90" viewBox="0 0 100 100">
-                {donutSegments.map((seg) => {
-                  const circumference = 2 * Math.PI * 38;
-                  const strokeDashoffset = circumference - (seg.sliceAngle / 360) * circumference;
-                  const strokeDasharray = `${(seg.sliceAngle / 360) * circumference} ${circumference}`;
-                  const rotation = seg.startAngle;
+                {scopedEmployees.length === 0 ? (
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="38"
+                    fill="transparent"
+                    stroke="#1e293b"
+                    strokeWidth="12"
+                  />
+                ) : (
+                  donutSegments.map((seg) => {
+                    const circumference = 2 * Math.PI * 38;
+                    const strokeDasharray = `${(seg.sliceAngle / 360) * circumference} ${circumference}`;
+                    const rotation = seg.startAngle;
 
-                  return (
-                    <circle
-                      key={seg.id}
-                      cx="50"
-                      cy="50"
-                      r="38"
-                      fill="transparent"
-                      stroke={seg.hex}
-                      strokeWidth="12"
-                      strokeDasharray={strokeDasharray}
-                      transform={`rotate(${rotation} 50 50)`}
-                      className="cursor-pointer transition-all duration-300 hover:opacity-80"
-                      onMouseEnter={() => setHoveredDiscipline(seg.id)}
-                      onMouseLeave={() => setHoveredDiscipline(null)}
-                    />
-                  );
-                })}
+                    return (
+                      <circle
+                        key={seg.id}
+                        cx="50"
+                        cy="50"
+                        r="38"
+                        fill="transparent"
+                        stroke={seg.hex}
+                        strokeWidth="12"
+                        strokeDasharray={strokeDasharray}
+                        transform={`rotate(${rotation} 50 50)`}
+                        className="cursor-pointer transition-all duration-300 hover:opacity-80"
+                        onMouseEnter={() => setHoveredDiscipline(seg.id)}
+                        onMouseLeave={() => setHoveredDiscipline(null)}
+                      />
+                    );
+                  })
+                )}
               </svg>
 
               {/* Center Hub Label */}
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-bold text-white">{employees.length}</span>
+                <span className="text-2xl font-bold text-white">{scopedEmployees.length}</span>
                 <span className="text-[10px] uppercase font-semibold text-slate-400">Specialists</span>
               </div>
             </div>
