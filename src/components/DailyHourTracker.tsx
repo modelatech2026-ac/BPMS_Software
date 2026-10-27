@@ -28,8 +28,8 @@ import {
   isUserSuperAdmin,
 } from '../context/BimDataContext';
 import { db } from '../firebase/config';
-import { collection, deleteDoc, doc, getDocs } from 'firebase/firestore';
-import { DailyWorkLog, Discipline, ActivityType, LODLevel } from '../types';
+import { collection, deleteDoc, doc, getDocs, onSnapshot } from 'firebase/firestore';
+import { DailyWorkLog, Discipline, ActivityType, LODLevel, Employee } from '../types';
 
 interface DailyHourTrackerProps {
   onOpenLogModal: () => void;
@@ -40,6 +40,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 }) => {
   const {
     workLogs,
+    allWorkLogs,
     employees,
     projects,
     resourceAllocations,
@@ -481,44 +482,66 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const currentWeekRange = useMemo(() => getCurrentWeekRange(new Date()), []);
   const weekDays = useMemo(() => currentWeekRange.days, [currentWeekRange]);
 
-  // Super Admin & Director track all active team members; Submitting Member tracks only their own timesheet
-  const allTrackedEmployees = useMemo(() => {
-    const activeTeamMembers = (employees || []).filter(
-      (member) => !member.isDeleted && member.status !== 'deleted'
-    );
-
-    if (!isSuperAdmin) {
-      if (!currentUser) return [];
-      const userEmail = (currentUser.email || '').toLowerCase().trim();
-      const userId = (currentUser.id || '').trim();
-      const userIdStripped = userId.replace(/^emp-/, '');
-      const matched = activeTeamMembers.find(
-        (e) =>
-          e.id === userId ||
-          e.id.replace(/^emp-/, '') === userIdStripped ||
-          (e.email && e.email.toLowerCase().trim() === userEmail) ||
-          (e.name && currentUser.name && e.name.toLowerCase().trim() === currentUser.name.toLowerCase().trim())
-      );
-      if (matched) return [matched];
-      return [
-        {
-          id: userId || 'emp-user',
-          name: currentUser.name || userEmail.split('@')[0] || 'My Timesheet',
-          email: currentUser.email || '',
-          avatar: currentUser.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.name || 'User')}`,
-          role: (currentUser.role || 'BIM Modeler') as any,
-          primaryDiscipline: 'BIM - ACS' as Discipline,
-          discipline: 'BIM - ACS' as Discipline,
-          weeklyCapacityHours: 40,
-          experienceYears: 3,
-          status: 'Active' as const,
-          activeProjectIds: [],
-          skills: ['BIM - ACS'],
-          phone: '',
+  // Real-time onSnapshot listener on Firestore 'users' collection for instant matrix synchronization
+  const [firestoreUsers, setFirestoreUsers] = useState<Employee[]>([]);
+  useEffect(() => {
+    let unsub: (() => void) | undefined;
+    try {
+      unsub = onSnapshot(
+        collection(db, 'users'),
+        (snapshot) => {
+          const usersList: Employee[] = [];
+          snapshot.docs.forEach((docSnap) => {
+            const data = docSnap.data() || {};
+            if (data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
+              return;
+            }
+            const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+            if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
+              return;
+            }
+            const isSuper = email === 'modelatech2026@gmail.com';
+            const name = isSuper
+              ? 'Aditi Chakraborty'
+              : String(data.fullName || data.name || (email ? email.split('@')[0] : '')).trim();
+            if (!name && !email) return;
+            const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
+            usersList.push({
+              id: isSuper
+                ? 'emp-modelatech2026_gmail_com'
+                : String(data.id || (docSnap.id.startsWith('emp-') ? docSnap.id : `emp-${docSnap.id}`)).trim(),
+              name,
+              email: isSuper ? 'modelatech2026@gmail.com' : email,
+              role: (isSuper ? 'Super Admin' : data.role || data.assignedRole || 'BIM Modeler') as any,
+              primaryDiscipline: disc,
+              discipline: disc,
+              avatar:
+                data.avatar ||
+                `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+              weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
+              experienceYears: Number(data.experienceYears) || 4,
+              status: 'Active',
+              activeProjectIds: Array.isArray(data.activeProjectIds) ? data.activeProjectIds : [],
+              skills: [disc],
+              phone: data.phone || '',
+            });
+          });
+          setFirestoreUsers(usersList);
         },
-      ];
+        (err) => {
+          console.warn('DailyHourTracker users listener notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('DailyHourTracker users setup notice:', e);
     }
+    return () => {
+      if (unsub) unsub();
+    };
+  }, []);
 
+  // Active team members across the organization (including Super Admin Aditi Chakraborty)
+  const allTrackedEmployees = useMemo(() => {
     let deletedSet = new Set<string>();
     try {
       const saved = localStorage.getItem('bim_deleted_members_v1');
@@ -530,33 +553,48 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
     } catch {}
 
-    const list = [...activeTeamMembers];
-    const knownKeys = new Set(
-      activeTeamMembers.flatMap((e) =>
-        [
-          e.id,
-          (e.id || '').replace(/^emp-/, ''),
-          (e.name || '').toLowerCase().trim(),
-          (e.email || '').toLowerCase().trim(),
-        ].filter(Boolean)
-      )
+    const superAdminMember: Employee = {
+      id: 'emp-modelatech2026_gmail_com',
+      name: 'Aditi Chakraborty',
+      email: 'modelatech2026@gmail.com',
+      avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Aditi%20Chakraborty',
+      role: 'Super Admin' as any,
+      primaryDiscipline: 'BIM - ACS',
+      discipline: 'BIM - ACS',
+      weeklyCapacityHours: 40,
+      experienceYears: 8,
+      status: 'Active',
+      activeProjectIds: [],
+      skills: ['BIM - ACS'],
+      phone: '',
+    };
+
+    const baseMembers = (employees || []).filter(
+      (member) => !member.isDeleted && member.status !== 'deleted'
     );
 
-    (workLogs || []).forEach((log) => {
-      const nameKey = (log.employeeName || '').toLowerCase().trim();
-      const emailKey = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
-      const idKey = (log.employeeId || (log as any).userId || '').trim();
+    const list: Employee[] = [];
+    const knownKeys = new Set<string>();
+
+    const registerMember = (emp: Employee) => {
+      if (!emp || emp.isDeleted || emp.status === 'deleted') return;
+      const emailKey = (emp.email || '').toLowerCase().trim();
+      const nameKey = (emp.name || '').toLowerCase().trim();
+      const idKey = (emp.id || '').trim();
       const idKeyLower = idKey.toLowerCase();
       const strippedIdKey = idKey.replace(/^emp-/, '');
       const strippedIdLower = strippedIdKey.toLowerCase();
 
-      const isDeletedMember =
-        (idKeyLower && deletedSet.has(idKeyLower)) ||
-        (strippedIdLower && deletedSet.has(strippedIdLower)) ||
-        (nameKey && deletedSet.has(nameKey)) ||
-        (emailKey && deletedSet.has(emailKey));
-
-      if (isDeletedMember) return;
+      if (emailKey !== 'modelatech2026@gmail.com') {
+        const isDeletedMember =
+          deletedMatrixEmpIds.includes(emp.id) ||
+          (idKeyLower && deletedSet.has(idKeyLower)) ||
+          (strippedIdLower && deletedSet.has(strippedIdLower)) ||
+          (nameKey && deletedSet.has(nameKey)) ||
+          (nameKey && deletedSet.has(`name:${nameKey}`)) ||
+          (emailKey && deletedSet.has(emailKey));
+        if (isDeletedMember) return;
+      }
 
       const alreadyExists =
         (idKey && knownKeys.has(idKey)) ||
@@ -569,35 +607,156 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         if (strippedIdKey) knownKeys.add(strippedIdKey);
         if (nameKey) knownKeys.add(nameKey);
         if (emailKey) knownKeys.add(emailKey);
-        list.push({
-          id: log.employeeId || (log as any).userId || `emp-${Date.now()}`,
-          name: log.employeeName || (emailKey ? emailKey.split('@')[0] : 'Team Member'),
-          email: emailKey,
-          avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(log.employeeName || emailKey || 'User')}`,
-          role: 'BIM Modeler' as any,
-          primaryDiscipline: log.discipline || 'BIM - ACS',
-          discipline: log.discipline || 'BIM - ACS',
-          weeklyCapacityHours: 40,
-          experienceYears: 3,
-          status: 'Active',
-          activeProjectIds: [log.projectId].filter(Boolean),
-          skills: [log.discipline || 'BIM - ACS'],
-          phone: '',
-        });
+        list.push(emp);
       }
+    };
+
+    // 1. Always include active team members from context & Firestore users collection & Super Admin
+    baseMembers.forEach(registerMember);
+    firestoreUsers.forEach(registerMember);
+    registerMember(superAdminMember);
+
+    // 2. Include current authenticated user if not already in the list
+    if (currentUser) {
+      const userEmail = (currentUser.email || '').toLowerCase().trim();
+      const userId = (currentUser.id || '').trim();
+      registerMember({
+        id: userId || 'emp-user',
+        name: currentUser.name || (userEmail ? userEmail.split('@')[0] : 'Team Member'),
+        email: currentUser.email || '',
+        avatar:
+          currentUser.avatar ||
+          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+            currentUser.name || 'User'
+          )}`,
+        role: (currentUser.role || 'BIM Modeler') as any,
+        primaryDiscipline: 'BIM - ACS',
+        discipline: 'BIM - ACS',
+        weeklyCapacityHours: 40,
+        experienceYears: 3,
+        status: 'Active',
+        activeProjectIds: [],
+        skills: ['BIM - ACS'],
+        phone: '',
+      });
+    }
+
+    // 3. Also include any active members referenced in resourceAllocations or workLogs
+    (resourceAllocations || []).forEach((alloc) => {
+      const name = (alloc.assignedToName || alloc.employeeName || alloc.memberName || '').trim();
+      const email = (alloc.assignedToEmail || alloc.memberEmail || '').toLowerCase().trim();
+      const id = (alloc.assignedTo || alloc.employeeId || alloc.memberId || '').trim();
+      if (!name && !email && !id) return;
+      registerMember({
+        id: id || `emp-${Date.now()}`,
+        name: name || (email ? email.split('@')[0] : 'Team Member'),
+        email,
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+          name || email || 'User'
+        )}`,
+        role: (alloc.employeeRole || 'BIM Modeler') as any,
+        primaryDiscipline: (alloc.discipline || 'BIM - ACS') as Discipline,
+        discipline: (alloc.discipline || 'BIM - ACS') as Discipline,
+        weeklyCapacityHours: 40,
+        experienceYears: 3,
+        status: 'Active',
+        activeProjectIds: [alloc.projectId].filter(Boolean),
+        skills: [(alloc.discipline || 'BIM - ACS') as Discipline],
+        phone: '',
+      });
     });
 
-    return list.filter(
-      (emp) =>
-        !emp.isDeleted &&
-        emp.status !== 'deleted' &&
-        !deletedMatrixEmpIds.includes(emp.id) &&
-        !deletedSet.has((emp.id || '').trim().toLowerCase()) &&
-        !deletedSet.has((emp.id || '').replace(/^emp-/, '').trim().toLowerCase()) &&
-        !deletedSet.has((emp.email || '').trim().toLowerCase()) &&
-        !deletedSet.has((emp.name || '').trim().toLowerCase())
-    );
-  }, [employees, workLogs, isSuperAdmin, currentUser, deletedMatrixEmpIds]);
+    (allWorkLogs || workLogs || []).forEach((log) => {
+      const name = (log.employeeName || '').trim();
+      const email = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
+      const id = (log.employeeId || (log as any).userId || '').trim();
+      if (!name && !email && !id) return;
+      registerMember({
+        id: id || `emp-${Date.now()}`,
+        name: name || (email ? email.split('@')[0] : 'Team Member'),
+        email,
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+          name || email || 'User'
+        )}`,
+        role: 'BIM Modeler' as any,
+        primaryDiscipline: log.discipline || 'BIM - ACS',
+        discipline: log.discipline || 'BIM - ACS',
+        weeklyCapacityHours: 40,
+        experienceYears: 3,
+        status: 'Active',
+        activeProjectIds: [log.projectId].filter(Boolean),
+        skills: [log.discipline || 'BIM - ACS'],
+        phone: '',
+      });
+    });
+
+    return list;
+  }, [
+    employees,
+    firestoreUsers,
+    allWorkLogs,
+    workLogs,
+    resourceAllocations,
+    currentUser,
+    deletedMatrixEmpIds,
+  ]);
+
+  // Full Member Matrix Outer Join: maps directly from the complete list of active team members,
+  // performing an outer join with daily_logs for the selected week range so 0.0h members are always rendered.
+  const fullWeeklyMatrix = useMemo(() => {
+    const sourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
+    const weeklyLogs = sourceLogs.filter((w) => {
+      const matchesType =
+        logTypeFilter === 'test'
+          ? Boolean(w.isTestEntry)
+          : logTypeFilter === 'operational'
+          ? !w.isTestEntry
+          : true;
+      if (!matchesType) return false;
+      const effDate = getEffectiveLogDate(w, currentWeekRange);
+      return effDate >= currentWeekRange.startIso && effDate <= currentWeekRange.endIso;
+    });
+
+    const computeWeeklyTotals = (userLogs: DailyWorkLog[], user: Employee) => {
+      let weekSum = 0;
+      const dailyHours = weekDays.map((d) => {
+        const dayLogs = sourceLogs.filter(
+          (w) =>
+            (logTypeFilter === 'test' ? Boolean(w.isTestEntry) : !w.isTestEntry) &&
+            (w.employeeId === user.id || doesLogMatchEmployee(w, user)) &&
+            getEffectiveLogDate(w, currentWeekRange) === d.date
+        );
+        const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
+        weekSum += hours;
+        return { date: d.date, hours, dayLogs };
+      });
+      return { weekSum, dailyHours, userLogs };
+    };
+
+    return allTrackedEmployees.map((user) => {
+      const empAllLogs = sourceLogs.filter(
+        (w) =>
+          (logTypeFilter === 'test'
+            ? Boolean(w.isTestEntry)
+            : logTypeFilter === 'operational'
+            ? !w.isTestEntry
+            : true) &&
+          (w.employeeId === user.id || doesLogMatchEmployee(w, user))
+      );
+      const userLogs = weeklyLogs.filter(
+        (log) => log.employeeId === user.id || doesLogMatchEmployee(log, user)
+      );
+      const empActionLogs = userLogs.length > 0 ? userLogs : empAllLogs;
+
+      return {
+        user,
+        empAllLogs,
+        empWeekLogs: userLogs,
+        empActionLogs,
+        weeklyTotals: computeWeeklyTotals(userLogs, user),
+      };
+    });
+  }, [allTrackedEmployees, allWorkLogs, workLogs, logTypeFilter, currentWeekRange, weekDays]);
 
   useEffect(() => {
     if (
@@ -975,33 +1134,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {allTrackedEmployees.map((emp) => {
-                  const empAllLogs = workLogs.filter(
-                    (w) =>
-                      (logTypeFilter === 'test'
-                        ? Boolean(w.isTestEntry)
-                        : logTypeFilter === 'operational'
-                        ? !w.isTestEntry
-                        : true) && doesLogMatchEmployee(w, emp)
-                  );
-                  const empWeekLogs = empAllLogs.filter((w) => {
-                    const effDate = getEffectiveLogDate(w, currentWeekRange);
-                    return effDate >= currentWeekRange.startIso && effDate <= currentWeekRange.endIso;
-                  });
-                  const empActionLogs = empWeekLogs.length > 0 ? empWeekLogs : empAllLogs;
-
-                  let weekSum = 0;
-                  const dailyHours = weekDays.map((d) => {
-                    const dayLogs = workLogs.filter(
-                      (w) =>
-                        (logTypeFilter === 'test' ? Boolean(w.isTestEntry) : !w.isTestEntry) &&
-                        doesLogMatchEmployee(w, emp) &&
-                        getEffectiveLogDate(w, currentWeekRange) === d.date
-                    );
-                    const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
-                    weekSum += hours;
-                    return { date: d.date, hours, dayLogs };
-                  });
+                {fullWeeklyMatrix.map(({ user: emp, empAllLogs, empWeekLogs, empActionLogs, weeklyTotals }) => {
+                  const { weekSum, dailyHours } = weeklyTotals;
 
                   const effectiveWeeklyLoad =
                     logTypeFilter === 'test'

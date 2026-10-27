@@ -739,6 +739,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const email = String(item.email || item.memberEmail || item.userEmail || item.assignedToEmail || '')
         .trim()
         .toLowerCase();
+      if (email === 'modelatech2026@gmail.com') return false;
       const detEmailId = email ? generateRequestDocId(email) : '';
       const name = String(item.name || item.employeeName || item.fullName || '')
         .trim()
@@ -754,7 +755,41 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     [deletedKeysSet]
   );
 
+  const SUPER_ADMIN_EMPLOYEE_PROFILE: Employee = useMemo(
+    () => ({
+      id: 'emp-modelatech2026_gmail_com',
+      name: SUPER_ADMIN_NAME,
+      email: SUPER_ADMIN_EMAIL,
+      role: 'Super Admin',
+      primaryDiscipline: 'BIM - ACS',
+      discipline: 'BIM - ACS',
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(SUPER_ADMIN_NAME)}`,
+      weeklyCapacityHours: 40,
+      experienceYears: 8,
+      status: 'Active',
+      activeProjectIds: ['proj-1'],
+      skills: ['BIM - ACS', 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+      phone: '+1 (555) 019-2834',
+    }),
+    []
+  );
+
   const [employees, setEmployees] = useState<Employee[]>(() => {
+    const defaultSuperAdmin: Employee = {
+      id: 'emp-modelatech2026_gmail_com',
+      name: SUPER_ADMIN_NAME,
+      email: SUPER_ADMIN_EMAIL,
+      role: 'Super Admin',
+      primaryDiscipline: 'BIM - ACS',
+      discipline: 'BIM - ACS',
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(SUPER_ADMIN_NAME)}`,
+      weeklyCapacityHours: 40,
+      experienceYears: 8,
+      status: 'Active',
+      activeProjectIds: ['proj-1'],
+      skills: ['BIM - ACS', 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+      phone: '+1 (555) 019-2834',
+    };
     try {
       const savedDeleted = localStorage.getItem(STORAGE_KEYS.DELETED_MEMBERS);
       const initialDeletedSet = new Set<string>(
@@ -764,9 +799,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.filter((e) => {
+          const filtered = parsed.filter((e) => {
             if (!e || e.isDeleted || String(e.status || '').toLowerCase() === 'deleted') return false;
             const email = (e.email || '').toLowerCase().trim();
+            if (email === 'modelatech2026@gmail.com') return true;
             const name = (e.name || '').toLowerCase().trim();
             const rawId = (e.id || '').trim();
             const strippedId = rawId.replace(/^emp-/, '');
@@ -780,24 +816,30 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             }
             return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
           });
+          const hasSuperAdmin = filtered.some(
+            (e) => (e.email || '').toLowerCase().trim() === 'modelatech2026@gmail.com'
+          );
+          return hasSuperAdmin ? filtered : [defaultSuperAdmin, ...filtered];
         }
       }
     } catch {}
-    return [];
+    return [defaultSuperAdmin];
   });
 
   // Global filtered active team members list used by all dropdowns, filters, and selectors
-  const activeTeamMembers = useMemo(
-    () =>
-      employees.filter(
-        (member) =>
-          !member.isDeleted &&
-          member.status !== 'deleted' &&
-          member.status !== 'Suspended' &&
-          !isMemberDeleted(member)
-      ),
-    [employees, isMemberDeleted]
-  );
+  const activeTeamMembers = useMemo(() => {
+    const filtered = employees.filter(
+      (member) =>
+        !member.isDeleted &&
+        member.status !== 'deleted' &&
+        member.status !== 'Suspended' &&
+        !isMemberDeleted(member)
+    );
+    const hasSuperAdmin = filtered.some(
+      (m) => (m.email || '').toLowerCase().trim() === 'modelatech2026@gmail.com'
+    );
+    return hasSuperAdmin ? filtered : [SUPER_ADMIN_EMPLOYEE_PROFILE, ...filtered];
+  }, [employees, isMemberDeleted, SUPER_ADMIN_EMPLOYEE_PROFILE]);
 
   const [allWorkLogs, setAllWorkLogs] = useState<DailyWorkLog[]>(() => {
     try {
@@ -1271,16 +1313,35 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Real-time onSnapshot listener on Firestore 'users' collection so deleted or updated user docs sync immediately
+  // Real-time onSnapshot listener on Firestore 'users' collection so active, added, updated, or deleted user docs sync immediately
   useEffect(() => {
     let unsubUsers: (() => void) | undefined;
     try {
+      // Ensure Super Admin profile (Aditi Chakraborty - modelatech2026@gmail.com) exists in Firestore 'users' collection
+      setDoc(
+        doc(db, 'users', 'modelatech2026_gmail_com'),
+        {
+          id: 'emp-modelatech2026_gmail_com',
+          name: SUPER_ADMIN_NAME,
+          fullName: SUPER_ADMIN_NAME,
+          email: SUPER_ADMIN_EMAIL,
+          role: 'Super Admin',
+          assignedRole: 'SUPER_ADMIN',
+          discipline: 'BIM - ACS',
+          primaryDiscipline: 'BIM - ACS',
+          status: 'Active',
+          isDeleted: false,
+        },
+        { merge: true }
+      ).catch(() => {});
+
       unsubUsers = onSnapshot(
         collection(db, 'users'),
         (snapshot) => {
           snapshot.docChanges().forEach((change) => {
             const data = change.doc.data() || {};
             const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+            if (email === 'modelatech2026@gmail.com') return;
             const name = String(data.fullName || data.name || '').trim();
             const docId = change.doc.id;
             const empId = String(data.id || data.assignedTo || `emp-${docId}`).trim();
@@ -1319,6 +1380,100 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               );
             }
           });
+
+          // Synchronize all active user documents from 'users' collection into employees state
+          const activeUserDocs = snapshot.docs
+            .map((docSnap) => ({ docId: docSnap.id, data: docSnap.data() || {} }))
+            .filter(({ docId, data }) => {
+              if (data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
+                return false;
+              }
+              const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+              if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
+                return false;
+              }
+              if (email === 'modelatech2026@gmail.com') return true;
+              return !isMemberDeleted({
+                id: data.id || docId,
+                email,
+                name: data.fullName || data.name,
+                status: data.status,
+                isDeleted: data.isDeleted,
+              });
+            });
+
+          if (activeUserDocs.length > 0) {
+            setEmployees((currentEmployees) => {
+              let changed = false;
+              const updated = [...currentEmployees];
+
+              activeUserDocs.forEach(({ docId, data }) => {
+                const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+                const name = String(
+                  data.fullName || data.name || (email ? email.split('@')[0] : '')
+                ).trim();
+                if (!name && !email) return;
+
+                const isSuper = isSuperAdminEmail(email);
+                const empId = isSuper
+                  ? 'emp-modelatech2026_gmail_com'
+                  : String(data.id || (docId.startsWith('emp-') ? docId : `emp-${docId}`)).trim();
+                const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
+                const resolvedRole = isSuper
+                  ? 'Super Admin'
+                  : data.role && data.role !== 'Editor' && data.role !== 'editor'
+                  ? String(data.role)
+                  : mapAppRoleToDisplayRole((data.assignedRole as UserRole) || 'VIEWER');
+
+                const idx = updated.findIndex(
+                  (e) =>
+                    e.id === empId ||
+                    e.id.replace(/^emp-/, '') === empId.replace(/^emp-/, '') ||
+                    (email && (e.email || '').toLowerCase().trim() === email) ||
+                    (name && (e.name || '').toLowerCase().trim() === name.toLowerCase())
+                );
+
+                if (idx === -1) {
+                  changed = true;
+                  updated.push({
+                    id: empId,
+                    name: isSuper ? SUPER_ADMIN_NAME : name,
+                    email: isSuper ? SUPER_ADMIN_EMAIL : email,
+                    role: resolvedRole as any,
+                    primaryDiscipline: disc,
+                    discipline: disc,
+                    avatar:
+                      data.avatar ||
+                      `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                        isSuper ? SUPER_ADMIN_NAME : name
+                      )}`,
+                    weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
+                    experienceYears: Number(data.experienceYears) || 4,
+                    status: 'Active',
+                    activeProjectIds: Array.isArray(data.activeProjectIds)
+                      ? data.activeProjectIds
+                      : ['proj-1'],
+                    skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+                    phone: data.phone || '+1 (555) 019-2834',
+                  });
+                } else {
+                  const currentEmp = updated[idx];
+                  const nextName = isSuper ? SUPER_ADMIN_NAME : name || currentEmp.name;
+                  const nextRole = isSuper ? 'Super Admin' : resolvedRole || currentEmp.role;
+                  if (currentEmp.name !== nextName || currentEmp.role !== nextRole) {
+                    changed = true;
+                    updated[idx] = {
+                      ...currentEmp,
+                      name: nextName,
+                      role: nextRole as any,
+                    };
+                  }
+                }
+              });
+
+              return changed ? updated : currentEmployees;
+            });
+          }
         },
         (err) => {
           console.warn('Firestore users listener notice:', err);
@@ -1330,7 +1485,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => {
       if (unsubUsers) unsubUsers();
     };
-  }, [registerDeletedMemberKeys]);
+  }, [registerDeletedMemberKeys, isMemberDeleted]);
 
   // Real-time onSnapshot listener on Firestore 'disciplines' collection to hydrate assignment dropdowns
   useEffect(() => {
@@ -3955,4 +4110,9 @@ export const useBimData = () => {
     throw new Error('useBimData must be used within a BimDataProvider');
   }
   return context;
+};
+
+export const useTeamMembers = () => {
+  const { employees } = useBimData();
+  return employees;
 };
