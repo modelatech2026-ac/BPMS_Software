@@ -1157,53 +1157,60 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                         </div>
                       </td>
 
-                      {dailyHours.map((d) => (
-                        <td key={d.date} className="p-3.5 text-center">
-                          {d.hours > 0 ? (
-                            <span
-                              onClick={
-                                isSuperAdmin
-                                  ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
-                                  : undefined
-                              }
-                              title={
-                                isSuperAdmin
-                                  ? `Click to edit ${emp.name}'s hours for ${d.date}`
-                                  : undefined
-                              }
-                              className={`inline-block px-2 py-0.5 rounded font-semibold text-xs ${
-                                isSuperAdmin ? 'cursor-pointer hover:ring-1 hover:ring-blue-400/60 transition' : ''
-                              } ${
-                                logTypeFilter === 'test'
-                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                                  : d.hours >= 8
-                                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                                  : 'bg-slate-800 text-slate-300'
-                              }`}
-                            >
-                              {d.hours.toFixed(1)}h
-                            </span>
-                          ) : (
-                            <span
-                              onClick={
-                                isSuperAdmin
-                                  ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
-                                  : undefined
-                              }
-                              title={
-                                isSuperAdmin
-                                  ? `Click to log/edit hours for ${emp.name} on ${d.date}`
-                                  : undefined
-                              }
-                              className={`text-slate-600 font-mono ${
-                                isSuperAdmin ? 'cursor-pointer hover:text-slate-400 transition' : ''
-                              }`}
-                            >
-                              -
-                            </span>
-                          )}
-                        </td>
-                      ))}
+                      {dailyHours.map((d) => {
+                        const isUnderTarget = d.hours > 0 && d.hours < 9.0;
+                        return (
+                          <td key={d.date} className="p-3.5 text-center">
+                            {d.hours > 0 ? (
+                              <span
+                                onClick={
+                                  isSuperAdmin
+                                    ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
+                                    : undefined
+                                }
+                                title={
+                                  isSuperAdmin
+                                    ? `Click to edit ${emp.name}'s hours for ${d.date}${
+                                        isUnderTarget ? ' (Shortfall: < 9.0h daily target)' : ''
+                                      }`
+                                    : isUnderTarget
+                                    ? 'Shortfall: Below 9.0h daily target'
+                                    : undefined
+                                }
+                                className={`inline-block px-2 py-0.5 rounded font-semibold text-xs ${
+                                  isSuperAdmin ? 'cursor-pointer hover:ring-1 hover:ring-blue-400/60 transition' : ''
+                                } ${
+                                  logTypeFilter === 'test'
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    : isUnderTarget
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 ring-1 ring-amber-500/30 shadow-xs'
+                                    : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                }`}
+                              >
+                                {d.hours.toFixed(1)}h
+                              </span>
+                            ) : (
+                              <span
+                                onClick={
+                                  isSuperAdmin
+                                    ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
+                                    : undefined
+                                }
+                                title={
+                                  isSuperAdmin
+                                    ? `Click to log/edit hours for ${emp.name} on ${d.date}`
+                                    : undefined
+                                }
+                                className={`text-slate-600 font-mono ${
+                                  isSuperAdmin ? 'cursor-pointer hover:text-slate-400 transition' : ''
+                                }`}
+                              >
+                                -
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })}
 
                       <td className="p-3.5 text-right font-bold text-sm text-white">
                         <div className="flex flex-col items-end gap-0.5">
@@ -1339,6 +1346,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <option value="Façade / Envelope">Façade / Envelope</option>
                 <option value="Coordination & QA">Coordination & QA</option>
                 <option value="AI & Automation">AI & Automation</option>
+                <option value="Estimation">Estimation</option>
               </select>
             </div>
 
@@ -1722,6 +1730,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     <option value="Coordination & QA">Coordination & QA</option>
                     <option value="Fire Protection">Fire Protection</option>
                     <option value="AI & Automation">AI & Automation</option>
+                    <option value="Estimation">Estimation</option>
                   </select>
                 </div>
 

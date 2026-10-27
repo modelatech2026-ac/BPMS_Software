@@ -375,6 +375,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 'Coordination & QA',
                 'Fire Protection',
                 'AI & Automation',
+                'Estimation',
               ].map((d) => (
                 <button
                   type="button"

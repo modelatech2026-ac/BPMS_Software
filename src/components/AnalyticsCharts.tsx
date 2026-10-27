@@ -139,6 +139,7 @@ export const DisciplineDistributionChart: React.FC<{
     'Façade / Envelope',
     'Coordination & QA',
     'AI & Automation',
+    'Estimation',
   ];
 
   const colors: Record<Discipline, string> = {
@@ -154,6 +155,7 @@ export const DisciplineDistributionChart: React.FC<{
     'Coordination & QA': 'bg-orange-500 text-orange-400',
     'Infrastructure': 'bg-teal-500 text-teal-400',
     'AI & Automation': 'bg-violet-500 text-violet-400',
+    'Estimation': 'bg-sky-500 text-sky-400',
   };
 
   const totals = disciplines.map(disc => {

@@ -951,7 +951,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       MEP: 0,
       Infrastructure: 0,
       'Coordination & QA': 0,
-      'AI & Automation': 0
+      'AI & Automation': 0,
+      Estimation: 0
     };
 
     filteredByEmployee.forEach((a) => {
@@ -1871,6 +1872,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     <option value="Infrastructure">Infrastructure</option>
                     <option value="Coordination & QA">Coordination & QA</option>
                     <option value="AI & Automation">AI & Automation</option>
+                    <option value="Estimation">Estimation</option>
                   </select>
                 </div>
 

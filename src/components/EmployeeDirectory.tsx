@@ -616,13 +616,21 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         }`}
       >
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
+          <table className="w-full table-auto border-collapse text-left text-xs text-slate-300">
             <thead className="bg-slate-800/90 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-700 text-[11px]">
               <tr>
-                <th className="py-3.5 px-4 min-w-[240px]">TEAM MANAGEMENT</th>
-                <th className="py-3.5 px-4 min-w-[220px]">PROJECT</th>
-                <th className="py-3.5 px-4 min-w-[230px]">LOGGED HOURS - ASSIGNED HOURS</th>
-                <th className="py-3.5 px-4 min-w-[200px]">EFFICIENCY (%)</th>
+                <th className="py-3.5 px-5 min-w-[240px] whitespace-nowrap align-middle">
+                  TEAM MANAGEMENT
+                </th>
+                <th className="py-3.5 px-5 min-w-[210px] whitespace-nowrap align-middle">
+                  PROJECT
+                </th>
+                <th className="py-3.5 px-5 min-w-[270px] whitespace-normal leading-snug align-middle">
+                  <span className="inline-block">LOGGED HOURS - ASSIGNED HOURS</span>
+                </th>
+                <th className="py-3.5 px-5 min-w-[210px] whitespace-nowrap align-middle">
+                  EFFICIENCY (%)
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -651,7 +659,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
                   return (
                     <tr key={row.rowKey} className="hover:bg-slate-800/40 transition">
                       {/* Column 1: TEAM MANAGEMENT */}
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-5 align-middle">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-3 min-w-0">
                             <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-bold text-white text-xs shrink-0 shadow-xs">
@@ -695,7 +703,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
                       </td>
 
                       {/* Column 2: PROJECT */}
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-5 align-middle">
                         <div className="flex items-center gap-2">
                           <Building className="w-4 h-4 text-blue-400 shrink-0" />
                           <div className="min-w-0">
@@ -724,14 +732,14 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
                       </td>
 
                       {/* Column 3: LOGGED HOURS - ASSIGNED HOURS */}
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-5 align-middle">
                         <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2 font-mono text-xs">
-                            <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-bold">
+                          <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
+                            <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-bold whitespace-nowrap">
                               {row.loggedHours.toFixed(1)}h Logged
                             </span>
                             <span className="text-slate-500 font-bold">−</span>
-                            <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/30 text-blue-300 font-bold">
+                            <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/30 text-blue-300 font-bold whitespace-nowrap">
                               {row.assignedHours.toFixed(1)}h Assigned
                             </span>
                           </div>
@@ -754,7 +762,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
                       </td>
 
                       {/* Column 4: EFFICIENCY (%) */}
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-5 align-middle">
                         <div className="space-y-1.5 max-w-[220px]">
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-mono text-sm font-bold text-white">

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Layers,
   Search,
@@ -25,10 +25,10 @@ import {
   X,
   Check
 } from 'lucide-react';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
-import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS } from '../types';
+import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS, ResourceAllocationItem } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 
 interface ProjectListProps {
@@ -36,6 +36,21 @@ interface ProjectListProps {
   onOpenNewProjectModal: () => void;
   onOpenReportModalWithProject: (projectId: string) => void;
 }
+
+const matchProjectId = (idA?: string, idB?: string): boolean => {
+  if (!idA || !idB) return false;
+  if (idA === idB) return true;
+  const normA = idA.startsWith('proj-') ? idA : idA.replace(/^p(\d+)$/, 'proj-$1');
+  const normB = idB.startsWith('proj-') ? idB : idB.replace(/^p(\d+)$/, 'proj-$1');
+  return normA === normB;
+};
+
+const normalizeProjectNameKey = (name?: string): string =>
+  (name || '')
+    .trim()
+    .replace(/^BIM[\s-_]+/i, '')
+    .trim()
+    .toLowerCase();
 
 export const ProjectList: React.FC<ProjectListProps> = ({
   onSelectProject,
@@ -45,6 +60,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const {
     projects,
     workLogs,
+    resourceAllocations,
     getProjectCompletedHours,
     employees,
     updateProjectStatus,
@@ -53,6 +69,132 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     currentUser,
     selectedProjectId,
   } = useBimData();
+
+  // Direct real-time Firestore onSnapshot subscription for assigned_hours & project_assignments
+  const [liveAssignedHours, setLiveAssignedHours] = useState<ResourceAllocationItem[]>([]);
+
+  useEffect(() => {
+    let unsubAssigned: (() => void) | undefined;
+    let unsubProjectAssignments: (() => void) | undefined;
+
+    const assignedMap = new Map<string, ResourceAllocationItem>();
+    const projectAssignMap = new Map<string, ResourceAllocationItem>();
+
+    const syncSnapshots = () => {
+      const merged = new Map<string, ResourceAllocationItem>();
+      projectAssignMap.forEach((v, k) => merged.set(k, v));
+      assignedMap.forEach((v, k) => {
+        const existing = merged.get(k);
+        if (!existing || !existing.updatedAt || (v.updatedAt && v.updatedAt >= existing.updatedAt)) {
+          merged.set(k, v);
+        }
+      });
+      setLiveAssignedHours(Array.from(merged.values()));
+    };
+
+    const parseDoc = (docSnap: any): ResourceAllocationItem => {
+      const d = docSnap.data();
+      const resolvedMemberId = d.memberId || d.employeeId || d.assignedTo || '';
+      const resolvedEmail = d.assignedToEmail || d.memberEmail || '';
+      const resolvedName = d.assignedToName || d.memberName || d.employeeName || '';
+      return {
+        id: docSnap.id,
+        projectId: d.projectId || '',
+        projectName: d.projectName || 'Unassigned Project',
+        employeeId: resolvedMemberId,
+        memberId: resolvedMemberId,
+        assignedTo: resolvedMemberId,
+        employeeName: resolvedName,
+        assignedToName: resolvedName,
+        memberName: resolvedName,
+        employeeRole: d.employeeRole || 'Editor',
+        memberEmail: resolvedEmail,
+        assignedToEmail: resolvedEmail,
+        discipline: d.discipline || 'BIM - ACS',
+        lod: d.lod || 'LOD 350',
+        projectPhase: d.projectPhase || 'Design Development',
+        taskType: d.taskType || '3D Modeling',
+        targetElementOrZone: d.targetElementOrZone || '',
+        assignedHours: Number(d.assignedHours) || 0,
+        viewFrequency: d.viewFrequency || 'Weekly',
+        startDate: d.startDate || '',
+        dueDate: d.dueDate || '',
+        status: d.status || 'Allocated',
+        notes: d.notes || '',
+        updatedAt: d.updatedAt || '',
+      };
+    };
+
+    try {
+      unsubAssigned = onSnapshot(
+        collection(db, 'assigned_hours'),
+        (snap) => {
+          assignedMap.clear();
+          snap.docs.forEach((docSnap) => assignedMap.set(docSnap.id, parseDoc(docSnap)));
+          syncSnapshots();
+        },
+        (err) => console.warn('ProjectList assigned_hours listener notice:', err)
+      );
+
+      unsubProjectAssignments = onSnapshot(
+        collection(db, 'project_assignments'),
+        (snap) => {
+          projectAssignMap.clear();
+          snap.docs.forEach((docSnap) => projectAssignMap.set(docSnap.id, parseDoc(docSnap)));
+          syncSnapshots();
+        },
+        (err) => console.warn('ProjectList project_assignments listener notice:', err)
+      );
+    } catch (e) {
+      console.warn('ProjectList assigned_hours setup notice:', e);
+    }
+
+    return () => {
+      if (unsubAssigned) unsubAssigned();
+      if (unsubProjectAssignments) unsubProjectAssignments();
+    };
+  }, []);
+
+  // Merge context resourceAllocations with liveAssignedHours snapshot
+  const activeAllocations = useMemo(() => {
+    const source =
+      liveAssignedHours.length > 0 ? liveAssignedHours : resourceAllocations || [];
+    return source.filter((item) => {
+      try {
+        const saved = localStorage.getItem('bim_deleted_members_v1');
+        if (saved) {
+          const deletedSet = new Set<string>(JSON.parse(saved));
+          const empId = (item.employeeId || item.memberId || '').trim().toLowerCase();
+          const empIdStripped = empId.replace(/^emp-/, '');
+          const email = (item.memberEmail || item.assignedToEmail || '').trim().toLowerCase();
+          const name = (item.employeeName || '').trim().toLowerCase();
+          if (
+            (empId && deletedSet.has(empId)) ||
+            (empIdStripped && deletedSet.has(empIdStripped)) ||
+            (email && deletedSet.has(email)) ||
+            (name && deletedSet.has(name))
+          ) {
+            return false;
+          }
+        }
+      } catch {}
+      return true;
+    });
+  }, [liveAssignedHours, resourceAllocations]);
+
+  // Aggregate total Assigned Hours (H_assigned) for a target project
+  const getProjectAssignedHours = (project: BimProject): number => {
+    const targetNameKey = normalizeProjectNameKey(project.name);
+    return activeAllocations
+      .filter(
+        (alloc) =>
+          matchProjectId(alloc.projectId, project.id) ||
+          (targetNameKey &&
+            alloc.projectName &&
+            normalizeProjectNameKey(alloc.projectName) === targetNameKey)
+      )
+      .reduce((sum, alloc) => sum + (Number(alloc.assignedHours) || 0), 0);
+  };
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [disciplineFilter, setDisciplineFilter] = useState<string>('all');
@@ -287,6 +429,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               <option value="Façade / Envelope" className="bg-slate-900">Façade / Envelope</option>
               <option value="Coordination & QA" className="bg-slate-900">Coordination & QA</option>
               <option value="AI & Automation" className="bg-slate-900">AI & Automation</option>
+              <option value="Estimation" className="bg-slate-900">Estimation</option>
             </select>
           </div>
         </div>
@@ -356,13 +499,14 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 ) : (
                   filteredProjects.map((project) => {
                     const completed = getProjectCompletedHours(project.id);
+                    const assignedHours = getProjectAssignedHours(project);
                     const estimated = Number(project.totalEstimatedHours) || 0;
-                    const remainingHours = estimated - completed;
+                    const remainingHours = estimated - assignedHours;
                     const pct = estimated > 0
-                      ? Math.round((completed / estimated) * 100)
-                      : completed > 0 ? 100 : 0;
-                    const isOver = completed > estimated && estimated > 0;
-                    const isZeroEstOver = estimated === 0 && completed > 0;
+                      ? Math.round((assignedHours / estimated) * 100)
+                      : assignedHours > 0 ? 100 : 0;
+                    const isOver = assignedHours > estimated && estimated > 0;
+                    const isZeroEstOver = estimated === 0 && assignedHours > 0;
                     const plannedDate = project.plannedDeliveryDate || project.targetCompletionDate;
                     const actualDate = project.actualDeliveredDate;
                     const varianceInfo = calculateDeliveryVariance(plannedDate, actualDate, project.status);
@@ -646,7 +790,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                               <div className="w-14 bg-slate-800 h-1.5 rounded-full overflow-hidden">
                                 <div
                                   className={`h-full ${isOver || isZeroEstOver ? 'bg-amber-500' : 'bg-blue-500'}`}
-                                  style={{ width: `${Math.min(100, pct)}%` }}
+                                  style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
                                 />
                               </div>
                               <span className={`text-[11px] font-bold ${isOver || isZeroEstOver ? 'text-amber-400' : 'text-slate-300'}`}>
@@ -654,10 +798,21 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                               </span>
                             </div>
                             <div className="text-[10px] font-mono text-slate-400 whitespace-nowrap">
-                              Rem:{' '}
-                              <span className={remainingHours < 0 ? 'text-amber-400 font-semibold' : 'text-slate-300 font-semibold'}>
-                                {remainingHours.toFixed(1)}h
-                              </span>
+                              {remainingHours < 0 ? (
+                                <>
+                                  Over:{' '}
+                                  <span className="text-amber-400 font-semibold">
+                                    {Math.abs(remainingHours).toFixed(1)}h
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  Rem:{' '}
+                                  <span className="text-slate-300 font-semibold">
+                                    {remainingHours.toFixed(1)}h
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                         </td>

@@ -395,6 +395,7 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
               <option value="Façade / Envelope">Façade / Envelope</option>
               <option value="Coordination & QA">Coordination & QA</option>
               <option value="AI & Automation">AI & Automation</option>
+              <option value="Estimation">Estimation</option>
             </select>
           </div>
 

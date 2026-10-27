@@ -481,6 +481,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
                 <option value="Coordination & QA">Coordination & QA</option>
                 <option value="Fire Protection">Fire Protection</option>
                 <option value="AI & Automation">AI & Automation</option>
+                <option value="Estimation">Estimation</option>
               </select>
             </div>
 

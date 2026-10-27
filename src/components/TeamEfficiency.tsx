@@ -10,7 +10,8 @@ export const PRIMARY_DISCIPLINES = [
   "Fire Protection",
   "Façade / Envelope",
   "Coordination & QA",
-  "AI & Automation" // Added option
+  "AI & Automation",
+  "Estimation"
 ];
 
 export const TeamEfficiency: React.FC<React.ComponentProps<typeof EmployeeDirectory>> = (props) => {
