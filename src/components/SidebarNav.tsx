@@ -22,6 +22,7 @@ import {
   resolveSecurityRole,
   getQuickActionPermissions,
   isTabAllowedForRole,
+  cleanProjectName,
 } from '../context/BimDataContext';
 import { useOptionalAuth } from '../auth/AuthContext';
 import { ViewTab } from '../types';
@@ -170,7 +171,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
             <option value="all">All Projects ({projects.length} Active)</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.code} - {p.name}
+                {cleanProjectName(p.name)}
               </option>
             ))}
           </select>

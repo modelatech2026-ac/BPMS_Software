@@ -25,7 +25,7 @@ import {
   Check,
   ExternalLink,
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, cleanProjectName } from '../context/BimDataContext';
 import { BimProject, ProjectFeedbackItem } from '../types';
 
 interface ProjectFeedbackProps {
@@ -401,7 +401,7 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
               <option value="all" className="bg-slate-900">All Projects ({projects.length})</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id} className="bg-slate-900">
-                  {p.name}
+                  {cleanProjectName(p.name)}
                 </option>
               ))}
             </select>
@@ -585,7 +585,7 @@ export const ProjectFeedback: React.FC<ProjectFeedbackProps> = ({ onSelectProjec
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name}
+                        {cleanProjectName(p.name)}
                       </option>
                     ))}
                   </select>

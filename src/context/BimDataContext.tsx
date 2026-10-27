@@ -563,8 +563,22 @@ export const isRecordOwnedByMember = (
   return false;
 };
 
+export const cleanProjectName = (name?: string): string => {
+  if (!name) return '';
+  const stripped = name.replace(/^BIM\s*-\s*/i, '').trim();
+  const parts = stripped.split(/\s+-\s+/);
+  if (parts.length === 2) {
+    const left = parts[0].replace(/^BIM\s*-\s*/i, '').trim();
+    const right = parts[1].replace(/^BIM\s*-\s*/i, '').trim();
+    if (left.toLowerCase() === right.toLowerCase() || /^BIM\s*-/i.test(name.trim())) {
+      return right;
+    }
+  }
+  return stripped;
+};
+
 const normalizeProjectNameKey = (name?: string): string =>
-  (name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  cleanProjectName(name).toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
   const byId = new Map<string, BimProject>();
@@ -580,27 +594,35 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
   const masterIds = new Set(INITIAL_PROJECTS.map((mp) => mp.id));
 
   // Keep any custom user-added projects that are not part of the 32 master spreadsheet projects at the top
-  const customProjects = existingList.filter(
-    (p) =>
-      p &&
-      p.id &&
-      !masterIds.has(p.id) &&
-      !masterNameKeys.has(normalizeProjectNameKey(p.name))
-  );
+  const customProjects = existingList
+    .filter(
+      (p) =>
+        p &&
+        p.id &&
+        !masterIds.has(p.id) &&
+        !masterNameKeys.has(normalizeProjectNameKey(p.name))
+    )
+    .map((p) => ({
+      ...p,
+      name: cleanProjectName(p.name),
+    }));
 
   // Build the 32 master projects in exact Resource Allocation Sheet order
   const masterMerged = INITIAL_PROJECTS.map((masterProj) => {
     const matched =
       byId.get(masterProj.id) || byName.get(normalizeProjectNameKey(masterProj.name));
     if (!matched) {
-      return masterProj;
+      return {
+        ...masterProj,
+        name: cleanProjectName(masterProj.name),
+      };
     }
     return {
       ...masterProj,
       ...matched,
       id: masterProj.id,
       code: masterProj.code,
-      name: masterProj.name,
+      name: cleanProjectName(masterProj.name),
       totalEstimatedHours:
         matched.totalEstimatedHours !== undefined &&
         matched.totalEstimatedHours !== 0 &&
@@ -1693,16 +1715,21 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                       : cleanRemote.status,
                 };
               }
-              return { ...p, ...cleanRemote };
+              return {
+                ...p,
+                ...cleanRemote,
+                name: cleanProjectName(cleanRemote.name || p.name),
+              };
             });
 
             const newRemoteEntries: Array<{ proj: BimProject; createdAtMs: number }> = [];
             firestoreDocsMap.forEach((remote, id) => {
               const nKey = normalizeProjectNameKey(remote.name);
               if (!existingIds.has(id) && (!nKey || !existingNameKeys.has(nKey)) && remote.name) {
+                const cleanedName = cleanProjectName(remote.name);
                 const defaultCode =
                   remote.code ||
-                  `BIM-${remote.name
+                  `BIM-${cleanedName
                     .replace(/[^a-zA-Z0-9]/g, '')
                     .slice(0, 4)
                     .toUpperCase() || 'PRJ'}`;
@@ -1711,7 +1738,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                   proj: {
                     id,
                     code: defaultCode,
-                    name: remote.name,
+                    name: cleanedName,
                     clientName: remote.clientName || 'Enterprise Client',
                     buildingType: remote.buildingType || 'Commercial',
                     location: remote.location || 'Global',

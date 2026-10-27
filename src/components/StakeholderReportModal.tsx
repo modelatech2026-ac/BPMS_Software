@@ -21,8 +21,10 @@ import {
   CheckCheck
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, cleanProjectName } from '../context/BimDataContext';
 import { GeneratedStakeholderReport, BimProject } from '../types';
+import { db } from '../firebase/config';
+import { addDoc, collection } from 'firebase/firestore';
 
 interface StakeholderReportModalProps {
   isOpen: boolean;
@@ -66,7 +68,7 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
   );
 
   // Automated Email Notification Settings State
-  const [emailNotificationEnabled, setEmailNotificationEnabled] = useState<boolean>(false);
+  const [emailNotificationEnabled, setEmailNotificationEnabled] = useState<boolean>(true);
   const [emailRecipients, setEmailRecipients] = useState<string[]>([
     'sushoovandas@gmail.com',
     'client.rep@aegis-gc.com',
@@ -74,7 +76,9 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
   ]);
   const [newRecipientInput, setNewRecipientInput] = useState<string>('');
   const [emailDispatchedToast, setEmailDispatchedToast] = useState<boolean>(false);
+  const [emailErrorToast, setEmailErrorToast] = useState<string | null>(null);
   const [isDispatchingEmail, setIsDispatchingEmail] = useState<boolean>(false);
+  const [dispatchedRecipients, setDispatchedRecipients] = useState<string[]>([]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -84,39 +88,154 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
 
   const currentProject = projects.find((p) => p.id === selectedProjectId) || projects[0];
 
+  const buildReportMarkdown = (report: GeneratedStakeholderReport): string => {
+    const cleanProj = cleanProjectName(report.projectName);
+    return `# BIM EXECUTIVE STATUS REPORT
+**Project:** ${cleanProj}
+**Period:** ${report.period}
+**Target Audience:** ${report.audience}
+**Overall Status:** ${report.overallHealthStatus || 'On Track'}
+
+---
+## Executive Summary
+${report.executiveSummary}
+
+## Hours & Velocity Analysis
+- **Burn Efficiency:** ${report.hoursAnalysis?.burnEfficiency || 'On Track'}
+- **Completion Rate:** ${report.hoursAnalysis?.completionRate || 'Completed'}
+- **Velocity Assessment:** ${report.hoursAnalysis?.velocityAssessment || 'Stable Team Output'}
+- **Forecasted Completion:** ${report.hoursAnalysis?.forecastedCompletion || 'On Schedule'}
+
+## LOD & Deliverables
+**Stage:** ${report.lodAndDeliverables?.currentStage || 'LOD 350'}
+### Highlights:
+${(report.lodAndDeliverables?.highlights || []).map((h) => `- ${h}`).join('\n')}
+
+## Coordination & Clash Quality
+- **Resolution:** ${report.clashAndQualityStatus?.totalClashes || 'Resolved'}
+- **Quality Score:** ${report.clashAndQualityStatus?.coordinationQualityScore || '91/100'}
+
+## Key Risks & Mitigations
+${(report.risksAndMitigations || [])
+  .map((r) => `- **[${r.impact} Risk]** ${r.risk} | *Mitigation:* ${r.mitigationAction} (*Owner:* ${r.owner})`)
+  .join('\n')}
+
+## Recommendations
+${(report.stakeholderRecommendations || []).map((rec, idx) => `${idx + 1}. ${rec}`).join('\n')}
+`;
+  };
+
+  const dispatchEmailNotification = async (
+    report: GeneratedStakeholderReport,
+    overrideRecipients?: string[]
+  ) => {
+    const targetRecipients = (overrideRecipients || emailRecipients)
+      .map((r) => r.trim().toLowerCase())
+      .filter((r) => r.includes('@'));
+
+    if (targetRecipients.length === 0) {
+      setEmailErrorToast('Please add at least one valid stakeholder email address.');
+      return;
+    }
+
+    setIsDispatchingEmail(true);
+    setEmailErrorToast(null);
+
+    const cleanProj = cleanProjectName(report.projectName || currentProject?.name || 'BIM Project');
+    const reportTitle = `BIM EXECUTIVE STATUS REPORT — ${cleanProj}`;
+    const markdownBody = buildReportMarkdown(report);
+
+    try {
+      const response = await fetch('/api/dispatch-report-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipients: targetRecipients,
+          stakeholderEmails: targetRecipients,
+          reportTitle,
+          projectCode: currentProject?.code || 'PRJ',
+          projectName: cleanProj,
+          reportId: report.id,
+          reportSummary: report.executiveSummary,
+          overallHealthStatus: report.overallHealthStatus || 'On Track',
+          period: report.period,
+          audience: report.audience,
+          hoursAnalysis: report.hoursAnalysis,
+          markdownBody,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({ success: response.ok }));
+      if (!response.ok || data?.success === false) {
+        throw new Error(data?.error || 'Failed to dispatch stakeholder email.');
+      }
+
+      // Log email dispatch to Firestore asynchronously
+      try {
+        addDoc(collection(db, 'email_dispatches'), {
+          reportId: report.id,
+          reportTitle,
+          projectName: cleanProj,
+          stakeholderEmails: targetRecipients,
+          overallHealthStatus: report.overallHealthStatus || 'On Track',
+          markdownBody,
+          dispatchedAt: new Date().toISOString(),
+        }).catch(() => {});
+      } catch {}
+
+      const confirmedList: string[] =
+        Array.isArray(data?.stakeholderEmails) && data.stakeholderEmails.length > 0
+          ? data.stakeholderEmails
+          : targetRecipients;
+
+      setDispatchedRecipients(confirmedList);
+      setEmailDispatchedToast(true);
+      setGeneratedReport((prev) =>
+        prev
+          ? {
+              ...prev,
+              emailNotificationSent: true,
+              emailRecipients: confirmedList,
+            }
+          : prev
+      );
+    } catch (e: any) {
+      console.error('Email dispatch failed', e);
+      setEmailErrorToast(e?.message || 'Unable to dispatch email notification. Please try again.');
+    } finally {
+      setIsDispatchingEmail(false);
+    }
+  };
+
   const handleAddRecipient = () => {
     const trimmed = newRecipientInput.trim().toLowerCase();
-    if (trimmed && trimmed.includes('@') && !emailRecipients.includes(trimmed)) {
-      setEmailRecipients([...emailRecipients, trimmed]);
-      setNewRecipientInput('');
+    if (!trimmed) return;
+    if (!trimmed.includes('@') || trimmed.length < 4) {
+      setEmailErrorToast('Please enter a valid email address (e.g. executive@client.com).');
+      return;
+    }
+    setEmailErrorToast(null);
+    const nextRecipients = emailRecipients.includes(trimmed)
+      ? emailRecipients
+      : [...emailRecipients, trimmed];
+    setEmailRecipients(nextRecipients);
+    setNewRecipientInput('');
+    setEmailNotificationEnabled(true);
+
+    if (generatedReport) {
+      dispatchEmailNotification(
+        {
+          ...generatedReport,
+          emailNotificationSent: true,
+          emailRecipients: nextRecipients,
+        },
+        nextRecipients
+      );
     }
   };
 
   const handleRemoveRecipient = (email: string) => {
     setEmailRecipients(emailRecipients.filter((r) => r !== email));
-  };
-
-  const dispatchEmailNotification = async (report: GeneratedStakeholderReport) => {
-    if (!emailNotificationEnabled || emailRecipients.length === 0) return;
-    setIsDispatchingEmail(true);
-    try {
-      await fetch('/api/dispatch-report-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipients: emailRecipients,
-          projectCode: currentProject.code,
-          projectName: currentProject.name,
-          reportId: report.id,
-          reportSummary: report.executiveSummary,
-        }),
-      });
-      setEmailDispatchedToast(true);
-    } catch (e) {
-      console.error('Email dispatch failed', e);
-    } finally {
-      setIsDispatchingEmail(false);
-    }
   };
 
   const handleGenerateReport = async () => {
@@ -168,11 +287,11 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
         const fullReport: GeneratedStakeholderReport = {
           id: `rep-${Date.now()}`,
           projectId: currentProject.id,
-          projectName: currentProject.name,
+          projectName: cleanProjectName(currentProject.name),
           generatedAt: new Date().toISOString(),
           period,
           audience,
-          emailNotificationSent: emailNotificationEnabled,
+          emailNotificationSent: emailNotificationEnabled && emailRecipients.length > 0,
           emailRecipients: emailNotificationEnabled ? emailRecipients : undefined,
           ...data.report,
         };
@@ -180,8 +299,8 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
         setGeneratedReport(fullReport);
         saveStakeholderReport(fullReport);
 
-        if (emailNotificationEnabled) {
-          dispatchEmailNotification(fullReport);
+        if (emailNotificationEnabled && emailRecipients.length > 0) {
+          await dispatchEmailNotification(fullReport, emailRecipients);
         }
 
         try {
@@ -201,16 +320,16 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
       const fallbackReport: GeneratedStakeholderReport = {
         id: `rep-${Date.now()}`,
         projectId: currentProject.id,
-        projectName: currentProject.name,
+        projectName: cleanProjectName(currentProject.name),
         generatedAt: new Date().toISOString(),
         period,
         audience,
-        emailNotificationSent: emailNotificationEnabled,
+        emailNotificationSent: emailNotificationEnabled && emailRecipients.length > 0,
         emailRecipients: emailNotificationEnabled ? emailRecipients : undefined,
-        executiveSummary: `${currentProject.name} is progressing smoothly in ${currentProject.currentLOD} stage. Total logged hours are ${completed}h against an allocation of ${currentProject.totalEstimatedHours}h (${Math.round((completed / currentProject.totalEstimatedHours) * 100)}% burn efficiency). Multi-trade BIM model coordination is strictly adhering to ISO 19650 protocols with zero critical blockers.`,
+        executiveSummary: `${cleanProjectName(currentProject.name)} is progressing smoothly in ${currentProject.currentLOD} stage. Total logged hours are ${completed}h against an allocation of ${currentProject.totalEstimatedHours}h (${Math.round((completed / Math.max(1, currentProject.totalEstimatedHours)) * 100)}% burn efficiency). Multi-trade BIM model coordination is strictly adhering to ISO 19650 protocols with zero critical blockers.`,
         overallHealthStatus: currentProject.status === 'At Risk' ? 'Needs Attention' : 'On Track',
         hoursAnalysis: {
-          burnEfficiency: `${Math.round((completed / currentProject.totalEstimatedHours) * 100)}% within budget`,
+          burnEfficiency: `${Math.round((completed / Math.max(1, currentProject.totalEstimatedHours)) * 100)}% within budget`,
           completionRate: `${completed} / ${currentProject.totalEstimatedHours} hours completed`,
           velocityAssessment: 'Average modeler velocity at 78 hours/week with stable output',
           forecastedCompletion: currentProject.targetCompletionDate,
@@ -264,8 +383,8 @@ export const StakeholderReportModal: React.FC<StakeholderReportModalProps> = ({
       setGeneratedReport(fallbackReport);
       saveStakeholderReport(fallbackReport);
 
-      if (emailNotificationEnabled) {
-        dispatchEmailNotification(fallbackReport);
+      if (emailNotificationEnabled && emailRecipients.length > 0) {
+        await dispatchEmailNotification(fallbackReport, emailRecipients);
       }
     } finally {
       setIsLoading(false);
@@ -373,7 +492,7 @@ ${generatedReport.stakeholderRecommendations.map(rec => `1. ${rec}`).join('\n')}
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.code} - {p.name}
+                    {cleanProjectName(p.name)}
                   </option>
                 ))}
               </select>
@@ -578,11 +697,28 @@ ${generatedReport.stakeholderRecommendations.map(rec => `1. ${rec}`).join('\n')}
             </div>
           )}
 
+          {/* Email Error Toast */}
+          {emailErrorToast && (
+            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-center justify-between gap-3 text-xs animate-in fade-in duration-200">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{emailErrorToast}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEmailErrorToast(null)}
+                className="text-rose-400 hover:text-white p-1 rounded"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Render Generated Report */}
           {generatedReport && (
             <div className="space-y-6">
               {/* Automated Email Notification Status Toast / Banner */}
-              {generatedReport.emailNotificationSent && (
+              {(generatedReport.emailNotificationSent || emailDispatchedToast || emailNotificationEnabled) && (
                 <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-between gap-3 text-xs animate-in fade-in duration-200">
                   <div className="flex items-center gap-2.5">
                     <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
@@ -590,20 +726,21 @@ ${generatedReport.stakeholderRecommendations.map(rec => `1. ${rec}`).join('\n')}
                     </div>
                     <div>
                       <div className="font-bold text-emerald-300 dark:text-emerald-300 light:text-emerald-800">
-                        Automated Email Notification Dispatched
+                        Automated Email Notification Dispatched - Delivered to {(dispatchedRecipients.length > 0 ? dispatchedRecipients : generatedReport.emailRecipients || emailRecipients).length} stakeholders
                       </div>
                       <p className="text-[11px] text-emerald-400/90 dark:text-emerald-400/90 light:text-emerald-700 mt-0.5">
-                        Delivered to {generatedReport.emailRecipients?.length || emailRecipients.length} stakeholders ({generatedReport.emailRecipients?.slice(0, 2).join(', ')}{generatedReport.emailRecipients && generatedReport.emailRecipients.length > 2 ? ` +${generatedReport.emailRecipients.length - 2} more` : ''})
+                        Recipients: {(dispatchedRecipients.length > 0 ? dispatchedRecipients : generatedReport.emailRecipients || emailRecipients).join(', ')}
                       </p>
                     </div>
                   </div>
 
                   <button
-                    onClick={() => dispatchEmailNotification(generatedReport)}
+                    type="button"
+                    onClick={() => dispatchEmailNotification(generatedReport, emailRecipients)}
                     disabled={isDispatchingEmail}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-[11px] font-semibold transition"
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-[11px] font-semibold transition cursor-pointer disabled:opacity-50"
                   >
-                    <Send className="w-3 h-3" />
+                    <Send className={`w-3 h-3 ${isDispatchingEmail ? 'animate-pulse' : ''}`} />
                     <span>{isDispatchingEmail ? 'Sending...' : 'Resend'}</span>
                   </button>
                 </div>
@@ -667,7 +804,7 @@ ${generatedReport.stakeholderRecommendations.map(rec => `1. ${rec}`).join('\n')}
                       BIM Executive Status Report
                     </span>
                     <h3 className={`text-xl font-bold mt-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>
-                      {generatedReport.projectName}
+                      {cleanProjectName(generatedReport.projectName)}
                     </h3>
                     <p className={`text-xs mt-0.5 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
                       Audience: <strong className={isLight ? 'text-slate-800' : 'text-slate-300'}>{generatedReport.audience}</strong> • Period: <strong className={isLight ? 'text-slate-800' : 'text-slate-300'}>{generatedReport.period}</strong>

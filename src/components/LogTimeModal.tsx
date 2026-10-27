@@ -10,7 +10,7 @@ import {
   FileText
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useBimData, isUserSuperAdmin, toLocalIsoDate } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin, toLocalIsoDate, cleanProjectName } from '../context/BimDataContext';
 import { generateRequestDocId } from '../auth/roleSync';
 import { Discipline, ActivityType, LODLevel } from '../types';
 
@@ -406,7 +406,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name}
+                    {cleanProjectName(p.name)}
                   </option>
                 ))}
               </select>

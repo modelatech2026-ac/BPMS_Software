@@ -24,7 +24,7 @@ import {
   Building,
   Briefcase
 } from 'lucide-react';
-import { useBimData, isUserSuperAdmin, getCurrentWeekRange } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin, getCurrentWeekRange, cleanProjectName } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import {
   collection,
@@ -1373,7 +1373,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <option value="all" className="bg-slate-900">All Projects ({projects.length})</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id} className="bg-slate-900">
-                  {p.name}
+                  {cleanProjectName(p.name)}
                 </option>
               ))}
             </select>
@@ -1594,12 +1594,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                             >
                               {!projects.some((p) => p.id === resolvedProjectId) && resolvedProjectId && (
                                 <option value={resolvedProjectId} className="bg-slate-900">
-                                  {resolvedProjectName}
+                                  {cleanProjectName(resolvedProjectName)}
                                 </option>
                               )}
                               {projects.map((p) => (
                                 <option key={p.id} value={p.id} className="bg-slate-900">
-                                  {p.name}
+                                  {cleanProjectName(p.name)}
                                 </option>
                               ))}
                             </select>
@@ -1607,8 +1607,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         ) : (
                           <div className="flex items-center gap-1.5 font-semibold text-blue-300 text-xs">
                             <Building className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                            <span className="truncate max-w-[200px]" title={resolvedProjectName}>
-                              {resolvedProjectName}
+                            <span className="truncate max-w-[200px]" title={cleanProjectName(resolvedProjectName)}>
+                              {cleanProjectName(resolvedProjectName)}
                             </span>
                           </div>
                         )}
@@ -1810,7 +1810,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name}
+                        {cleanProjectName(p.name)}
                       </option>
                     ))}
                   </select>

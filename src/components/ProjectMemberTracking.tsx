@@ -28,7 +28,7 @@ import {
   Check,
   ArrowUpRight
 } from 'lucide-react';
-import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
+import { useBimData, isUserSuperAdmin, cleanProjectName } from '../context/BimDataContext';
 import { Employee, BimProject, Discipline, DailyWorkLog } from '../types';
 import { EditEmployeeModal } from './EditEmployeeModal';
 
@@ -372,7 +372,7 @@ export const ProjectMemberTracking: React.FC<ProjectMemberTrackingProps> = ({
               <option value="all">All Projects ({projects.length})</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.code} - {p.name}
+                  {cleanProjectName(p.name)}
                 </option>
               ))}
             </select>

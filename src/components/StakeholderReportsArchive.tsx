@@ -15,7 +15,7 @@ import {
   Send,
   CheckCheck
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, cleanProjectName } from '../context/BimDataContext';
 import { GeneratedStakeholderReport } from '../types';
 
 interface StakeholderReportsArchiveProps {
@@ -102,7 +102,7 @@ ${rep.nextPeriodPriorities?.map((p) => `- ${p}`).join('\n')}
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id} className="bg-slate-900">
-                  {p.name}
+                  {cleanProjectName(p.name)}
                 </option>
               ))}
             </select>

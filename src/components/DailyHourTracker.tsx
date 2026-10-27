@@ -26,6 +26,7 @@ import {
   getEffectiveLogDate,
   toLocalIsoDate,
   isUserSuperAdmin,
+  cleanProjectName,
 } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import { collection, deleteDoc, doc, getDocs, onSnapshot } from 'firebase/firestore';
@@ -1291,7 +1292,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <option value="all">All Projects</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.code} - {p.name}
+                    {cleanProjectName(p.name)}
                   </option>
                 ))}
               </select>
@@ -1654,7 +1655,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name}
+                        {cleanProjectName(p.name)}
                       </option>
                     ))}
                   </select>
