@@ -1025,10 +1025,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       setFormError('Due date cannot be earlier than start date.');
       return;
     }
-    if (!formTargetZone.trim()) {
-      setFormError('Target Model Element / Zone ID is required.');
-      return;
-    }
 
     const proj = projects.find((p) => p.id === formProject || matchProjectId(p.id, formProject)) || projects[0];
     const emp = employees.find((e) => e.id === formEmployee) || employees[0];
@@ -1056,10 +1052,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       memberEmail: emp.email,
       assignedToEmail: emp.email,
       discipline: formDiscipline,
-      lod: formLOD,
       projectPhase: formPhase,
       taskType: formTaskType,
-      targetElementOrZone: formTargetZone.trim(),
       assignedHours: Number(formHours),
       viewFrequency,
       startDate: formStartDate,
@@ -1807,7 +1801,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    Target BIM Project
+                    Project
                   </label>
                   <select
                     value={formProject}
@@ -1831,60 +1825,40 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     onChange={(e) => handleMemberSelect(formDiscipline, e.target.value)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {activeTeamMembers.map((e) => {
-                      const weekly = getEmployeeWeeklyHours[e.id] || 0;
-                      const isOver = weekly >= 40;
-                      return (
-                        <option key={e.id} value={e.id}>
-                          {e.name} ({e.role}) — {weekly}h / 40h {isOver ? '⚠️' : '✅'}
-                        </option>
-                      );
-                    })}
+                    {activeTeamMembers.map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.name} ({e.role})
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
 
-              {/* Task Type & Target Zone Element */}
+              {/* Task Type */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Task Type
+                </label>
+                <select
+                  value={formTaskType}
+                  onChange={(e) => setFormTaskType(e.target.value as BimTaskType)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="3D Modeling">3D Modeling</option>
+                  <option value="Clash Detection">Clash Detection</option>
+                  <option value="Parameter Population">Parameter Population</option>
+                  <option value="2D Sheet Generation">2D Sheet Generation</option>
+                  <option value="QC/QA Audit">QC/QA Audit</option>
+                  <option value="COBie Data Entry">COBie Data Entry</option>
+                  <option value="AI & Automation">AI & Automation</option>
+                </select>
+              </div>
+
+              {/* Discipline & Phase */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    BIM Task Type
-                  </label>
-                  <select
-                    value={formTaskType}
-                    onChange={(e) => setFormTaskType(e.target.value as BimTaskType)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="3D Modeling">3D Modeling</option>
-                    <option value="Clash Detection">Clash Detection</option>
-                    <option value="Parameter Population">Parameter Population</option>
-                    <option value="2D Sheet Generation">2D Sheet Generation</option>
-                    <option value="QC/QA Audit">QC/QA Audit</option>
-                    <option value="COBie Data Entry">COBie Data Entry</option>
-                    <option value="AI & Automation">AI & Automation</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">
-                    Target Model / Element / Zone ID
-                  </label>
-                  <input
-                    type="text"
-                    value={formTargetZone}
-                    onChange={(e) => setFormTargetZone(e.target.value)}
-                    placeholder="e.g. MOD-MEP-LVL02-ZONE-B"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Discipline, LOD & Phase */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">
-                    BIM Discipline
+                    Discipline
                   </label>
                   <select
                     value={formDiscipline}
@@ -1897,22 +1871,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     <option value="Infrastructure">Infrastructure</option>
                     <option value="Coordination & QA">Coordination & QA</option>
                     <option value="AI & Automation">AI & Automation</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">
-                    LOD Level
-                  </label>
-                  <select
-                    value={formLOD}
-                    onChange={(e) => setFormLOD(e.target.value as any)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="LOD 200">LOD 200</option>
-                    <option value="LOD 300">LOD 300</option>
-                    <option value="LOD 350">LOD 350</option>
-                    <option value="LOD 400">LOD 400</option>
                   </select>
                 </div>
 
@@ -1978,7 +1936,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               {/* Notes */}
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">
-                  Deliverable Notes / Model Specifics
+                  Deliverable Specifies
                 </label>
                 <textarea
                   rows={2}

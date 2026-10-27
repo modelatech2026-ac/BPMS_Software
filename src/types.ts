@@ -308,10 +308,10 @@ export interface ResourceAllocationItem {
   memberEmail?: string;
   assignedToEmail?: string;
   discipline: 'BIM - ACS' | 'Architectural' | 'Structural' | 'MEP' | 'Infrastructure' | 'Coordination & QA' | 'AI & Automation' | Discipline;
-  lod: 'LOD 200' | 'LOD 300' | 'LOD 350' | 'LOD 400';
+  lod?: 'LOD 200' | 'LOD 300' | 'LOD 350' | 'LOD 400';
   projectPhase: 'Schematic Design' | 'Design Development' | 'Construction Documentation' | 'Fabrication / As-Built';
   taskType: BimTaskType;
-  targetElementOrZone: string; // e.g. MOD-MEP-LVL02-ZONE-B
+  targetElementOrZone?: string; // e.g. MOD-MEP-LVL02-ZONE-B
   assignedHours: number;
   viewFrequency: 'Daily' | 'Weekly';
   startDate: string;
