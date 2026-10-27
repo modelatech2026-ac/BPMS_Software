@@ -518,20 +518,6 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
 
           <div>
             <label className="block text-slate-400 font-medium mb-1">
-              Task Details
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. Operating Room Ceiling Boom & Duct Clearance Detailing"
-              value={taskName}
-              onChange={(e) => setTaskName(e.target.value)}
-              className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-slate-400 font-medium mb-1">
               Work Notes & Technical Details
             </label>
             <textarea
