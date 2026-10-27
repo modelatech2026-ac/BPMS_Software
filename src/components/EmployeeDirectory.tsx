@@ -56,10 +56,7 @@ interface EfficiencyMatrixRow {
   employeeEmail: string;
   discipline: string;
   employeeObj?: Employee;
-  projectId: string;
-  projectCode: string;
-  projectName: string;
-  projectObj?: BimProject;
+  projectIds: string[];
   loggedHours: number;
   assignedHours: number;
   varianceHours: number;
@@ -69,7 +66,6 @@ interface EfficiencyMatrixRow {
 
 export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
   onOpenNewEmployeeModal,
-  onSelectProject,
 }) => {
   const {
     employees,
@@ -91,9 +87,9 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
   const [tierFilter, setTierFilter] = useState<'all' | EfficiencyTier>('all');
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
 
-  // Build real-time efficiency rows from assigned_hours (resourceAllocations), daily_logs (activeWorkLogs), and employees
+  // Build real-time consolidated efficiency rows per team member from assigned_hours (resourceAllocations), daily_logs (activeWorkLogs), and employees
   const efficiencyRows = useMemo<EfficiencyMatrixRow[]>(() => {
-    const rowMap = new Map<
+    const memberMap = new Map<
       string,
       {
         employeeId: string;
@@ -102,14 +98,15 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         employeeEmail: string;
         discipline: string;
         employeeObj?: Employee;
-        projectId: string;
-        projectCode: string;
-        projectName: string;
-        projectObj?: BimProject;
+        projectIds: Set<string>;
         assignedHours: number;
         hasExplicitAllocation: boolean;
       }
     >();
+
+    const activeEmployees = (employees || []).filter(
+      (e) => !e.isDeleted && e.status !== 'deleted'
+    );
 
     const resolveEmployee = (empId?: string, email?: string, name?: string): Employee | undefined => {
       const cleanId = (empId || '').trim();
@@ -117,7 +114,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
       const cleanEmail = (email || '').trim().toLowerCase();
       const cleanName = (name || '').trim().toLowerCase();
 
-      return (employees || []).find((e) => {
+      return activeEmployees.find((e) => {
         const eIdStripped = (e.id || '').replace(/^emp-/, '');
         const eEmail = (e.email || '').trim().toLowerCase();
         const eName = (e.name || '').trim().toLowerCase();
@@ -137,119 +134,137 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
       );
     };
 
-    const makeCanonicalEmpKey = (emp?: Employee, rawId?: string, rawEmail?: string, rawName?: string) => {
+    const findExistingMemberKey = (emp?: Employee, rawId?: string, rawEmail?: string, rawName?: string): string => {
+      const targetId = (emp?.id || rawId || '').trim();
+      const targetStripped = targetId.replace(/^emp-/, '').toLowerCase();
+      const targetEmail = (emp?.email || rawEmail || '').trim().toLowerCase();
+      const targetName = (emp?.name || rawName || '').trim().toLowerCase();
+
+      for (const [key, entry] of memberMap.entries()) {
+        const entryIdStripped = (entry.employeeId || '').replace(/^emp-/, '').toLowerCase();
+        const entryEmail = (entry.employeeEmail || '').trim().toLowerCase();
+        const entryName = (entry.employeeName || '').trim().toLowerCase();
+        if (
+          (targetStripped && entryIdStripped && targetStripped === entryIdStripped) ||
+          (targetEmail && entryEmail && targetEmail === entryEmail) ||
+          (targetName && entryName && targetName === entryName)
+        ) {
+          return key;
+        }
+      }
+
       if (emp?.id) return emp.id;
-      if (rawEmail && rawEmail.trim()) return rawEmail.trim().toLowerCase();
-      if (rawId && rawId.trim()) return rawId.trim().replace(/^emp-/, '');
-      return (rawName || 'unknown').trim().toLowerCase();
+      if (targetEmail) return targetEmail;
+      if (targetStripped) return targetStripped;
+      return targetName || `member-${memberMap.size}`;
     };
 
-    // 1. Add all real-time allocations from assigned_hours / project_assignments
-    (resourceAllocations || []).forEach((alloc) => {
-      const emp = resolveEmployee(alloc.employeeId, alloc.memberEmail, alloc.employeeName);
-      const proj = resolveProject(alloc.projectId, alloc.projectName);
-      const empKey = makeCanonicalEmpKey(emp, alloc.employeeId, alloc.memberEmail, alloc.employeeName);
-      const projKey = proj?.id || alloc.projectId || alloc.projectName || 'unassigned';
-      const compositeKey = `${empKey}__${projKey}`;
-
-      const existing = rowMap.get(compositeKey);
-      if (existing) {
-        existing.assignedHours += Number(alloc.assignedHours) || 0;
-        existing.hasExplicitAllocation = true;
-      } else {
-        rowMap.set(compositeKey, {
-          employeeId: emp?.id || alloc.employeeId || empKey,
-          employeeName: emp?.name || alloc.employeeName || 'BIM Specialist',
-          employeeRole: emp?.role || alloc.employeeRole || 'BIM Modeler',
-          employeeEmail: emp?.email || alloc.memberEmail || '',
-          discipline: emp?.primaryDiscipline || alloc.discipline || 'BIM - ACS',
-          employeeObj: emp,
-          projectId: proj?.id || alloc.projectId || '',
-          projectCode: proj?.code || 'BIM-PRJ',
-          projectName: proj?.name || alloc.projectName || 'Assigned BIM Project',
-          projectObj: proj,
-          assignedHours: Number(alloc.assignedHours) || 0,
-          hasExplicitAllocation: true,
-        });
-      }
-    });
-
-    // 2. Ensure any daily_logs / work_logs entries also appear in real time even if no allocation row existed yet
-    (activeWorkLogs || []).forEach((log) => {
-      if (log.isTestEntry) return;
-      const emp = resolveEmployee(log.employeeId, log.memberEmail || (log as any).userEmail, log.employeeName);
-      const proj = resolveProject(log.projectId, log.projectName);
-      const empKey = makeCanonicalEmpKey(
-        emp,
-        log.employeeId,
-        log.memberEmail || (log as any).userEmail,
-        log.employeeName
-      );
-      const projKey = proj?.id || log.projectId || log.projectName || 'unassigned';
-      const compositeKey = `${empKey}__${projKey}`;
-
-      if (!rowMap.has(compositeKey)) {
-        const taskAssigned =
-          proj?.tasks
-            ?.filter((t) => t.assignedEmployeeId === emp?.id)
-            .reduce((s, t) => s + (Number(t.estimatedHours) || 0), 0) || 0;
-
-        rowMap.set(compositeKey, {
-          employeeId: emp?.id || log.employeeId || empKey,
-          employeeName: emp?.name || log.employeeName || 'BIM Specialist',
-          employeeRole: emp?.role || 'BIM Modeler',
-          employeeEmail: emp?.email || log.memberEmail || (log as any).userEmail || '',
-          discipline: emp?.primaryDiscipline || log.discipline || 'BIM - ACS',
-          employeeObj: emp,
-          projectId: proj?.id || log.projectId || '',
-          projectCode: proj?.code || 'BIM-PRJ',
-          projectName: proj?.name || log.projectName || 'BIM Project',
-          projectObj: proj,
-          assignedHours: taskAssigned > 0 ? taskAssigned : emp?.weeklyCapacityHours || 40,
-          hasExplicitAllocation: false,
-        });
-      }
-    });
-
-    // 3. Ensure all registered employees in the directory are represented
-    (employees || []).forEach((emp) => {
-      const alreadyHasRow = Array.from(rowMap.values()).some(
-        (r) =>
-          r.employeeId === emp.id ||
-          (emp.email && r.employeeEmail.toLowerCase() === emp.email.toLowerCase())
-      );
-
-      if (!alreadyHasRow) {
-        const firstProjId = emp.activeProjectIds?.[0] || projects[0]?.id || '';
-        const proj = resolveProject(firstProjId);
-        const compositeKey = `${emp.id}__${proj?.id || 'general'}`;
-        rowMap.set(compositeKey, {
+    // 1. Seed all active registered employees so every team member appears at most once
+    activeEmployees.forEach((emp) => {
+      const empKey = findExistingMemberKey(emp, emp.id, emp.email, emp.name);
+      if (!memberMap.has(empKey)) {
+        memberMap.set(empKey, {
           employeeId: emp.id,
           employeeName: emp.name,
           employeeRole: emp.role,
           employeeEmail: emp.email,
           discipline: emp.primaryDiscipline || emp.discipline || 'BIM - ACS',
           employeeObj: emp,
-          projectId: proj?.id || '',
-          projectCode: proj?.code || 'BIM-CAP',
-          projectName: proj?.name || 'General BIM Production',
-          projectObj: proj,
-          assignedHours: emp.weeklyCapacityHours || 40,
+          projectIds: new Set(emp.activeProjectIds || []),
+          assignedHours: 0,
           hasExplicitAllocation: false,
         });
       }
     });
 
-    // Compute logged hours, variance, efficiency %, and tier for each row
-    return Array.from(rowMap.entries()).map(([rowKey, item]) => {
+    // 2. Aggregate all real-time allocations from assigned_hours / project_assignments per member
+    (resourceAllocations || []).forEach((alloc) => {
+      const proj = resolveProject(alloc.projectId, alloc.projectName);
+      const resolvedProjId = proj?.id || alloc.projectId || '';
+      if (projectFilter !== 'all' && !matchProjectId(resolvedProjId, projectFilter)) {
+        return;
+      }
+
+      const emp = resolveEmployee(
+        alloc.employeeId || alloc.memberId || alloc.assignedTo,
+        alloc.memberEmail || alloc.assignedToEmail,
+        alloc.employeeName || alloc.assignedToName || alloc.memberName
+      );
+      const empKey = findExistingMemberKey(
+        emp,
+        alloc.employeeId || alloc.memberId || alloc.assignedTo,
+        alloc.memberEmail || alloc.assignedToEmail,
+        alloc.employeeName || alloc.assignedToName || alloc.memberName
+      );
+
+      const existing = memberMap.get(empKey);
+      if (existing) {
+        existing.assignedHours += Number(alloc.assignedHours) || 0;
+        existing.hasExplicitAllocation = true;
+        if (resolvedProjId) existing.projectIds.add(resolvedProjId);
+      } else {
+        memberMap.set(empKey, {
+          employeeId: emp?.id || alloc.employeeId || empKey,
+          employeeName: emp?.name || alloc.employeeName || alloc.assignedToName || 'BIM Specialist',
+          employeeRole: emp?.role || alloc.employeeRole || 'BIM Modeler',
+          employeeEmail: emp?.email || alloc.memberEmail || alloc.assignedToEmail || '',
+          discipline: emp?.primaryDiscipline || alloc.discipline || 'BIM - ACS',
+          employeeObj: emp,
+          projectIds: new Set(resolvedProjId ? [resolvedProjId] : []),
+          assignedHours: Number(alloc.assignedHours) || 0,
+          hasExplicitAllocation: true,
+        });
+      }
+    });
+
+    // 3. Ensure any daily_logs / work_logs entries also sync to the member's consolidated row
+    (activeWorkLogs || []).forEach((log) => {
+      if (log.isTestEntry) return;
+      const proj = resolveProject(log.projectId, log.projectName);
+      const resolvedProjId = proj?.id || log.projectId || '';
+      if (projectFilter !== 'all' && !matchProjectId(resolvedProjId, projectFilter)) {
+        return;
+      }
+
+      const emp = resolveEmployee(log.employeeId, log.memberEmail || (log as any).userEmail, log.employeeName);
+      const empKey = findExistingMemberKey(
+        emp,
+        log.employeeId,
+        log.memberEmail || (log as any).userEmail,
+        log.employeeName
+      );
+
+      const existing = memberMap.get(empKey);
+      if (existing) {
+        if (resolvedProjId) existing.projectIds.add(resolvedProjId);
+      } else {
+        memberMap.set(empKey, {
+          employeeId: emp?.id || log.employeeId || empKey,
+          employeeName: emp?.name || log.employeeName || 'BIM Specialist',
+          employeeRole: emp?.role || 'BIM Modeler',
+          employeeEmail: emp?.email || log.memberEmail || (log as any).userEmail || '',
+          discipline: emp?.primaryDiscipline || log.discipline || 'BIM - ACS',
+          employeeObj: emp,
+          projectIds: new Set(resolvedProjId ? [resolvedProjId] : []),
+          assignedHours: 0,
+          hasExplicitAllocation: false,
+        });
+      }
+    });
+
+    // 4. Compute consolidated logged hours, assigned hours, variance, efficiency %, and tier once per member
+    const rows: EfficiencyMatrixRow[] = [];
+
+    memberMap.forEach((item, rowKey) => {
       const loggedHours = (activeWorkLogs || [])
         .filter((w) => {
           if (w.isTestEntry) return false;
-          const sameProj = item.projectId ? matchProjectId(w.projectId, item.projectId) : true;
-          if (!sameProj) return false;
+          if (projectFilter !== 'all' && !matchProjectId(w.projectId, projectFilter)) {
+            return false;
+          }
 
-          const itemEmpIdStripped = (item.employeeId || '').replace(/^emp-/, '');
-          const wEmpIdStripped = (w.employeeId || '').replace(/^emp-/, '');
+          const itemEmpIdStripped = (item.employeeId || '').replace(/^emp-/, '').toLowerCase();
+          const wEmpIdStripped = (w.employeeId || '').replace(/^emp-/, '').toLowerCase();
           const matchId =
             Boolean(item.employeeId) &&
             (w.employeeId === item.employeeId ||
@@ -267,13 +282,25 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         })
         .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
 
-      const assignedHours = Number(item.assignedHours) || 0;
+      if (
+        projectFilter !== 'all' &&
+        !item.hasExplicitAllocation &&
+        loggedHours === 0 &&
+        !Array.from(item.projectIds).some((pid) => matchProjectId(pid, projectFilter))
+      ) {
+        return;
+      }
+
+      const fallbackCapacity = item.employeeObj?.weeklyCapacityHours || 40;
+      const assignedHours = item.hasExplicitAllocation
+        ? Number(item.assignedHours) || 0
+        : fallbackCapacity;
       const varianceHours = Number((loggedHours - assignedHours).toFixed(1));
       const efficiencyPct =
         assignedHours > 0 ? Number(((loggedHours / assignedHours) * 100).toFixed(1)) : 0;
       const tier = getEfficiencyTier(efficiencyPct);
 
-      return {
+      rows.push({
         rowKey,
         employeeId: item.employeeId,
         employeeName: item.employeeName,
@@ -281,18 +308,17 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         employeeEmail: item.employeeEmail,
         discipline: item.discipline,
         employeeObj: item.employeeObj,
-        projectId: item.projectId,
-        projectCode: item.projectCode,
-        projectName: item.projectName,
-        projectObj: item.projectObj,
+        projectIds: Array.from(item.projectIds),
         loggedHours: Number(loggedHours.toFixed(1)),
         assignedHours: Number(assignedHours.toFixed(1)),
         varianceHours,
         efficiencyPct,
         tier,
-      };
+      });
     });
-  }, [employees, resourceAllocations, activeWorkLogs, projects]);
+
+    return rows;
+  }, [employees, resourceAllocations, activeWorkLogs, projects, projectFilter]);
 
   const filteredRows = useMemo(() => {
     return efficiencyRows.filter((row) => {
@@ -302,22 +328,17 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         row.employeeName.toLowerCase().includes(q) ||
         row.employeeRole.toLowerCase().includes(q) ||
         row.employeeEmail.toLowerCase().includes(q) ||
-        row.projectName.toLowerCase().includes(q) ||
-        row.projectCode.toLowerCase().includes(q) ||
         row.discipline.toLowerCase().includes(q) ||
         row.tier.toLowerCase().includes(q);
 
       const matchesDiscipline =
         disciplineFilter === 'all' || row.discipline === disciplineFilter;
 
-      const matchesProject =
-        projectFilter === 'all' || matchProjectId(row.projectId, projectFilter);
-
       const matchesTier = tierFilter === 'all' || row.tier === tierFilter;
 
-      return matchesSearch && matchesDiscipline && matchesProject && matchesTier;
+      return matchesSearch && matchesDiscipline && matchesTier;
     });
-  }, [efficiencyRows, searchTerm, disciplineFilter, projectFilter, tierFilter]);
+  }, [efficiencyRows, searchTerm, disciplineFilter, tierFilter]);
 
   const summaryStats = useMemo(() => {
     const totalLogged = filteredRows.reduce((s, r) => s + r.loggedHours, 0);
@@ -467,7 +488,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
             <span className="text-2xl font-bold text-emerald-400 font-mono">
               {summaryStats.starCount}
             </span>
-            <span className="text-xs text-slate-400">Allocations</span>
+            <span className="text-xs text-slate-400">Members</span>
           </div>
           <p className="text-[11px] text-slate-400 mt-1">Above 80% target efficiency</p>
         </div>
@@ -509,7 +530,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
             <span className="text-2xl font-bold text-rose-400 font-mono">
               {summaryStats.poorCount}
             </span>
-            <span className="text-xs text-slate-400">Allocations</span>
+            <span className="text-xs text-slate-400">Members</span>
           </div>
           <p className="text-[11px] text-slate-400 mt-1">Below 50% logged vs assigned threshold</p>
         </div>
@@ -525,7 +546,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Search team member, project, role, tier..."
+            placeholder="Search team member, role, tier..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className={`w-full text-xs rounded-lg pl-9 pr-3 py-2 border focus:outline-none focus:ring-2 focus:ring-blue-500 ${
@@ -609,7 +630,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         </div>
       </div>
 
-      {/* Reconstructed Team Efficiency Table */}
+      {/* Consolidated Team Efficiency Table */}
       <div
         className={`rounded-xl border overflow-hidden shadow-sm ${
           isLight ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'
@@ -619,16 +640,13 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
           <table className="w-full table-auto border-collapse text-left text-xs text-slate-300">
             <thead className="bg-slate-800/90 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-700 text-[11px]">
               <tr>
-                <th className="w-[28%] min-w-[220px] py-3.5 px-5 whitespace-nowrap align-middle">
+                <th className="w-[38%] min-w-[240px] py-3.5 px-5 whitespace-nowrap align-middle">
                   TEAM MANAGEMENT
                 </th>
-                <th className="w-[20%] min-w-[170px] py-3.5 px-5 whitespace-nowrap align-middle">
-                  PROJECT
-                </th>
-                <th className="w-[32%] min-w-[300px] py-3.5 px-5 whitespace-normal break-words leading-relaxed align-middle">
+                <th className="w-[34%] min-w-[280px] py-3.5 px-5 whitespace-normal break-words leading-relaxed align-middle">
                   LOGGED HOURS - ASSIGNED HOURS
                 </th>
-                <th className="w-[20%] min-w-[190px] py-3.5 px-5 whitespace-nowrap align-middle">
+                <th className="w-[28%] min-w-[220px] py-3.5 px-5 whitespace-nowrap align-middle">
                   EFFICIENCY (%)
                 </th>
               </tr>
@@ -636,7 +654,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
             <tbody className="divide-y divide-slate-800">
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-14 text-center text-slate-500">
+                  <td colSpan={3} className="py-14 text-center text-slate-500">
                     <Users className="w-8 h-8 text-slate-600 mx-auto mb-2" />
                     <p className="text-sm font-semibold text-slate-400">
                       No team efficiency records match the active filters.
@@ -702,36 +720,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
                         </div>
                       </td>
 
-                      {/* Column 2: PROJECT */}
-                      <td className="py-3.5 px-5 align-middle">
-                        <div className="flex items-center gap-2">
-                          <Building className="w-4 h-4 text-blue-400 shrink-0" />
-                          <div className="min-w-0">
-                            {row.projectObj && onSelectProject ? (
-                              <button
-                                type="button"
-                                onClick={() => onSelectProject(row.projectObj!)}
-                                className="font-semibold text-blue-300 hover:text-blue-200 text-xs text-left truncate block max-w-[240px] transition"
-                                title={row.projectName}
-                              >
-                                {row.projectName}
-                              </button>
-                            ) : (
-                              <span
-                                className="font-semibold text-slate-200 text-xs truncate block max-w-[240px]"
-                                title={row.projectName}
-                              >
-                                {row.projectName}
-                              </span>
-                            )}
-                            <span className="text-[10px] font-mono text-slate-500">
-                              {row.projectCode}
-                            </span>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Column 3: LOGGED HOURS - ASSIGNED HOURS */}
+                      {/* Column 2: LOGGED HOURS - ASSIGNED HOURS */}
                       <td className="py-3.5 px-5 align-middle">
                         <div className="flex flex-col gap-1">
                           <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
@@ -761,9 +750,9 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
                         </div>
                       </td>
 
-                      {/* Column 4: EFFICIENCY (%) */}
+                      {/* Column 3: EFFICIENCY (%) */}
                       <td className="py-3.5 px-5 align-middle">
-                        <div className="space-y-1.5 max-w-[220px]">
+                        <div className="space-y-1.5 max-w-[240px]">
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-mono text-sm font-bold text-white">
                               {row.efficiencyPct.toFixed(1)}%
