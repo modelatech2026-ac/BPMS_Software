@@ -12,7 +12,9 @@ import {
   Plus,
   ArrowRight,
   TrendingUp,
-  ShieldCheck
+  ShieldCheck,
+  Edit3,
+  Check
 } from 'lucide-react';
 import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
 import { BimProject, Milestone, TaskItem, LODLevel } from '../types';
@@ -39,6 +41,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     updateTask,
     addTask,
     addMilestone,
+    updateProject,
     updateProjectStatus,
     currentUser,
     disciplineAssignments,
@@ -50,6 +53,9 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   const isSuperAdmin = isUserSuperAdmin(currentUser);
   const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'milestones' | 'clashes'>('overview');
   const [showAddTask, setShowAddTask] = useState(false);
+  const [isEditingDeliveryDates, setIsEditingDeliveryDates] = useState(false);
+  const [newPlannedDateValue, setNewPlannedDateValue] = useState('');
+  const [newActualDateValue, setNewActualDateValue] = useState('');
 
   // New task form
   const [taskName, setTaskName] = useState('');
@@ -258,9 +264,9 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
 
               {/* Delivery Dates & Variance Tracker */}
               {(() => {
-                const plannedDate = project.plannedDeliveryDate || project.targetCompletionDate;
-                const actualDate = project.actualDeliveredDate;
-                const varianceInfo = calculateDeliveryVariance(plannedDate, actualDate, project.status);
+                const plannedDate = liveProject.plannedDeliveryDate || liveProject.targetCompletionDate;
+                const actualDate = liveProject.actualDeliveredDate;
+                const varianceInfo = calculateDeliveryVariance(plannedDate, actualDate, liveProject.status);
                 return (
                   <div className="bg-slate-800/50 border border-slate-700/60 rounded-xl p-4 text-xs space-y-3">
                     <div className="flex items-center justify-between">
@@ -274,15 +280,47 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 text-slate-300">
-                      <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span className="text-slate-400 text-[11px] block">Planned Delivery Date:</span>
-                        <strong className="text-white text-xs">{plannedDate || 'Not specified'}</strong>
+                      <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between gap-2">
+                        <div>
+                          <span className="text-slate-400 text-[11px] block">Planned Delivery Date:</span>
+                          <strong className="text-white text-xs">{plannedDate || 'Not specified'}</strong>
+                        </div>
+                        {isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewPlannedDateValue(plannedDate || '');
+                              setNewActualDateValue(actualDate || '');
+                              setIsEditingDeliveryDates(true);
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition shrink-0"
+                            title="Edit Planned Delivery Date (Super Admin Override)"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
-                      <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span className="text-slate-400 text-[11px] block">Actual Delivered Date:</span>
-                        <strong className={actualDate ? 'text-emerald-400 text-xs' : 'text-slate-500 text-xs'}>
-                          {actualDate || 'In Progress'}
-                        </strong>
+                      <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between gap-2">
+                        <div>
+                          <span className="text-slate-400 text-[11px] block">Actual Delivered Date:</span>
+                          <strong className={actualDate ? 'text-emerald-400 text-xs' : 'text-slate-500 text-xs'}>
+                            {actualDate || 'In Progress'}
+                          </strong>
+                        </div>
+                        {isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewPlannedDateValue(plannedDate || '');
+                              setNewActualDateValue(actualDate || '');
+                              setIsEditingDeliveryDates(true);
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition shrink-0"
+                            title="Edit Actual Delivered Date (Super Admin Override)"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                       <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800">
                         <span className="text-slate-400 text-[11px] block">Schedule Status:</span>
@@ -671,6 +709,98 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Super Admin Date Override Modal */}
+      {isEditingDeliveryDates && isSuperAdmin && (
+        <div
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-[60] flex items-center justify-center p-4"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 text-slate-100 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">Super Admin Date Override</h3>
+                  <p className="text-[11px] text-slate-400">Lock protected field</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditingDeliveryDates(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-slate-400 block text-[11px]">Target Project:</span>
+                <strong className="text-white font-semibold text-xs">{liveProject.name}</strong>
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-semibold block text-[11px] mb-1">
+                  Planned Delivery Date:
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 18-08-2026 or 2026-08-18"
+                  value={newPlannedDateValue}
+                  onChange={(e) => setNewPlannedDateValue(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-semibold block text-[11px] mb-1">
+                  Actual Delivered Date (DD-MM-YYYY or YYYY-MM-DD) *
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 18-08-2026 or 2026-08-18"
+                  value={newActualDateValue}
+                  onChange={(e) => setNewActualDateValue(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Leave empty to mark as WIP/In-Progress without delivery timestamp.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setIsEditingDeliveryDates(false)}
+                className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const trimmedPlanned = newPlannedDateValue.trim();
+                  const trimmedActual = newActualDateValue.trim();
+                  updateProject(liveProject.id, {
+                    plannedDeliveryDate: trimmedPlanned,
+                    targetCompletionDate: trimmedPlanned,
+                    actualDeliveredDate: trimmedActual || undefined,
+                  });
+                  setIsEditingDeliveryDates(false);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold transition flex items-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Save Date</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

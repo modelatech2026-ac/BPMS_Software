@@ -198,19 +198,17 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     }
   };
 
-  // Auto-fill task if project has tasks or matching assignment
+  // Auto-fill discipline and LOD if project has tasks or matching assignment
   useEffect(() => {
     const matchedAllocForProj = viewerAllocations.find((a) => a.projectId === projectId);
     if (matchedAllocForProj) {
       setDiscipline((matchedAllocForProj.discipline as Discipline) || 'BIM - ACS');
       setLodStage((matchedAllocForProj.lod as LODLevel) || 'LOD 350');
-      if (!taskName) {
-        setTaskName(matchedAllocForProj.taskType || `${matchedAllocForProj.discipline} Modeling Task`);
-      }
+      setTaskName('');
       return;
     }
     if (selectedProject?.tasks && selectedProject.tasks.length > 0 && selectedProject.tasks[0]) {
-      setTaskName(selectedProject.tasks[0].name || '');
+      setTaskName('');
       setDiscipline(selectedProject.tasks[0].discipline || 'MEP - HVAC');
       setLodStage(selectedProject.tasks[0].lod || 'LOD 350');
     }
@@ -304,7 +302,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       hoursLogged: Number(hours),
       discipline,
       activityType,
-      taskName: taskName || `${discipline} Modeling Task`,
+      taskName: taskName || '',
       lodStage,
       notes: notes || `Logged ${hours}h on ${activityType} for ${selectedProject?.name || 'BIM Project'}`,
       billable,
@@ -466,10 +464,10 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-slate-400 font-medium mb-1">
-                BIM Discipline
+                Discipline
               </label>
               <select
-                aria-label="Select BIM Discipline"
+                aria-label="Select Discipline"
                 value={discipline}
                 onChange={(e) => setDiscipline(e.target.value as Discipline)}
                 className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"

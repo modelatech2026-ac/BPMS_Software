@@ -58,6 +58,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const [disciplineFilter, setDisciplineFilter] = useState<string>('all');
   const [adminEditUnlocked, setAdminEditUnlocked] = useState(true);
   const [editingActualDateProject, setEditingActualDateProject] = useState<BimProject | null>(null);
+  const [newPlannedDateValue, setNewPlannedDateValue] = useState('');
   const [newActualDateValue, setNewActualDateValue] = useState('');
   const [projectToDelete, setProjectToDelete] = useState<BimProject | null>(null);
   const [deletedProjectIds, setDeletedProjectIds] = useState<string[]>(() => {
@@ -575,10 +576,23 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                         </td>
 
                         {/* Planned Delivery Date */}
-                        <td className="py-2.5 px-3 font-medium text-slate-200">
+                        <td className="py-2.5 px-3 font-medium text-slate-200" onClick={(e) => { if (isSuperAdmin) e.stopPropagation(); }}>
                           <div className="flex items-center gap-1.5">
                             <Calendar className="w-3.5 h-3.5 text-slate-400" />
                             <span>{plannedDate || '—'}</span>
+                            {isSuperAdmin && (
+                              <button
+                                onClick={() => {
+                                  setEditingActualDateProject(project);
+                                  setNewPlannedDateValue(plannedDate || '');
+                                  setNewActualDateValue(actualDate || '');
+                                }}
+                                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition"
+                                title="Edit Planned & Actual Delivery Dates (Super Admin Privilege)"
+                              >
+                                <Edit3 className="w-3 h-3 text-amber-400" />
+                              </button>
+                            )}
                           </div>
                         </td>
 
@@ -597,6 +611,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                               <button
                                 onClick={() => {
                                   setEditingActualDateProject(project);
+                                  setNewPlannedDateValue(plannedDate || '');
                                   setNewActualDateValue(actualDate || '');
                                 }}
                                 className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition"
@@ -770,10 +785,16 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               </div>
 
               <div>
-                <span className="text-slate-400 block text-[11px] mb-1">Planned Delivery Date:</span>
-                <div className="bg-slate-800/80 px-3 py-2 rounded-lg border border-slate-700 font-mono text-slate-300">
-                  {editingActualDateProject.plannedDeliveryDate || editingActualDateProject.targetCompletionDate || 'Not set'}
-                </div>
+                <label className="text-slate-300 font-semibold block text-[11px] mb-1">
+                  Planned Delivery Date:
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 18-08-2026 or 2026-08-18"
+                  value={newPlannedDateValue}
+                  onChange={(e) => setNewPlannedDateValue(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs"
+                />
               </div>
 
               <div>
@@ -802,8 +823,12 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               </button>
               <button
                 onClick={() => {
+                  const trimmedPlanned = newPlannedDateValue.trim();
+                  const trimmedActual = newActualDateValue.trim();
                   updateProject(editingActualDateProject.id, {
-                    actualDeliveredDate: newActualDateValue.trim() || undefined
+                    plannedDeliveryDate: trimmedPlanned,
+                    targetCompletionDate: trimmedPlanned,
+                    actualDeliveredDate: trimmedActual || undefined,
                   });
                   setEditingActualDateProject(null);
                 }}

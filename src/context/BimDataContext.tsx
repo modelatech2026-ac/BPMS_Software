@@ -629,9 +629,18 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
         masterProj.totalEstimatedHours === 0
           ? matched.totalEstimatedHours
           : masterProj.totalEstimatedHours,
-      plannedDeliveryDate: masterProj.plannedDeliveryDate,
-      targetCompletionDate: masterProj.targetCompletionDate,
-      actualDeliveredDate: matched.actualDeliveredDate || masterProj.actualDeliveredDate,
+      plannedDeliveryDate:
+        matched.plannedDeliveryDate !== undefined && matched.plannedDeliveryDate !== ''
+          ? matched.plannedDeliveryDate
+          : masterProj.plannedDeliveryDate,
+      targetCompletionDate:
+        matched.targetCompletionDate !== undefined && matched.targetCompletionDate !== ''
+          ? matched.targetCompletionDate
+          : matched.plannedDeliveryDate || masterProj.targetCompletionDate,
+      actualDeliveredDate:
+        matched.actualDeliveredDate !== undefined
+          ? matched.actualDeliveredDate
+          : masterProj.actualDeliveredDate,
       status:
         !matched.status || matched.status === 'Not Started'
           ? masterProj.status
@@ -1705,10 +1714,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                       : masterDef.totalEstimatedHours > 0
                       ? masterDef.totalEstimatedHours
                       : Number(cleanRemote.totalEstimatedHours) || 0,
-                  plannedDeliveryDate: masterDef.plannedDeliveryDate,
-                  targetCompletionDate: masterDef.targetCompletionDate,
+                  plannedDeliveryDate:
+                    cleanRemote.plannedDeliveryDate !== undefined && cleanRemote.plannedDeliveryDate !== ''
+                      ? cleanRemote.plannedDeliveryDate
+                      : masterDef.plannedDeliveryDate,
+                  targetCompletionDate:
+                    cleanRemote.targetCompletionDate !== undefined && cleanRemote.targetCompletionDate !== ''
+                      ? cleanRemote.targetCompletionDate
+                      : cleanRemote.plannedDeliveryDate || masterDef.targetCompletionDate,
                   actualDeliveredDate:
-                    cleanRemote.actualDeliveredDate || masterDef.actualDeliveredDate,
+                    cleanRemote.actualDeliveredDate !== undefined
+                      ? cleanRemote.actualDeliveredDate
+                      : masterDef.actualDeliveredDate,
                   status:
                     !cleanRemote.status || cleanRemote.status === 'Not Started'
                       ? masterDef.status
@@ -3210,6 +3227,16 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       if (sanitizedPayload.totalCompletedHours !== undefined) {
         sanitizedPayload.totalHoursLogged = Number(sanitizedPayload.totalCompletedHours) || 0;
+      }
+      if ('plannedDeliveryDate' in updates) {
+        sanitizedPayload.plannedDeliveryDate = updates.plannedDeliveryDate || '';
+        sanitizedPayload.targetCompletionDate =
+          updates.targetCompletionDate !== undefined
+            ? updates.targetCompletionDate || ''
+            : updates.plannedDeliveryDate || '';
+      }
+      if ('actualDeliveredDate' in updates) {
+        sanitizedPayload.actualDeliveredDate = updates.actualDeliveredDate || '';
       }
       setDoc(doc(db, 'projects', id), sanitizedPayload, { merge: true }).catch((err) =>
         console.warn('Firestore updateProject sync notice:', err)

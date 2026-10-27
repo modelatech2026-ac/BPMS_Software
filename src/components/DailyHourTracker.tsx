@@ -118,7 +118,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     setEditLodStage(log.lodStage || 'LOD 350');
     setEditDiscipline(log.discipline || 'BIM - ACS');
     setEditActivityType(log.activityType || '3D Detailed Modeling');
-    setEditTaskName(log.taskName || 'BIM Modeling & Coordination');
+    setEditTaskName('');
     setEditNotes(log.notes || '');
     setEditBillable(log.billable !== undefined ? Boolean(log.billable) : true);
     setEditIsTestEntry(Boolean(log.isTestEntry));
@@ -286,7 +286,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         lodStage: editLodStage,
         discipline: editDiscipline,
         activityType: editActivityType,
-        taskName: editTaskName || 'BIM Modeling & Coordination',
+        taskName: editTaskName || '',
         notes: editNotes,
         billable: Boolean(editBillable),
         isTestEntry: Boolean(editIsTestEntry),
@@ -305,7 +305,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         lodStage: editLodStage,
         discipline: editDiscipline,
         activityType: editActivityType,
-        taskName: editTaskName,
+        taskName: editTaskName || '',
         notes: editNotes,
         billable: Boolean(editBillable),
         isTestEntry: Boolean(editIsTestEntry),
@@ -1707,7 +1707,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-slate-400 font-medium mb-1">BIM Discipline</label>
+                  <label className="block text-slate-400 font-medium mb-1">Discipline</label>
                   <select
                     value={editDiscipline}
                     onChange={(e) => setEditDiscipline(e.target.value as Discipline)}
@@ -1750,17 +1750,6 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     <option value="AI & Automation">AI & Automation</option>
                   </select>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-400 font-medium mb-1">Task Details</label>
-                <input
-                  type="text"
-                  value={editTaskName}
-                  onChange={(e) => setEditTaskName(e.target.value)}
-                  className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  required
-                />
               </div>
 
               <div>
