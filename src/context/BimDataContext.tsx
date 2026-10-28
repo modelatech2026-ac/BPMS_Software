@@ -1361,7 +1361,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Synchronize Firestore access_requests collection into onboardingRequests in real-time
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
+    const unsubs: (() => void)[] = [];
 
     const formatFirestoreTimestamp = (val: any): string => {
       if (!val) return '';
@@ -1403,6 +1403,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const cleanEmail = String(data.email || data.userEmail || data.memberEmail || '').trim().toLowerCase();
       if (!cleanEmail) return null;
       if (
+        !isPendingStatus(data.status) &&
         isMemberDeleted({
           id: d.id,
           email: cleanEmail,
@@ -1507,17 +1508,6 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         const rA = rank(a.status);
         const rB = rank(b.status);
         if (rA !== rB) {
-          const pendingItem = rA === 3 ? a : rB === 3 ? b : null;
-          const otherItem = pendingItem === a ? b : a;
-          if (pendingItem) {
-            const pendingCreatedMs = new Date(pendingItem.createdAt || pendingItem.timestamp || 0).getTime() || 0;
-            const otherUpdatedMs =
-              new Date(otherItem.reviewedAt || otherItem.timestamp || otherItem.createdAt || 0).getTime() || 0;
-            if (otherUpdatedMs >= pendingCreatedMs || (otherItem.status || '').toUpperCase() === 'APPROVED') {
-              return otherItem === b ? 1 : -1;
-            }
-            return pendingItem === b ? 1 : -1;
-          }
           return rB - rA;
         }
         const tA = new Date(a.timestamp || a.reviewedAt || a.createdAt || 0).getTime() || 0;
@@ -1643,51 +1633,99 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         });
       };
 
-      // Real-time onSnapshot listener on access_requests
-      unsubscribe = onSnapshot(
-        colRef,
-        { includeMetadataChanges: true },
-        (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            const cData = change.doc.data();
-            if (
-              change.type === 'removed' ||
-              cData?.isDeleted ||
-              String(cData?.status || '').toLowerCase() === 'deleted'
-            ) {
-              const remEmail = String(cData?.email || cData?.userEmail || '').trim().toLowerCase();
-              const remName = String(cData?.fullName || cData?.name || '').trim();
-              registerDeletedMemberKeys({
-                id: change.doc.id,
-                email: remEmail,
-                name: remName,
+      // Multi-collection real-time listener on access_requests, accessRequests, and pendingSignups
+      const collectionsToListen = ['access_requests', 'accessRequests', 'pendingSignups'];
+      const docsByCollection = new Map<string, Map<string, any>>();
+      collectionsToListen.forEach((col) => docsByCollection.set(col, new Map()));
+
+      const syncAllRequests = () => {
+        const allRaw: any[] = [];
+        docsByCollection.forEach((colMap) => {
+          colMap.forEach((docData) => allRaw.push(docData));
+        });
+        const rawList = allRaw.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
+        const list = deduplicateAndSortRequests(rawList);
+        setOnboardingRequests([...list]);
+        syncRequestsToEmployees(list);
+      };
+
+      collectionsToListen.forEach((colName) => {
+        try {
+          const u = onSnapshot(
+            collection(db, colName),
+            { includeMetadataChanges: true },
+            (snapshot) => {
+              const colMap = docsByCollection.get(colName) || new Map();
+              snapshot.docChanges().forEach((change) => {
+                const cData = change.doc.data();
+                if (
+                  change.type === 'removed' ||
+                  cData?.isDeleted ||
+                  String(cData?.status || '').toLowerCase() === 'deleted'
+                ) {
+                  colMap.delete(change.doc.id);
+                  const remEmail = String(cData?.email || cData?.userEmail || '').trim().toLowerCase();
+                  const remName = String(cData?.fullName || cData?.name || '').trim();
+                  registerDeletedMemberKeys({
+                    id: change.doc.id,
+                    email: remEmail,
+                    name: remName,
+                  });
+                  setEmployees((prev) =>
+                    prev.filter(
+                      (e) =>
+                        e.id !== change.doc.id &&
+                        e.id !== `emp-${change.doc.id}` &&
+                        (!remEmail || (e.email || '').toLowerCase().trim() !== remEmail) &&
+                        (!remName || (e.name || '').toLowerCase().trim() !== remName.toLowerCase())
+                    )
+                  );
+                } else {
+                  colMap.set(change.doc.id, change.doc);
+                }
               });
-              setEmployees((prev) =>
-                prev.filter(
-                  (e) =>
-                    e.id !== change.doc.id &&
-                    e.id !== `emp-${change.doc.id}` &&
-                    (!remEmail || (e.email || '').toLowerCase().trim() !== remEmail) &&
-                    (!remName || (e.name || '').toLowerCase().trim() !== remName.toLowerCase())
-                )
-              );
+              snapshot.docs.forEach((d) => {
+                colMap.set(d.id, d);
+              });
+              docsByCollection.set(colName, colMap);
+              syncAllRequests();
+            },
+            (err) => {
+              console.warn(`Firestore ${colName} listener notice:`, err?.message);
             }
-          });
-          const rawList = snapshot.docs.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
-          const list = deduplicateAndSortRequests(rawList);
-          setOnboardingRequests([...list]);
-          syncRequestsToEmployees(list);
-        },
-        (err) => {
-          console.warn('Firestore access_requests listener notice:', err);
+          );
+          if (u) unsubs.push(u);
+        } catch (e) {
+          console.warn(`Failed to attach listener for ${colName}:`, e);
         }
-      );
+      });
+
+      const handleCustomSubmit = (e: Event) => {
+        const detail = (e as CustomEvent)?.detail;
+        if (detail) {
+          const colMap = docsByCollection.get('access_requests') || new Map();
+          const docKey = detail.id || detail.uid || `req_${Date.now()}`;
+          colMap.set(docKey, {
+            id: docKey,
+            data: () => ({ ...detail }),
+            ...detail,
+          });
+          docsByCollection.set('access_requests', colMap);
+          syncAllRequests();
+        }
+      };
+      window.addEventListener('bim_access_request_submitted', handleCustomSubmit);
+      unsubs.push(() => window.removeEventListener('bim_access_request_submitted', handleCustomSubmit));
     } catch (e) {
       console.warn('Firestore onSnapshot listener error:', e);
     }
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      unsubs.forEach((unsub) => {
+        try {
+          unsub();
+        } catch {}
+      });
     };
   }, []);
 

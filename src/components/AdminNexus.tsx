@@ -164,23 +164,26 @@ export const AdminNexus: React.FC = () => {
     const cleanEmail = String(raw.email || raw.userEmail || raw.memberEmail || '').trim().toLowerCase();
     if (!cleanEmail) return null;
 
-    try {
-      const saved = localStorage.getItem('bim_deleted_members_v1');
-      if (saved) {
-        const deletedSet = new Set<string>(
-          JSON.parse(saved).map((v: string) => String(v).trim().toLowerCase())
-        );
-        const rawId = String(raw.id || '').trim().toLowerCase();
-        const rawName = String(raw.fullName || raw.name || '').trim().toLowerCase();
-        if (
-          deletedSet.has(cleanEmail) ||
-          (rawId && deletedSet.has(rawId)) ||
-          (rawName && deletedSet.has(rawName))
-        ) {
-          return null;
+    // Only apply deleted member tombstone if the request is NOT an active pending submission
+    if (!isReqPending(rawStatus)) {
+      try {
+        const saved = localStorage.getItem('bim_deleted_members_v1');
+        if (saved) {
+          const deletedSet = new Set<string>(
+            JSON.parse(saved).map((v: string) => String(v).trim().toLowerCase())
+          );
+          const rawId = String(raw.id || '').trim().toLowerCase();
+          const rawName = String(raw.fullName || raw.name || '').trim().toLowerCase();
+          if (
+            deletedSet.has(cleanEmail) ||
+            (rawId && deletedSet.has(rawId)) ||
+            (rawName && deletedSet.has(rawName))
+          ) {
+            return null;
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     const isSuper = isSuperAdminEmail(cleanEmail);
     const mappedStatus = isSuper
@@ -249,21 +252,11 @@ export const AdminNexus: React.FC = () => {
       return 1;
     };
 
-    // Prioritize pending requests and newest timestamps so newly submitted pending requests always appear immediately
+    // Pending requests always take priority (rank 3), followed by newest creation/timestamp
     const sorted = [...rawList].sort((a, b) => {
       const rA = rank(a.status);
       const rB = rank(b.status);
       if (rA !== rB) {
-        const pendingItem = rA === 3 ? a : rB === 3 ? b : null;
-        const otherItem = pendingItem === a ? b : a;
-        if (pendingItem) {
-          const pendingCreatedMs = new Date(pendingItem.createdAt || pendingItem.timestamp || 0).getTime() || 0;
-          const otherReviewedMs = new Date(otherItem.reviewedAt || 0).getTime() || 0;
-          if (otherReviewedMs > pendingCreatedMs + 1000) {
-            return otherItem === b ? 1 : -1;
-          }
-          return pendingItem === b ? 1 : -1;
-        }
         return rB - rA;
       }
       const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
@@ -280,6 +273,11 @@ export const AdminNexus: React.FC = () => {
     }
 
     return Array.from(byEmail.values()).sort((a, b) => {
+      const rA = rank(a.status);
+      const rB = rank(b.status);
+      if (rA !== rB) {
+        return rB - rA;
+      }
       const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
       const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
       return tB - tA;
@@ -292,17 +290,27 @@ export const AdminNexus: React.FC = () => {
     setOnboardingRequests([...list]);
   };
 
-  // Manual Live Sync fallback button handler
+  // Manual Live Sync fallback button handler across all alias collections
   const fetchPendingRequests = async () => {
     setIsSyncing(true);
     setSyncError(null);
     try {
-      const snapshot = await getDocs(collection(db, 'access_requests'));
-      const requests = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data({ serverTimestamps: 'estimate' }),
-      }));
-      setAccessRequests(requests);
+      const collectionsToQuery = ['access_requests', 'accessRequests', 'pendingSignups'];
+      const results = await Promise.allSettled(
+        collectionsToQuery.map((colName) => getDocs(collection(db, colName)))
+      );
+      const allRaw: any[] = [];
+      results.forEach((res) => {
+        if (res.status === 'fulfilled') {
+          res.value.docs.forEach((d) => {
+            allRaw.push({
+              id: d.id,
+              ...d.data({ serverTimestamps: 'estimate' }),
+            });
+          });
+        }
+      });
+      setAccessRequests(allRaw);
     } catch (err: any) {
       console.error('Admin Nexus pending fetch error:', err);
       setSyncError(err?.message || 'Failed to fetch access requests from Firestore.');
@@ -311,26 +319,77 @@ export const AdminNexus: React.FC = () => {
     setLastSyncTime(new Date().toLocaleTimeString());
   };
 
-  // Global real-time unfiltered onSnapshot listener on access_requests
+  // Multi-collection real-time unfiltered onSnapshot listener & custom event listener
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, 'access_requests'),
-      { includeMetadataChanges: true },
-      (snapshot) => {
-        setSyncError(null);
-        const requests = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data({ serverTimestamps: 'estimate' }),
-        }));
-        setAccessRequests(requests);
-        setLastSyncTime(new Date().toLocaleTimeString());
-      },
-      (err: any) => {
-        console.error('Admin Nexus onSnapshot error:', err);
-        setSyncError(err?.message || 'Real-time synchronization error on access_requests collection.');
+    const collectionsToListen = ['access_requests', 'accessRequests', 'pendingSignups'];
+    const docsMap = new Map<string, Map<string, any>>();
+    collectionsToListen.forEach((name) => docsMap.set(name, new Map()));
+
+    const updateState = () => {
+      const allRaw: any[] = [];
+      docsMap.forEach((colDocs) => {
+        colDocs.forEach((docData) => allRaw.push(docData));
+      });
+      setAccessRequests(allRaw);
+      setLastSyncTime(new Date().toLocaleTimeString());
+    };
+
+    const unsubs = collectionsToListen.map((colName) => {
+      try {
+        return onSnapshot(
+          collection(db, colName),
+          { includeMetadataChanges: true },
+          (snapshot) => {
+            setSyncError(null);
+            const colMap = docsMap.get(colName) || new Map();
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed') {
+                colMap.delete(change.doc.id);
+              } else {
+                colMap.set(change.doc.id, {
+                  id: change.doc.id,
+                  ...change.doc.data({ serverTimestamps: 'estimate' }),
+                });
+              }
+            });
+            snapshot.docs.forEach((docSnap) => {
+              colMap.set(docSnap.id, {
+                id: docSnap.id,
+                ...docSnap.data({ serverTimestamps: 'estimate' }),
+              });
+            });
+            docsMap.set(colName, colMap);
+            updateState();
+          },
+          (err: any) => {
+            console.warn(`Admin Nexus onSnapshot notice on ${colName}:`, err?.message);
+          }
+        );
+      } catch (e) {
+        console.warn(`Failed to attach onSnapshot to ${colName}:`, e);
+        return () => {};
       }
-    );
-    return () => unsubscribe();
+    });
+
+    const handleCustomSubmit = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail) {
+        const colMap = docsMap.get('access_requests') || new Map();
+        const docKey = detail.id || detail.uid || `req_${Date.now()}`;
+        colMap.set(docKey, {
+          id: docKey,
+          ...detail,
+        });
+        docsMap.set('access_requests', colMap);
+        updateState();
+      }
+    };
+    window.addEventListener('bim_access_request_submitted', handleCustomSubmit);
+
+    return () => {
+      unsubs.forEach((unsub) => unsub && unsub());
+      window.removeEventListener('bim_access_request_submitted', handleCustomSubmit);
+    };
   }, []);
 
   // Dynamic Team Efficiency reference

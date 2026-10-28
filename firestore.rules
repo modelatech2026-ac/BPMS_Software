@@ -79,8 +79,22 @@ service cloud.firestore {
         && (!('status' in data) || data.status in ['APPROVED', 'PENDING', 'REJECTED', 'Approved', 'Pending', 'Rejected', 'Active', 'pending', 'approved', 'rejected']);
     }
 
-    // Access Requests Collection
+    // Access Requests Collections (supporting canonical and alias collection names)
     match /access_requests/{requestId} {
+      allow get, list: if isSuperAdmin() || request.time != null;
+      allow create: if isValidId(requestId) && isValidAccessRequestCreate(incoming());
+      allow update: if isValidId(requestId) && isValidAccessRequestUpdate(incoming(), existing());
+      allow delete: if isValidId(requestId) && (isSuperAdmin() || request.time != null);
+    }
+
+    match /accessRequests/{requestId} {
+      allow get, list: if isSuperAdmin() || request.time != null;
+      allow create: if isValidId(requestId) && isValidAccessRequestCreate(incoming());
+      allow update: if isValidId(requestId) && isValidAccessRequestUpdate(incoming(), existing());
+      allow delete: if isValidId(requestId) && (isSuperAdmin() || request.time != null);
+    }
+
+    match /pendingSignups/{requestId} {
       allow get, list: if isSuperAdmin() || request.time != null;
       allow create: if isValidId(requestId) && isValidAccessRequestCreate(incoming());
       allow update: if isValidId(requestId) && isValidAccessRequestUpdate(incoming(), existing());

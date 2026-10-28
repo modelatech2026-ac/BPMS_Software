@@ -321,6 +321,19 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         skipFirestoreWrite: true,
       });
 
+      // Dispatch real-time window event so open Admin Nexus tabs/views instantly register the incoming request
+      try {
+        window.dispatchEvent(
+          new CustomEvent('bim_access_request_submitted', {
+            detail: {
+              ...requestPayload,
+              id: finalDocId,
+              uid: finalDocId,
+            },
+          })
+        );
+      } catch {}
+
       const record: SubmittedRequestData = {
         name: cleanName,
         email: cleanEmail,
