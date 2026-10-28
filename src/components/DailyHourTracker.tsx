@@ -1363,12 +1363,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     document.body.removeChild(link);
   };
 
-  const canModifyLog = (log: DailyWorkLog): boolean => {
-    if (isSuperAdmin) return true;
-    if (isViewer && currentUser) {
-      return isRecordOwnedByMember(log, currentUser, employees);
-    }
-    return false;
+  const canModifyLog = (_log: DailyWorkLog): boolean => {
+    return isSuperAdmin;
   };
 
   return (
@@ -1610,7 +1606,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   ))}
                   <th className="p-3.5 text-right font-bold min-w-[100px]">Weekly Total</th>
                   <th className="p-3.5 text-center min-w-[100px]">Capacity</th>
-                  <th className="p-3.5 text-right min-w-[90px]">Action</th>
+                  {!isViewer && <th className="p-3.5 text-right min-w-[90px]">Action</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
@@ -1637,11 +1633,19 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           <td key={d.date} className="p-3.5 text-center">
                             {d.hours > 0 ? (
                               <span
-                                onClick={() => openMatrixRowEditModal(emp, empActionLogs, d.date)}
-                                title={`Click to edit ${emp.name}'s hours for ${d.date}${
-                                  isUnderTarget ? ' (Shortfall: < 9.0h daily target)' : ''
-                                }`}
-                                className={`inline-block px-2 py-0.5 rounded font-semibold text-xs cursor-pointer hover:ring-1 hover:ring-blue-400/60 transition ${
+                                onClick={!isViewer ? () => openMatrixRowEditModal(emp, empActionLogs, d.date) : undefined}
+                                title={
+                                  !isViewer
+                                    ? `Click to edit ${emp.name}'s hours for ${d.date}${
+                                        isUnderTarget ? ' (Shortfall: < 9.0h daily target)' : ''
+                                      }`
+                                    : `${emp.name}: ${d.hours.toFixed(1)}h logged on ${d.date}`
+                                }
+                                className={`inline-block px-2 py-0.5 rounded font-semibold text-xs ${
+                                  !isViewer
+                                    ? 'cursor-pointer hover:ring-1 hover:ring-blue-400/60 transition'
+                                    : 'cursor-default'
+                                } ${
                                   logTypeFilter === 'test'
                                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                     : isUnderTarget
@@ -1653,9 +1657,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                               </span>
                             ) : (
                               <span
-                                onClick={() => openMatrixRowEditModal(emp, empActionLogs, d.date)}
-                                title={`Click to log/edit hours for ${emp.name} on ${d.date}`}
-                                className="text-slate-600 font-mono cursor-pointer hover:text-slate-400 transition"
+                                onClick={!isViewer ? () => openMatrixRowEditModal(emp, empActionLogs, d.date) : undefined}
+                                title={!isViewer ? `Click to log/edit hours for ${emp.name} on ${d.date}` : undefined}
+                                className={`text-slate-600 font-mono ${
+                                  !isViewer ? 'cursor-pointer hover:text-slate-400 transition' : 'cursor-default'
+                                }`}
                               >
                                 -
                               </span>
@@ -1689,28 +1695,30 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                         </span>
                       </td>
 
-                      <td className="p-3.5 text-right whitespace-nowrap">
-                        <div className="inline-flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => openMatrixRowEditModal(emp, empActionLogs)}
-                            className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition cursor-pointer"
-                            title="Edit logged hours for a specific day or project"
-                            aria-label={`Edit matrix hours for ${emp.name}`}
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openMatrixRowDeleteModal(emp, empWeekLogs, empAllLogs)}
-                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition cursor-pointer"
-                            title="Delete this daily log entry?"
-                            aria-label={`Delete daily log entry for ${emp.name}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
+                      {!isViewer && (
+                        <td className="p-3.5 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openMatrixRowEditModal(emp, empActionLogs)}
+                              className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition cursor-pointer"
+                              title="Edit logged hours for a specific day or project"
+                              aria-label={`Edit matrix hours for ${emp.name}`}
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openMatrixRowDeleteModal(emp, empWeekLogs, empAllLogs)}
+                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition cursor-pointer"
+                              title="Delete this daily log entry?"
+                              aria-label={`Delete daily log entry for ${emp.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -1890,13 +1898,13 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     <th className="p-3.5">Project & Task</th>
                     <th className="p-3.5">Hours</th>
                     <th className="p-3.5">Notes</th>
-                    <th className="p-3.5 text-right">Action</th>
+                    {!isViewer && <th className="p-3.5 text-right">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
                   {filteredLogs.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-500">
+                      <td colSpan={isViewer ? 5 : 6} className="py-12 text-center text-slate-500">
                         <p className="text-sm font-semibold text-slate-400">No daily hour logs recorded.</p>
                         <p className="text-xs text-slate-500 mt-1">Click "Log Daily Hours" above to record hours for projects.</p>
                       </td>
@@ -1943,37 +1951,39 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           <td className="p-3.5 text-slate-400 text-[11px] max-w-xs truncate" title={log.notes}>
                             {log.notes}
                           </td>
-                          <td className="p-3.5 text-right whitespace-nowrap">
-                            {allowModify ? (
-                              <div className="inline-flex items-center justify-end gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => openEditLogModal(log)}
-                                  className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition"
-                                  title="Edit daily log entry"
-                                  aria-label={`Edit log entry for ${log.employeeName}`}
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDeleteCandidateLogs([log]);
-                                    setLogToDelete(log);
-                                  }}
-                                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
-                                  title="Delete daily log entry"
-                                  aria-label={`Delete log entry for ${log.employeeName}`}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                Daily Hours Logged
-                              </span>
-                            )}
-                          </td>
+                          {!isViewer && (
+                            <td className="p-3.5 text-right whitespace-nowrap">
+                              {allowModify ? (
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditLogModal(log)}
+                                    className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition"
+                                    title="Edit daily log entry"
+                                    aria-label={`Edit log entry for ${log.employeeName}`}
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeleteCandidateLogs([log]);
+                                      setLogToDelete(log);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
+                                    title="Delete daily log entry"
+                                    aria-label={`Delete log entry for ${log.employeeName}`}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                  Daily Hours Logged
+                                </span>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       );
                     })
