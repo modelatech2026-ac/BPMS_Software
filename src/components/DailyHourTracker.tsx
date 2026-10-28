@@ -577,16 +577,26 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     log: DailyWorkLog,
     emp: { id: string; name?: string; email?: string }
   ): boolean => {
+    if (isRecordOwnedByMember(log, emp as any, employees)) {
+      return true;
+    }
+
     const cleanLog = sanitizeWorkLogRecord(log);
     const cleanEmp = sanitizeEmployeeRecord(emp as Employee);
 
-    const empEmail = (cleanEmp.email || emp.email || '').toLowerCase().trim();
+    const empEmail = (cleanEmp.email || emp.email || '')
+      .toLowerCase()
+      .trim()
+      .replace(/sushoovandas@gmail\.com/g, 'sushovandas@gmail.com');
     const logEmail = (
       (cleanLog as any).memberEmail ||
       (cleanLog as any).userEmail ||
       cleanLog.memberEmail ||
       ''
-    ).toLowerCase().trim();
+    )
+      .toLowerCase()
+      .trim()
+      .replace(/sushoovandas@gmail\.com/g, 'sushovandas@gmail.com');
 
     const empId = (cleanEmp.id || emp.id || '').trim();
     const empIdStripped = empId.replace(/^emp-/, '');
@@ -614,11 +624,6 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       return true;
     }
 
-    // If both records have distinct explicit emails, they belong to different users
-    if (empEmail && logEmail && empEmail !== logEmail) {
-      return false;
-    }
-
     // 3. Name matching
     const empName = (cleanEmp.name || emp.name || '')
       .toLowerCase()
@@ -639,13 +644,25 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
     }
 
-    // 4. Viewer personal timesheet fallback
+    // 4. Logged-by matching
+    const loggedBy = String((cleanLog as any).loggedBy || '').toLowerCase().trim();
+    if (empEmail && loggedBy.includes(empEmail)) {
+      return true;
+    }
+    if (empName && loggedBy.includes(empName)) {
+      return true;
+    }
+
+    // 5. Viewer personal timesheet fallback
     if (isViewer && currentUser) {
-      const curEmail = (currentUser.email || '').toLowerCase().trim();
+      const curEmail = (currentUser.email || '')
+        .toLowerCase()
+        .trim()
+        .replace(/sushoovandas@gmail\.com/g, 'sushovandas@gmail.com');
       const curId = (currentUser.id || '').trim();
       const curIdStripped = curId.replace(/^emp-/, '');
-      const curName = (currentUser.name || '').toLowerCase().trim();
-      if (curEmail && logEmail === curEmail) return true;
+      const curName = (currentUser.name || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
+      if (curEmail && (logEmail === curEmail || loggedBy.includes(curEmail))) return true;
       if (
         curId &&
         (logUserId === curId ||
@@ -1087,126 +1104,30 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     isViewer,
   ]);
 
-  // Full Member Matrix Outer Join: maps directly from the complete list of active team members,
-  // performing an outer join with daily_logs for the selected week range so 0.0h members are always rendered.
-  const fullWeeklyMatrix = useMemo(() => {
-    const rawSourceLogs = isViewer
-      ? allAvailableLogs.filter((w) => {
-          const userEmail = (currentUser?.email || '').trim().toLowerCase();
-          const userId = (currentUser?.id || '').trim();
-          const userIdStripped = userId.replace(/^emp-/, '');
-          const logEmpId = (w.employeeId || '').trim();
-          const logUserId = ((w as any).userId || (w as any).memberId || '').trim();
-          const logEmail = ((w.memberEmail || (w as any).userEmail || '').trim().toLowerCase());
-          const logName = (w.employeeName || '').toLowerCase().trim();
-          const currentName = (currentUser?.name || '').toLowerCase().trim();
-          return (
-            (userEmail && logEmail === userEmail) ||
-            (userId && (logUserId === userId || logEmpId === userId || logUserId.replace(/^emp-/, '') === userIdStripped || logEmpId.replace(/^emp-/, '') === userIdStripped)) ||
-            (currentName && logName && (logName === currentName || logName.includes(currentName) || currentName.includes(logName)))
-          );
-        })
-      : allAvailableLogs;
-    const sourceLogs = rawSourceLogs.map((w) => sanitizeWorkLogRecord(w));
-    const weeklyLogs = sourceLogs.filter((w) => {
-      const matchesType =
-        logTypeFilter === 'test'
-          ? Boolean(w.isTestEntry)
-          : logTypeFilter === 'operational'
-          ? !w.isTestEntry
-          : true;
-      if (!matchesType) return false;
-      const effDate = getEffectiveLogDate(w, currentWeekRange);
-      const normDate = normalizeDateToIso(w.date);
-      const normTs = normalizeDateToIso(w.timestamp || (w as any).createdAt);
-      return (
-        (effDate >= currentWeekRange.startIso && effDate <= currentWeekRange.endIso) ||
-        (normDate >= currentWeekRange.startIso && normDate <= currentWeekRange.endIso) ||
-        (normTs >= currentWeekRange.startIso && normTs <= currentWeekRange.endIso)
-      );
-    });
+  // Helper to resolve a normalized YYYY-MM-DD date key from any log record format
+  const getLogNormalizedDateKey = (log: DailyWorkLog): string => {
+    const rawDate = (log.date || (log as any).workDate || (log as any).entryDate || '').trim();
+    const normDate = normalizeDateToIso(rawDate);
+    if (normDate) return normDate;
+    const effDate = getEffectiveLogDate(log, currentWeekRange);
+    if (effDate) return effDate;
+    const normTs = normalizeDateToIso(log.timestamp || (log as any).createdAt);
+    if (normTs) return normTs;
+    return rawDate.slice(0, 10);
+  };
 
-    const computeWeeklyTotals = (userLogs: DailyWorkLog[], user: Employee) => {
-      let weekSum = 0;
-      const dailyHours = weekDays.map((d) => {
-        const dayLogs = sourceLogs
-          .filter((w) => {
-            const matchesType =
-              logTypeFilter === 'test'
-                ? Boolean(w.isTestEntry)
-                : logTypeFilter === 'operational'
-                ? !w.isTestEntry
-                : true;
-            if (!matchesType) return false;
-
-            if (!doesLogMatchEmployee(w, user)) return false;
-
-            const effDate = getEffectiveLogDate(w, currentWeekRange);
-            const normDate = normalizeDateToIso(w.date);
-            const normTs = normalizeDateToIso(w.timestamp || (w as any).createdAt);
-
-            return (
-              effDate === d.date ||
-              normDate === d.date ||
-              normTs === d.date ||
-              w.date === d.date
-            );
-          })
-          .map((l) => ({ ...l }));
-        const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
-        weekSum += hours;
-        return { date: d.date, hours, dayLogs };
-      });
-      return { weekSum, dailyHours, userLogs };
-    };
-
-    return allTrackedEmployees.map((rawUser) => {
-      const user = { ...sanitizeEmployeeRecord(rawUser) };
-      const empAllLogs = sourceLogs
-        .filter((w) => {
-          const matchesType =
-            logTypeFilter === 'test'
-              ? Boolean(w.isTestEntry)
-              : logTypeFilter === 'operational'
-              ? !w.isTestEntry
-              : true;
-          return matchesType && doesLogMatchEmployee(w, user);
-        })
-        .map((l) => ({ ...l }));
-      const userLogs = weeklyLogs
-        .filter((log) => doesLogMatchEmployee(log, user))
-        .map((l) => ({ ...l }));
-      const empActionLogs = userLogs.length > 0 ? userLogs : empAllLogs;
-
-      return {
-        user,
-        empAllLogs,
-        empWeekLogs: userLogs,
-        empActionLogs,
-        weeklyTotals: computeWeeklyTotals(userLogs, user),
-      };
-    });
-  }, [allTrackedEmployees, allAvailableLogs, logTypeFilter, currentWeekRange, weekDays, isViewer, currentUser]);
-
-  useEffect(() => {
-    if (
-      selectedEmployeeFilter !== 'all' &&
-      !allTrackedEmployees.some((e) => e.id === selectedEmployeeFilter)
-    ) {
-      setSelectedEmployeeFilter('all');
-    }
-  }, [allTrackedEmployees, selectedEmployeeFilter]);
-
-  // Base filtered logs (by role/ownership, search, project, employee, discipline) before logTypeFilter
-  const baseFilteredLogs = useMemo(() => {
-    const scopedLogs = isViewer
+  // Unified authoritative log collection (strictly role-scoped for Viewer)
+  // Shared directly between Weekly Timesheet Matrix and Detailed Log Records
+  const unifiedSourceLogs = useMemo(() => {
+    const rawScoped = isViewer
       ? allAvailableLogs.filter((log) => {
+          if (isRecordOwnedByMember(log, currentUser, employees)) return true;
           const userEmail = (currentUser?.email || '').trim().toLowerCase();
           const userId = (currentUser?.id || '').trim();
           const userIdStripped = userId.replace(/^emp-/, '');
           const logEmpId = (log.employeeId || '').trim();
           const logUserId = ((log as any).userId || (log as any).memberId || '').trim();
-          const logEmail = ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase());
+          const logEmail = (log.memberEmail || (log as any).userEmail || '').trim().toLowerCase();
           const logName = (log.employeeName || '').toLowerCase().trim();
           const currentName = (currentUser?.name || '').toLowerCase().trim();
           const loggedBy = String((log as any).loggedBy || '').toLowerCase().trim();
@@ -1228,7 +1149,87 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         })
       : allAvailableLogs;
 
-    return scopedLogs.filter((log) => {
+    return rawScoped.map((w) => sanitizeWorkLogRecord(w));
+  }, [allAvailableLogs, isViewer, currentUser, employees]);
+
+  // Full Member Matrix Outer Join: maps directly from active team members,
+  // aggregating daily hours and weekly totals strictly from unifiedSourceLogs
+  const fullWeeklyMatrix = useMemo(() => {
+    const matrixLogs = unifiedSourceLogs.filter((w) => {
+      if (logTypeFilter === 'operational') return !w.isTestEntry;
+      if (logTypeFilter === 'test') return Boolean(w.isTestEntry);
+      return true;
+    });
+
+    return allTrackedEmployees.map((rawUser) => {
+      const user = { ...sanitizeEmployeeRecord(rawUser) };
+
+      // Determine matching logs for this matrix row:
+      // When user is a Viewer, unifiedSourceLogs is already isolated strictly to this single user's records.
+      // Otherwise, match using doesLogMatchEmployee and authoritative ownership validation.
+      const empAllLogs = matrixLogs.filter((w) => {
+        if (isViewer) return true;
+        return doesLogMatchEmployee(w, user) || isRecordOwnedByMember(w, user as any, employees);
+      });
+
+      // Aggregate daily hours across the Monday-Sunday week columns
+      let weekSum = 0;
+      const dailyHours = weekDays.map((d) => {
+        const dayLogs = empAllLogs.filter((w) => {
+          const dateKey = getLogNormalizedDateKey(w);
+          return (
+            dateKey === d.date ||
+            w.date === d.date ||
+            normalizeDateToIso(w.date) === d.date ||
+            getEffectiveLogDate(w, currentWeekRange) === d.date
+          );
+        });
+        const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
+        weekSum += hours;
+        return { date: d.date, hours, dayLogs };
+      });
+
+      const empWeekLogs = empAllLogs.filter((w) => {
+        const dateKey = getLogNormalizedDateKey(w);
+        return dateKey >= currentWeekRange.startIso && dateKey <= currentWeekRange.endIso;
+      });
+
+      const empActionLogs = empWeekLogs.length > 0 ? empWeekLogs : empAllLogs;
+
+      return {
+        user,
+        empAllLogs,
+        empWeekLogs,
+        empActionLogs,
+        weeklyTotals: {
+          weekSum,
+          dailyHours,
+          userLogs: empWeekLogs,
+        },
+      };
+    });
+  }, [
+    unifiedSourceLogs,
+    allTrackedEmployees,
+    logTypeFilter,
+    currentWeekRange,
+    weekDays,
+    isViewer,
+    employees,
+  ]);
+
+  useEffect(() => {
+    if (
+      selectedEmployeeFilter !== 'all' &&
+      !allTrackedEmployees.some((e) => e.id === selectedEmployeeFilter)
+    ) {
+      setSelectedEmployeeFilter('all');
+    }
+  }, [allTrackedEmployees, selectedEmployeeFilter]);
+
+  // Base filtered logs (by role/ownership, search, project, employee, discipline) before logTypeFilter
+  const baseFilteredLogs = useMemo(() => {
+    return unifiedSourceLogs.filter((log) => {
       const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
 
       if (!isViewer && !isSuperAdmin) {
@@ -1265,7 +1266,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       const matchesDisc =
         selectedDisciplineFilter === 'all' || log.discipline === selectedDisciplineFilter;
 
-      const logDateIso = (log.date || log.timestamp || log.createdAt || '').slice(0, 10);
+      const logDateIso = getLogNormalizedDateKey(log);
       const matchesStartDate =
         !startDateFilter || (Boolean(logDateIso) && logDateIso >= startDateFilter);
       const matchesEndDate =
@@ -1281,7 +1282,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       );
     });
   }, [
-    allAvailableLogs,
+    unifiedSourceLogs,
     allTrackedEmployees,
     selectedEmployeeFilter,
     isSuperAdmin,
@@ -1616,12 +1617,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 {fullWeeklyMatrix.map(({ user: emp, empAllLogs, empWeekLogs, empActionLogs, weeklyTotals }) => {
                   const { weekSum, dailyHours } = weeklyTotals;
 
-                  const effectiveWeeklyLoad =
-                    logTypeFilter === 'test'
-                      ? weekSum
-                      : weekSum > 0 || modifiedMatrixEmpIds.includes(emp.id)
-                      ? weekSum
-                      : getEmployeeLoggedHours(emp.id, 'this-week');
+                  const effectiveWeeklyLoad = weekSum;
                   const capHours = emp.weeklyCapacityHours || 40;
                   const capPct = Math.round((effectiveWeeklyLoad / capHours) * 100);
                   const isOver = effectiveWeeklyLoad > capHours;
