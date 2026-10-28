@@ -771,26 +771,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
 
       if (!params.skipFirestoreWrite) {
-        try {
-          await setDoc(
-            doc(db, 'access_requests', adminUser.id),
-            {
-              id: adminUser.id,
-              uid: adminUser.id,
-              name: adminUser.name,
-              fullName: adminUser.name,
-              email: adminUser.email,
-              timestamp: new Date().toISOString(),
-              status: 'Approved',
-              role: 'SUPER_ADMIN',
-              assignedRole: 'SUPER_ADMIN',
-              requestedRole: 'Super Admin',
-            },
-            { merge: true }
-          );
-        } catch (err) {
+        setDoc(
+          doc(db, 'access_requests', adminUser.id),
+          {
+            id: adminUser.id,
+            uid: adminUser.id,
+            name: adminUser.name,
+            fullName: adminUser.name,
+            email: adminUser.email,
+            timestamp: new Date().toISOString(),
+            status: 'Approved',
+            role: 'SUPER_ADMIN',
+            assignedRole: 'SUPER_ADMIN',
+            requestedRole: 'Super Admin',
+          },
+          { merge: true }
+        ).catch((err) => {
           console.warn('Firestore admin write notice:', err);
-        }
+        });
       }
 
       saveUserToDb(adminUser);
@@ -818,7 +816,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: cleanEmail,
           discipline: 'BIM - ACS',
           reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
-          status: 'Pending',
+          status: 'pending',
           createdAt: isoTimestamp,
           id: effectiveUid,
           uid: effectiveUid,
@@ -833,7 +831,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           organization: 'BIM - ACS',
           accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
         };
-        await setDoc(doc(db, 'access_requests', effectiveUid), newRecord, { merge: true });
+        setDoc(doc(db, 'access_requests', effectiveUid), newRecord, { merge: true }).catch((e) => {
+          console.warn('Firestore access_requests write notice:', e);
+        });
       }
       firestoreStatus = 'PENDING';
       appRole = 'EDITOR';
@@ -841,24 +841,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       accessLevel = 'Editor';
       displayRole = 'BIM Modeler / Editor';
     } else if (!params.skipFirestoreWrite) {
-      // User has existing database role: update login activity without touching role or status
-      try {
-        const isoNow = new Date().toISOString();
-        await setDoc(
-          doc(db, 'access_requests', effectiveUid),
-          {
-            email: cleanEmail,
-            name: params.name || dbRecord.name || cleanEmail.split('@')[0],
-            fullName: params.name || dbRecord.name || cleanEmail.split('@')[0],
-            lastLoginAt: isoNow,
-            lastActive: isoNow,
-            updatedAt: isoNow,
-          },
-          { merge: true }
-        );
-      } catch (e) {
+      // User has existing database role: update login activity in background without blocking
+      const isoNow = new Date().toISOString();
+      setDoc(
+        doc(db, 'access_requests', effectiveUid),
+        {
+          email: cleanEmail,
+          name: params.name || dbRecord.name || cleanEmail.split('@')[0],
+          fullName: params.name || dbRecord.name || cleanEmail.split('@')[0],
+          lastLoginAt: isoNow,
+          lastActive: isoNow,
+          updatedAt: isoNow,
+        },
+        { merge: true }
+      ).catch((e) => {
         console.warn('Login timestamp update notice:', e);
-      }
+      });
     }
 
     const applicantUser: AuthUser = {

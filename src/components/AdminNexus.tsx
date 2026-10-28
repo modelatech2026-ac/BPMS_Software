@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   useBimData,
   mergeAccessRequestsWithLocal,
@@ -290,27 +290,45 @@ export const AdminNexus: React.FC = () => {
     });
   };
 
-  const setAccessRequests = (rawRequests: any[]) => {
-    const mapped = rawRequests.map(normalizeRawRequest).filter(Boolean) as OnboardingRequest[];
-    const list = deduplicateAndSortRequests(mapped);
-    setOnboardingRequests((prev) =>
-      deduplicateAndSortRequests(mergeAccessRequestsWithLocal(list, prev))
-    );
-  };
+  const setAccessRequests = useCallback(
+    (rawRequests: any[]) => {
+      const mapped = rawRequests.map(normalizeRawRequest).filter(Boolean) as OnboardingRequest[];
+      const list = deduplicateAndSortRequests(mapped);
+      setOnboardingRequests((prev) => {
+        const merged = deduplicateAndSortRequests(mergeAccessRequestsWithLocal(list, prev));
+        if (
+          prev.length === merged.length &&
+          prev.every(
+            (item, idx) =>
+              item.id === merged[idx]?.id &&
+              item.email === merged[idx]?.email &&
+              item.status === merged[idx]?.status &&
+              item.assignedRole === merged[idx]?.assignedRole &&
+              item.timestamp === merged[idx]?.timestamp
+          )
+        ) {
+          return prev;
+        }
+        return merged;
+      });
+    },
+    [setOnboardingRequests]
+  );
 
-  // Manual Live Sync fallback button handler across all alias collections
-  const fetchPendingRequests = async () => {
+  // Manual Live Sync fallback button handler across all alias collections with strict timeout
+  const fetchPendingRequests = useCallback(async () => {
     setIsSyncing(true);
     setSyncError(null);
     try {
       const collectionsToQuery = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
-      const results = await Promise.allSettled(
-        collectionsToQuery.map((colName) => getDocs(collection(db, colName)))
-      );
+      const results = await Promise.race([
+        Promise.allSettled(collectionsToQuery.map((colName) => getDocs(collection(db, colName)))),
+        new Promise<PromiseSettledResult<any>[]>((resolve) => setTimeout(() => resolve([]), 1200)),
+      ]);
       const allRaw: any[] = [];
       results.forEach((res) => {
         if (res.status === 'fulfilled') {
-          res.value.docs.forEach((d) => {
+          res.value.docs.forEach((d: any) => {
             allRaw.push({
               id: d.id,
               ...d.data({ serverTimestamps: 'estimate' }),
@@ -326,7 +344,7 @@ export const AdminNexus: React.FC = () => {
     }
     setIsSyncing(false);
     setLastSyncTime(new Date().toLocaleTimeString());
-  };
+  }, [setAccessRequests]);
 
   // Multi-collection real-time unfiltered onSnapshot listener & cross-tab/custom event listeners
   useEffect(() => {
@@ -338,8 +356,10 @@ export const AdminNexus: React.FC = () => {
     const collectionsToListen = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
     const docsMap = new Map<string, Map<string, any>>();
     collectionsToListen.forEach((name) => docsMap.set(name, new Map()));
+    let updateScheduled = false;
 
     const updateState = () => {
+      updateScheduled = false;
       const allRaw: any[] = [];
       docsMap.forEach((colDocs) => {
         colDocs.forEach((docData) => allRaw.push(docData));
@@ -348,11 +368,16 @@ export const AdminNexus: React.FC = () => {
       setLastSyncTime(new Date().toLocaleTimeString());
     };
 
+    const scheduleUpdateState = () => {
+      if (updateScheduled) return;
+      updateScheduled = true;
+      queueMicrotask(updateState);
+    };
+
     const unsubs = collectionsToListen.map((colName) => {
       try {
         return onSnapshot(
           collection(db, colName),
-          { includeMetadataChanges: true },
           (snapshot) => {
             setSyncError(null);
             const colMap = docsMap.get(colName) || new Map();
@@ -373,7 +398,7 @@ export const AdminNexus: React.FC = () => {
               });
             });
             docsMap.set(colName, colMap);
-            updateState();
+            scheduleUpdateState();
           },
           (err: any) => {
             console.warn(`Admin Nexus onSnapshot notice on ${colName}:`, err?.message);
@@ -835,12 +860,40 @@ export const AdminNexus: React.FC = () => {
     }
   };
 
-  const handleToggleAccessRequest = (
-    requestId: string,
-    applicantName: string,
-    decision: 'accept' | 'reject'
-  ) => {
-    if (decision === 'accept') {
+  const handleToggleAccessRequest = useCallback(
+    (requestId: string, applicantName: string, decision: 'accept' | 'reject') => {
+      if (decision === 'accept') {
+        const req = onboardingRequests.find((r) => r.id === requestId);
+        const selectedRole =
+          pendingRoleMap[requestId] ||
+          req?.assignedRole ||
+          normalizeUserRole(req?.role) ||
+          'EDITOR';
+        const accessLevel = mapAppRoleToAccessLevel(selectedRole);
+        const selectedDiscipline =
+          pendingDisciplineMap[requestId] ||
+          (req?.discipline as Discipline) ||
+          (req?.primaryDiscipline as Discipline) ||
+          'BIM - ACS';
+
+        approveOnboardingRequest(requestId, selectedRole, accessLevel, selectedDiscipline);
+        showNotification(`Access granted for ${applicantName} (${selectedRole} - ${selectedDiscipline})`);
+      } else {
+        rejectOnboardingRequest(requestId, 'Declined by administrator via interactive toggle.');
+        showNotification(`Access declined for ${applicantName} — moved to Rejected Logs`);
+      }
+    },
+    [
+      onboardingRequests,
+      pendingRoleMap,
+      pendingDisciplineMap,
+      approveOnboardingRequest,
+      rejectOnboardingRequest,
+    ]
+  );
+
+  const handleApproveWithRole = useCallback(
+    (requestId: string, applicantName: string) => {
       const req = onboardingRequests.find((r) => r.id === requestId);
       const selectedRole =
         pendingRoleMap[requestId] ||
@@ -855,83 +908,71 @@ export const AdminNexus: React.FC = () => {
         'BIM - ACS';
 
       approveOnboardingRequest(requestId, selectedRole, accessLevel, selectedDiscipline);
-      showNotification(`Access granted for ${applicantName} (${selectedRole} - ${selectedDiscipline})`);
-    } else {
-      rejectOnboardingRequest(requestId, 'Declined by administrator via interactive toggle.');
-      showNotification(`Access declined for ${applicantName} — moved to Rejected Logs`);
-    }
-  };
+      showNotification(`Approved ${applicantName} as ${selectedRole} [${selectedDiscipline}] (${accessLevel})`);
+    },
+    [onboardingRequests, pendingRoleMap, pendingDisciplineMap, approveOnboardingRequest]
+  );
 
-  const handleApproveWithRole = (requestId: string, applicantName: string) => {
-    const req = onboardingRequests.find((r) => r.id === requestId);
-    const selectedRole =
-      pendingRoleMap[requestId] ||
-      req?.assignedRole ||
-      normalizeUserRole(req?.role) ||
-      'EDITOR';
-    const accessLevel = mapAppRoleToAccessLevel(selectedRole);
-    const selectedDiscipline =
-      pendingDisciplineMap[requestId] ||
-      (req?.discipline as Discipline) ||
-      (req?.primaryDiscipline as Discipline) ||
-      'BIM - ACS';
+  const filteredUsers = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return users.filter((u) => {
+      const matchesSearch =
+        !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+      const matchesAccess =
+        selectedAccessFilter === 'all' || u.accessLevel === selectedAccessFilter;
+      return matchesSearch && matchesAccess;
+    });
+  }, [users, searchQuery, selectedAccessFilter]);
 
-    approveOnboardingRequest(requestId, selectedRole, accessLevel, selectedDiscipline);
-    showNotification(`Approved ${applicantName} as ${selectedRole} [${selectedDiscipline}] (${accessLevel})`);
-  };
-
-  const filteredUsers = users.filter((u) => {
-    const matchesSearch =
-      u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchQuery.toLowerCase());
-
-    const matchesAccess =
-      selectedAccessFilter === 'all' || u.accessLevel === selectedAccessFilter;
-
-    return matchesSearch && matchesAccess;
-  });
-
-  const pendingRequests = onboardingRequests.filter(
-    (r) => r.status === 'pending' || isReqPending(r.status)
+  const pendingRequests = useMemo(
+    () => onboardingRequests.filter((r) => r.status === 'pending' || isReqPending(r.status)),
+    [onboardingRequests]
   );
   const pendingCount = pendingRequests.length;
-  const approvedRequests = onboardingRequests.filter(
-    (r) => (r.status || '').toUpperCase() === 'APPROVED'
+
+  const approvedRequests = useMemo(
+    () => onboardingRequests.filter((r) => (r.status || '').toUpperCase() === 'APPROVED'),
+    [onboardingRequests]
   );
-  const rejectedRequests = onboardingRequests.filter(
-    (r) => (r.status || '').toUpperCase() === 'REJECTED'
+
+  const rejectedRequests = useMemo(
+    () => onboardingRequests.filter((r) => (r.status || '').toUpperCase() === 'REJECTED'),
+    [onboardingRequests]
   );
 
   // Access Review table filter: strictly displays active/pending requests (request.status === 'pending')
-  const filteredOnboarding = onboardingRequests.filter((r) => {
-    if (onboardingFilter === 'approved') return (r.status || '').toUpperCase() === 'APPROVED';
-    // Strictly displays active/pending requests
-    return r.status === 'pending' || isReqPending(r.status);
-  });
+  const filteredOnboarding = useMemo(() => {
+    if (onboardingFilter === 'approved') return approvedRequests;
+    return pendingRequests;
+  }, [onboardingFilter, approvedRequests, pendingRequests]);
 
-  const filteredRejectedRequests = rejectedRequests.filter((r) => {
-    if (!rejectedSearchQuery.trim()) return true;
-    const q = rejectedSearchQuery.toLowerCase();
-    return (
-      r.name.toLowerCase().includes(q) ||
-      r.email.toLowerCase().includes(q) ||
-      (r.primaryDiscipline || '').toLowerCase().includes(q) ||
-      (r.requestedRole || '').toLowerCase().includes(q)
+  const filteredRejectedRequests = useMemo(() => {
+    const q = rejectedSearchQuery.trim().toLowerCase();
+    if (!q) return rejectedRequests;
+    return rejectedRequests.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        r.email.toLowerCase().includes(q) ||
+        (r.primaryDiscipline || '').toLowerCase().includes(q) ||
+        (r.requestedRole || '').toLowerCase().includes(q)
     );
-  });
+  }, [rejectedRequests, rejectedSearchQuery]);
 
-  const filteredAuditLogs = auditLogs.filter((log) => {
-    const matchesSearch =
-      log.targetUserName.toLowerCase().includes(auditSearchQuery.toLowerCase()) ||
-      log.targetUserEmail.toLowerCase().includes(auditSearchQuery.toLowerCase()) ||
-      log.details.toLowerCase().includes(auditSearchQuery.toLowerCase()) ||
-      log.performedBy.toLowerCase().includes(auditSearchQuery.toLowerCase());
+  const filteredAuditLogs = useMemo(() => {
+    const q = auditSearchQuery.toLowerCase();
+    return auditLogs.filter((log) => {
+      const matchesSearch =
+        !q ||
+        log.targetUserName.toLowerCase().includes(q) ||
+        log.targetUserEmail.toLowerCase().includes(q) ||
+        log.details.toLowerCase().includes(q) ||
+        log.performedBy.toLowerCase().includes(q);
 
-    const matchesAction =
-      auditFilterAction === 'all' || log.action === auditFilterAction;
+      const matchesAction = auditFilterAction === 'all' || log.action === auditFilterAction;
 
-    return matchesSearch && matchesAction;
-  });
+      return matchesSearch && matchesAction;
+    });
+  }, [auditLogs, auditSearchQuery, auditFilterAction]);
 
   return (
     <div className="space-y-6">

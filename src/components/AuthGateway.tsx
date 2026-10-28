@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useBimData } from '../context/BimDataContext';
 import {
@@ -14,7 +14,6 @@ import {
 import { TwoFactorChallengeModal } from './TwoFactorChallengeModal';
 import { db } from '../firebase/config';
 import {
-  addDoc,
   collection,
   doc,
   onSnapshot,
@@ -49,6 +48,9 @@ interface SubmittedRequestData {
   uid: string;
 }
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isValidEmail = (str: string) => EMAIL_REGEX.test(str.trim());
+
 export const AuthGateway: React.FC<AuthGatewayProps> = ({
   isModal = false,
   onClose,
@@ -82,13 +84,20 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const isSubmittingRef = useRef(false);
 
-  // Active user reference for real-time pending listener
-  const activeUser = submittedRecord || (currentUser?.email ? {
-    name: currentUser.name,
-    email: currentUser.email,
-    uid: currentUser.googleId || currentUser.id || generateRequestDocId(currentUser.email),
-  } : null);
+  // Memoized active user reference for real-time pending listener
+  const activeUser = useMemo<SubmittedRequestData | null>(() => {
+    if (submittedRecord) return submittedRecord;
+    if (currentUser?.email) {
+      return {
+        name: currentUser.name,
+        email: currentUser.email,
+        uid: currentUser.googleId || currentUser.id || generateRequestDocId(currentUser.email),
+      };
+    }
+    return null;
+  }, [submittedRecord, currentUser?.email, currentUser?.name, currentUser?.googleId, currentUser?.id]);
 
   // Real-time Firestore & local state listener when in pending approval step
   useEffect(() => {
@@ -225,216 +234,244 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     );
   }
 
-  const isValidEmail = (str: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str.trim());
-
   /**
-   * Handle Submit Request
+   * Handle Submit Request - Optimized for zero UI blocking and instant feedback
    */
-  const handleSubmitRequest = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleSubmitRequest = useCallback(
+    async (e?: React.FormEvent) => {
+      if (e) e.preventDefault();
+      if (isSubmittingRef.current) return;
 
-    const cleanName = fullName.trim();
-    const cleanEmail = email.trim().toLowerCase();
+      const cleanName = fullName.trim();
+      const cleanEmail = email.trim().toLowerCase();
 
-    const errors: { name?: string; email?: string } = {};
-    if (!cleanName) {
-      errors.name = 'Please enter your Full Name.';
-    } else if (cleanName.length < 2) {
-      errors.name = 'Full Name must be at least 2 characters.';
-    }
+      const errors: { name?: string; email?: string } = {};
+      if (!cleanName) {
+        errors.name = 'Please enter your Full Name.';
+      } else if (cleanName.length < 2) {
+        errors.name = 'Full Name must be at least 2 characters.';
+      }
 
-    if (!cleanEmail) {
-      errors.email = 'Please enter your email address.';
-    } else if (!isValidEmail(cleanEmail)) {
-      errors.email = 'Please provide a valid email format (e.g. name@example.com).';
-    }
+      if (!cleanEmail) {
+        errors.email = 'Please enter your email address.';
+      } else if (!isValidEmail(cleanEmail)) {
+        errors.email = 'Please provide a valid email format (e.g. name@example.com).';
+      }
 
-    if (Object.keys(errors).length > 0) {
-      setInputErrors(errors);
-      return;
-    }
+      if (Object.keys(errors).length > 0) {
+        setInputErrors(errors);
+        return;
+      }
 
-    setInputErrors({});
-    setIsLoading(true);
-    setErrorMessage(null);
-    setSuccessMessage(null);
+      isSubmittingRef.current = true;
+      setInputErrors({});
+      setIsLoading(true);
+      setErrorMessage(null);
+      setSuccessMessage(null);
 
-    const generatedUid = generateRequestDocId(cleanEmail);
-    const isoTimestamp = new Date().toISOString();
-    const userDiscipline = 'BIM - ACS';
-    const userReason = 'Sign-in Access Request for ProductionPulse BPMS';
+      const generatedUid = generateRequestDocId(cleanEmail);
+      const isoTimestamp = new Date().toISOString();
+      const userDiscipline = 'BIM - ACS';
+      const userReason = 'Sign-in Access Request for ProductionPulse BPMS';
 
-    try {
-      // 1. Super Admin or already-approved user fast-path sign-in
-      const alreadyApprovedReq = onboardingRequests.find(
-        (r) =>
-          (r.email || '').trim().toLowerCase() === cleanEmail &&
-          (r.status || '').toUpperCase() === 'APPROVED'
-      );
+      try {
+        // 1. Super Admin or already-approved user fast-path sign-in
+        const alreadyApprovedReq = onboardingRequests.find(
+          (r) =>
+            (r.email || '').trim().toLowerCase() === cleanEmail &&
+            (r.status || '').toUpperCase() === 'APPROVED'
+        );
 
-      if (isSuperAdminEmail(cleanEmail) || alreadyApprovedReq) {
-        const result = await submitAccessRequest({
+        if (isSuperAdminEmail(cleanEmail) || alreadyApprovedReq) {
+          const resolvedRole = normalizeUserRole(
+            alreadyApprovedReq?.assignedRole || alreadyApprovedReq?.role,
+            isSuperAdminEmail(cleanEmail)
+          );
+          const preloadedRecord = alreadyApprovedReq
+            ? {
+                role: resolvedRole,
+                status: 'APPROVED' as const,
+                accessLevel:
+                  (alreadyApprovedReq.assignedAccessLevel as AccessLevel) ||
+                  mapAppRoleToAccessLevel(resolvedRole),
+                displayRole: mapAppRoleToDisplayRole(resolvedRole),
+                securityRole: mapUserRoleToSecurityRole(resolvedRole),
+                name: alreadyApprovedReq.name || cleanName,
+                discipline: alreadyApprovedReq.discipline || userDiscipline,
+                source: 'local_db' as const,
+                isApproved: true,
+                id: alreadyApprovedReq.id || generatedUid,
+              }
+            : undefined;
+
+          const result = await submitAccessRequest({
+            name: cleanName,
+            email: cleanEmail,
+            uid: alreadyApprovedReq?.id || generatedUid,
+            existingDbRecord: preloadedRecord,
+            skipFirestoreWrite: true,
+          });
+
+          // Sync login activity in background without blocking navigation
+          const targetId = alreadyApprovedReq?.id || generatedUid;
+          setDoc(
+            doc(db, 'access_requests', targetId),
+            {
+              id: targetId,
+              uid: targetId,
+              name: cleanName,
+              fullName: cleanName,
+              email: cleanEmail,
+              lastLoginAt: isoTimestamp,
+              lastActive: isoTimestamp,
+              updatedAt: isoTimestamp,
+            },
+            { merge: true }
+          ).catch(() => {});
+
+          if (result.status === 'APPROVED') {
+            const targetRoute =
+              result.user?.appRole === 'VIEWER'
+                ? '/daily-tracker'
+                : attemptedRoute || '/dashboard';
+            if (onLoginSuccess) {
+              onLoginSuccess(targetRoute);
+            } else if (onClose) {
+              onClose();
+            }
+            return;
+          }
+        }
+
+        const finalDocId = generatedUid;
+
+        // 2. Build lean, standardized pending access request payload matching AdminNexus filter & schema
+        const requestPayload = {
+          id: finalDocId,
+          uid: finalDocId,
+          fullName: cleanName,
           name: cleanName,
           email: cleanEmail,
-          uid: alreadyApprovedReq?.id || generatedUid,
+          status: 'pending',
+          requestedAt: isoTimestamp,
+          timestamp: isoTimestamp,
+          requestTimestamp: isoTimestamp,
+          updatedAt: isoTimestamp,
+          requestedRole: 'Editor',
+          role: 'Editor',
+          assignedRole: 'EDITOR',
+          assignedAccessLevel: 'Editor',
+          discipline: userDiscipline,
+          primaryDiscipline: userDiscipline,
+          organization: userDiscipline,
+          reasonForAccess: userReason,
+          accessReason: userReason,
+          notes: userReason,
+        };
+
+        // 3. Immediately update in-memory onboardingRequests state & persistent local queue (0ms latency)
+        await registerAccessRequest({
+          name: cleanName,
+          fullName: cleanName,
+          email: cleanEmail,
+          discipline: userDiscipline,
+          reasonForAccess: userReason,
+          uid: finalDocId,
+          organization: userDiscipline,
+          accessReason: userReason,
+          skipFirestoreWrite: true,
         });
-        if (result.status === 'APPROVED') {
-          const targetRoute =
-            result.user?.appRole === 'VIEWER'
-              ? '/daily-tracker'
-              : attemptedRoute || '/dashboard';
-          if (onLoginSuccess) {
-            onLoginSuccess(targetRoute);
-          } else if (onClose) {
-            onClose();
-          }
-          return;
-        }
-      }
 
-      const finalDocId = generatedUid;
-
-      // 2. Build standardized pending access request payload matching AdminNexus filter & schema
-      const requestPayload = {
-        id: finalDocId,
-        uid: finalDocId,
-        fullName: cleanName,
-        name: cleanName,
-        email: cleanEmail,
-        status: 'pending',
-        requestedAt: isoTimestamp,
-        timestamp: isoTimestamp,
-        requestTimestamp: isoTimestamp,
-        updatedAt: isoTimestamp,
-        requestedRole: 'Editor',
-        role: 'Editor',
-        assignedRole: 'EDITOR',
-        assignedAccessLevel: 'Editor',
-        discipline: userDiscipline,
-        primaryDiscipline: userDiscipline,
-        organization: userDiscipline,
-        reasonForAccess: userReason,
-        accessReason: userReason,
-        notes: userReason,
-      };
-
-      // 3. Immediately update in-memory onboardingRequests state & persistent local queue so Admin Nexus Pending Queue updates instantly
-      await registerAccessRequest({
-        name: cleanName,
-        fullName: cleanName,
-        email: cleanEmail,
-        discipline: userDiscipline,
-        reasonForAccess: userReason,
-        uid: finalDocId,
-        organization: userDiscipline,
-        accessReason: userReason,
-        skipFirestoreWrite: true,
-      });
-
-      // Dispatch real-time window event so open Admin Nexus tabs/views instantly register the incoming request
-      try {
-        window.dispatchEvent(
-          new CustomEvent('bim_access_request_submitted', {
-            detail: {
-              ...requestPayload,
-              createdAt: isoTimestamp,
-              id: finalDocId,
-              uid: finalDocId,
-            },
-          })
-        );
-      } catch {}
-
-      // 4. Write new pending access request to Firestore collections ('access_requests', 'accessRequests', 'pendingUsers')
-      const firestorePayload = {
-        ...requestPayload,
-        createdAt: serverTimestamp(),
-      };
-
-      const targetCollections = ['access_requests', 'accessRequests', 'pendingUsers'];
-      const writePromises = targetCollections.map((colName) =>
-        setDoc(doc(db, colName, finalDocId), firestorePayload, { merge: true }).catch((err) => {
-          console.warn(`Firestore ${colName} write notice:`, err);
-        })
-      );
-
-      // Also sync any existing doc IDs for the same email to 'pending' so stale records never shadow it
-      const existingForEmail = onboardingRequests.filter(
-        (r) => (r.email || '').trim().toLowerCase() === cleanEmail && r.id !== finalDocId
-      );
-      if (existingForEmail.length > 0) {
-        existingForEmail.forEach((oldReq) => {
-          targetCollections.forEach((colName) => {
-            setDoc(
-              doc(db, colName, oldReq.id),
-              {
-                fullName: cleanName,
-                name: cleanName,
-                email: cleanEmail,
-                status: 'pending',
-                createdAt: serverTimestamp(),
-                updatedAt: isoTimestamp,
+        // Dispatch real-time window event so open Admin Nexus tabs/views instantly register the incoming request
+        try {
+          window.dispatchEvent(
+            new CustomEvent('bim_access_request_submitted', {
+              detail: {
+                ...requestPayload,
+                createdAt: isoTimestamp,
               },
-              { merge: true }
-            ).catch(() => {});
-          });
-        });
+            })
+          );
+        } catch {}
+
+        // 4. Transition UI state immediately so the user never experiences "Submitting Request..." lag
+        const record: SubmittedRequestData = {
+          name: cleanName,
+          email: cleanEmail,
+          uid: finalDocId,
+        };
+        setSubmittedRecord(record);
+        setSuccessMessage('Request Submitted Successfully!');
+        setViewStep('pending');
+        setIsLoading(false);
+
+        // 5. Persist to Firestore asynchronously in background with non-blocking error handling
+        const firestorePayload = {
+          ...requestPayload,
+          createdAt: serverTimestamp(),
+        };
+
+        setDoc(doc(db, 'access_requests', finalDocId), firestorePayload, { merge: true }).catch(
+          (err) => {
+            console.warn('Firestore access_requests write notice:', err);
+          }
+        );
+      } catch (err: any) {
+        console.error('Access request submission error:', err);
+        setErrorMessage(
+          err?.message || 'Failed to submit access request. Please check your connection and try again.'
+        );
+      } finally {
+        setIsLoading(false);
+        isSubmittingRef.current = false;
       }
-
-      await Promise.race([
-        Promise.allSettled(writePromises),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
-      ]);
-
-      const record: SubmittedRequestData = {
-        name: cleanName,
-        email: cleanEmail,
-        uid: finalDocId,
-      };
-      setSubmittedRecord(record);
-      setSuccessMessage('Request Submitted Successfully!');
-      setViewStep('pending');
-    } catch (err: any) {
-      console.error('Access request submission error:', err);
-      setErrorMessage(
-        err?.message || 'Failed to submit access request. Please check your connection and try again.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    },
+    [
+      fullName,
+      email,
+      onboardingRequests,
+      submitAccessRequest,
+      attemptedRoute,
+      onLoginSuccess,
+      onClose,
+      registerAccessRequest,
+    ]
+  );
 
   /**
    * Secondary "Back" link handler
    */
-  const handleBack = (e?: React.MouseEvent) => {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
+  const handleBack = useCallback(
+    (e?: React.MouseEvent) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
 
-    if (viewStep === 'pending') {
-      setViewStep('form');
-      setSubmittedRecord(null);
+      if (viewStep === 'pending') {
+        setViewStep('form');
+        setSubmittedRecord(null);
+        setErrorMessage(null);
+        return;
+      }
+
+      if (isModal && onClose) {
+        onClose();
+        return;
+      }
+
+      // Reset input fields
+      setFullName('');
+      setEmail('');
+      setInputErrors({});
       setErrorMessage(null);
-      return;
-    }
 
-    if (isModal && onClose) {
-      onClose();
-      return;
-    }
-
-    // Reset input fields
-    setFullName('');
-    setEmail('');
-    setInputErrors({});
-    setErrorMessage(null);
-
-    if (typeof window !== 'undefined' && window.history && window.history.length > 1) {
-      window.history.back();
-    }
-  };
+      if (typeof window !== 'undefined' && window.history && window.history.length > 1) {
+        window.history.back();
+      }
+    },
+    [viewStep, isModal, onClose]
+  );
 
   /**
    * Render the Form matching exact UI specification in image.png

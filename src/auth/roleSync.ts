@@ -67,9 +67,22 @@ function normalizeApprovalStatus(rawStatus: any): UserApprovalStatus {
   return 'PENDING';
 }
 
+function withTimeout<T>(promise: Promise<T>, ms = 600, fallback?: T): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise<T | undefined>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /**
  * Fetch the user's assigned role and approval status from Firestore ('access_requests' and 'users').
  * Prioritizes approved records across both collections and never marks unknown users as approved.
+ * Uses strict timeouts and local cache checks so callers never hang on slow network or quota limits.
  */
 export async function fetchUserRoleFromDatabase(
   rawEmail: string,
@@ -113,113 +126,7 @@ export async function fetchUserRoleFromDatabase(
     return Number.isNaN(ms) ? 0 : ms;
   };
 
-  // 2. Direct deterministic document lookups across 'access_requests' and 'users' in parallel
-  try {
-    const directReads = await Promise.all(
-      docIdsToTry.flatMap((dId) => [
-        getDoc(doc(db, 'access_requests', dId)).then((snap) => ({ kind: 'req' as const, snap })),
-        getDoc(doc(db, 'users', dId)).then((snap) => ({ kind: 'usr' as const, snap })),
-      ])
-    );
-
-    for (const item of directReads) {
-      if (!item.snap.exists()) continue;
-      const data = item.snap.data();
-      if ((data?.email || '').trim().toLowerCase() !== cleanEmail) continue;
-
-      if (item.kind === 'req') {
-        const rawRole = data?.assignedRole || data?.role || data?.requestedRole;
-        const role = normalizeUserRole(rawRole);
-        const status = normalizeApprovalStatus(data?.status);
-        candidates.push({
-          role,
-          status,
-          accessLevel: (data?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-          displayRole: mapAppRoleToDisplayRole(role),
-          securityRole: mapUserRoleToSecurityRole(role),
-          name: data?.fullName || data?.name,
-          discipline: data?.discipline || data?.primaryDiscipline,
-          source: 'database_access_requests',
-          isApproved: status === 'APPROVED',
-          id: item.snap.id,
-          updatedAtMs: parseTimestampMs(data),
-        });
-      } else {
-        const rawRole = data?.role || data?.appRole || data?.assignedRole;
-        if (rawRole) {
-          const role = normalizeUserRole(rawRole);
-          const status = normalizeApprovalStatus(data?.status || 'APPROVED');
-          candidates.push({
-            role,
-            status,
-            accessLevel: (data?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-            displayRole: mapAppRoleToDisplayRole(role),
-            securityRole: mapUserRoleToSecurityRole(role),
-            name: data?.name || data?.fullName,
-            discipline: data?.discipline || data?.primaryDiscipline,
-            source: 'database_users',
-            isApproved: status === 'APPROVED',
-            id: item.snap.id,
-            updatedAtMs: parseTimestampMs(data),
-          });
-        }
-      }
-    }
-
-    // 3. Query by normalized email across access_requests and users
-    if (!candidates.some((c) => c.isApproved)) {
-      const [reqQuerySnap, userQuerySnap] = await Promise.all([
-        getDocs(query(collection(db, 'access_requests'), where('email', '==', cleanEmail))),
-        getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail))),
-      ]);
-
-      reqQuerySnap.docs.forEach((docSnap) => {
-        const rData = docSnap.data();
-        const rawRole = rData?.assignedRole || rData?.role || rData?.requestedRole;
-        const role = normalizeUserRole(rawRole);
-        const status = normalizeApprovalStatus(rData?.status);
-        candidates.push({
-          role,
-          status,
-          accessLevel: (rData?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-          displayRole: mapAppRoleToDisplayRole(role),
-          securityRole: mapUserRoleToSecurityRole(role),
-          name: rData?.fullName || rData?.name,
-          discipline: rData?.discipline || rData?.primaryDiscipline,
-          source: 'database_access_requests',
-          isApproved: status === 'APPROVED',
-          id: docSnap.id,
-          updatedAtMs: parseTimestampMs(rData),
-        });
-      });
-
-      userQuerySnap.docs.forEach((docSnap) => {
-        const uData = docSnap.data();
-        const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
-        if (rawRole) {
-          const role = normalizeUserRole(rawRole);
-          const status = normalizeApprovalStatus(uData?.status || 'APPROVED');
-          candidates.push({
-            role,
-            status,
-            accessLevel: (uData?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
-            displayRole: mapAppRoleToDisplayRole(role),
-            securityRole: mapUserRoleToSecurityRole(role),
-            name: uData?.name || uData?.fullName,
-            discipline: uData?.discipline || uData?.primaryDiscipline,
-            source: 'database_users',
-            isApproved: status === 'APPROVED',
-            id: docSnap.id,
-            updatedAtMs: parseTimestampMs(uData),
-          });
-        }
-      });
-    }
-  } catch (err) {
-    console.warn('Firestore role lookup notice:', err);
-  }
-
-  // Also check local onboarding & saved user caches in case Firestore write quota was exhausted
+  // 2. Check local onboarding & saved user caches synchronously first (0ms latency)
   try {
     for (const reqKey of ['bim_pending_access_requests_v1', 'bim_tracker_onboarding_v7']) {
       const rawReqs = localStorage.getItem(reqKey);
@@ -249,6 +156,124 @@ export async function fetchUserRoleFromDatabase(
     }
   } catch {}
 
+  // 3. Direct deterministic document lookups across 'access_requests' and 'users' in parallel with strict 500ms timeout
+  try {
+    const directReads = await withTimeout(
+      Promise.all(
+        docIdsToTry.flatMap((dId) => [
+          getDoc(doc(db, 'access_requests', dId)).then((snap) => ({ kind: 'req' as const, snap })),
+          getDoc(doc(db, 'users', dId)).then((snap) => ({ kind: 'usr' as const, snap })),
+        ])
+      ),
+      500,
+      []
+    );
+
+    if (directReads && directReads.length > 0) {
+      for (const item of directReads) {
+        if (!item?.snap?.exists()) continue;
+        const data = item.snap.data();
+        if ((data?.email || '').trim().toLowerCase() !== cleanEmail) continue;
+
+        if (item.kind === 'req') {
+          const rawRole = data?.assignedRole || data?.role || data?.requestedRole;
+          const role = normalizeUserRole(rawRole);
+          const status = normalizeApprovalStatus(data?.status);
+          candidates.push({
+            role,
+            status,
+            accessLevel: (data?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+            displayRole: mapAppRoleToDisplayRole(role),
+            securityRole: mapUserRoleToSecurityRole(role),
+            name: data?.fullName || data?.name,
+            discipline: data?.discipline || data?.primaryDiscipline,
+            source: 'database_access_requests',
+            isApproved: status === 'APPROVED',
+            id: item.snap.id,
+            updatedAtMs: parseTimestampMs(data),
+          });
+        } else {
+          const rawRole = data?.role || data?.appRole || data?.assignedRole;
+          if (rawRole) {
+            const role = normalizeUserRole(rawRole);
+            const status = normalizeApprovalStatus(data?.status || 'APPROVED');
+            candidates.push({
+              role,
+              status,
+              accessLevel: (data?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+              displayRole: mapAppRoleToDisplayRole(role),
+              securityRole: mapUserRoleToSecurityRole(role),
+              name: data?.name || data?.fullName,
+              discipline: data?.discipline || data?.primaryDiscipline,
+              source: 'database_users',
+              isApproved: status === 'APPROVED',
+              id: item.snap.id,
+              updatedAtMs: parseTimestampMs(data),
+            });
+          }
+        }
+      }
+    }
+
+    // 4. Only query by email if no approved or pending candidate was found yet
+    if (candidates.length === 0) {
+      const querySnaps = await withTimeout(
+        Promise.all([
+          getDocs(query(collection(db, 'access_requests'), where('email', '==', cleanEmail))),
+          getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail))),
+        ]),
+        500
+      );
+
+      if (querySnaps) {
+        const [reqQuerySnap, userQuerySnap] = querySnaps;
+        reqQuerySnap.docs.forEach((docSnap) => {
+          const rData = docSnap.data();
+          const rawRole = rData?.assignedRole || rData?.role || rData?.requestedRole;
+          const role = normalizeUserRole(rawRole);
+          const status = normalizeApprovalStatus(rData?.status);
+          candidates.push({
+            role,
+            status,
+            accessLevel: (rData?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+            displayRole: mapAppRoleToDisplayRole(role),
+            securityRole: mapUserRoleToSecurityRole(role),
+            name: rData?.fullName || rData?.name,
+            discipline: rData?.discipline || rData?.primaryDiscipline,
+            source: 'database_access_requests',
+            isApproved: status === 'APPROVED',
+            id: docSnap.id,
+            updatedAtMs: parseTimestampMs(rData),
+          });
+        });
+
+        userQuerySnap.docs.forEach((docSnap) => {
+          const uData = docSnap.data();
+          const rawRole = uData?.role || uData?.appRole || uData?.assignedRole;
+          if (rawRole) {
+            const role = normalizeUserRole(rawRole);
+            const status = normalizeApprovalStatus(uData?.status || 'APPROVED');
+            candidates.push({
+              role,
+              status,
+              accessLevel: (uData?.accessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+              displayRole: mapAppRoleToDisplayRole(role),
+              securityRole: mapUserRoleToSecurityRole(role),
+              name: uData?.name || uData?.fullName,
+              discipline: uData?.discipline || uData?.primaryDiscipline,
+              source: 'database_users',
+              isApproved: status === 'APPROVED',
+              id: docSnap.id,
+              updatedAtMs: parseTimestampMs(uData),
+            });
+          }
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Firestore role lookup notice:', err);
+  }
+
   if (candidates.length > 0) {
     // Prioritize APPROVED records first, otherwise sort by newest timestamp so fresh pending requests override stale rejections
     candidates.sort((a, b) => {
@@ -272,7 +297,7 @@ export async function fetchUserRoleFromDatabase(
     };
   }
 
-  // 4. Default fallback for completely unknown user (not yet in Firestore)
+  // 5. Default fallback for completely unknown user (not yet in Firestore)
   return {
     role: 'EDITOR',
     status: 'PENDING',
@@ -286,8 +311,8 @@ export async function fetchUserRoleFromDatabase(
 }
 
 /**
- * Persists the user's assigned role and approval status to both Firestore collections
- * ('access_requests' and 'users') and local session caches.
+ * Persists the user's assigned role and approval status to local session caches immediately
+ * (0ms UI latency) and syncs to Firestore collections ('access_requests' and 'users') with strict timeout.
  */
 export async function persistUserRoleToDatabase(params: {
   email: string;
@@ -319,123 +344,7 @@ export async function persistUserRoleToDatabase(params: {
   const cleanUid = params.uid && !params.uid.startsWith('emp-') ? params.uid : deterministicId;
   const targetId = cleanUid || deterministicId;
 
-  const updatePayload: Record<string, any> = {
-    email: cleanEmail,
-    name: params.name || cleanEmail.split('@')[0],
-    fullName: params.name || cleanEmail.split('@')[0],
-    role: validatedRole,
-    assignedRole: validatedRole,
-    requestedRole: displayRole,
-    assignedAccessLevel: calculatedAccessLevel,
-    discipline: params.discipline || 'BIM - ACS',
-    primaryDiscipline: params.discipline || 'BIM - ACS',
-    status: firestoreRequestStatus,
-    reviewedBy:
-      normalizedStatus === 'PENDING'
-        ? null
-        : params.reviewedBy || `${SUPER_ADMIN_NAME} (Super Admin)`,
-    reviewedAt: normalizedStatus === 'PENDING' ? null : nowIso,
-    updatedAt: nowIso,
-    ...(params.notes ? { notes: params.notes } : {}),
-  };
-
-  // 1. Update matching records in Firestore 'access_requests'
-  try {
-    const reqsCol = collection(db, 'access_requests');
-    const reqQ = query(reqsCol, where('email', '==', cleanEmail));
-    const snap = await getDocs(reqQ);
-
-    const updatedDocIds = new Set<string>();
-    if (!snap.empty) {
-      const updatePromises = snap.docs.map((docSnap) => {
-        updatedDocIds.add(docSnap.id);
-        return setDoc(docSnap.ref, { id: docSnap.id, uid: docSnap.id, ...updatePayload }, { merge: true });
-      });
-      await Promise.all(updatePromises);
-    }
-
-    if (!updatedDocIds.has(deterministicId)) {
-      await setDoc(
-        doc(db, 'access_requests', deterministicId),
-        {
-          id: deterministicId,
-          uid: deterministicId,
-          createdAt: nowIso,
-          timestamp: nowIso,
-          ...updatePayload,
-        },
-        { merge: true }
-      );
-      updatedDocIds.add(deterministicId);
-    }
-
-    if (targetId !== deterministicId && !updatedDocIds.has(targetId)) {
-      await setDoc(
-        doc(db, 'access_requests', targetId),
-        {
-          id: targetId,
-          uid: targetId,
-          createdAt: nowIso,
-          timestamp: nowIso,
-          ...updatePayload,
-        },
-        { merge: true }
-      );
-    }
-  } catch (err) {
-    console.warn('Firestore access_requests persistence notice:', err);
-  }
-
-  // 2. Update Firestore 'users' collection (including any existing docs matching by email)
-  try {
-    const userPayload = {
-      id: deterministicId,
-      email: cleanEmail,
-      name: params.name || cleanEmail.split('@')[0],
-      fullName: params.name || cleanEmail.split('@')[0],
-      role: validatedRole,
-      appRole: validatedRole,
-      assignedRole: validatedRole,
-      status: normalizedStatus,
-      accessLevel: calculatedAccessLevel,
-      assignedAccessLevel: calculatedAccessLevel,
-      discipline: params.discipline || 'BIM - ACS',
-      primaryDiscipline: params.discipline || 'BIM - ACS',
-      isDeleted: false,
-      updatedAt: nowIso,
-    };
-    const usersCol = collection(db, 'users');
-    const userSnap = await getDocs(query(usersCol, where('email', '==', cleanEmail)));
-    const updatedUserDocIds = new Set<string>();
-
-    if (!userSnap.empty) {
-      await Promise.all(
-        userSnap.docs.map((d) => {
-          updatedUserDocIds.add(d.id);
-          return setDoc(d.ref, { ...userPayload, id: d.data()?.id || `emp-${d.id}` }, { merge: true });
-        })
-      );
-    }
-
-    if (!updatedUserDocIds.has(deterministicId)) {
-      await setDoc(
-        doc(db, 'users', deterministicId),
-        { ...userPayload, id: `emp-${deterministicId}` },
-        { merge: true }
-      );
-    }
-    if (targetId !== deterministicId && !updatedUserDocIds.has(targetId)) {
-      await setDoc(
-        doc(db, 'users', targetId),
-        { ...userPayload, id: targetId.startsWith('emp-') ? targetId : `emp-${targetId}` },
-        { merge: true }
-      );
-    }
-  } catch (err) {
-    console.warn('Firestore users collection persistence notice:', err);
-  }
-
-  // 3. Update saved users database in localStorage
+  // 1. Update saved users database in localStorage synchronously FIRST for zero latency
   try {
     for (const dbKey of [STORAGE_KEYS.SAVED_USERS_DB, STORAGE_KEYS.REGISTERED_USERS_DB]) {
       const saved = localStorage.getItem(dbKey);
@@ -464,7 +373,7 @@ export async function persistUserRoleToDatabase(params: {
     console.warn('LocalStorage usersDb persistence notice:', e);
   }
 
-  // 4. Synchronize cached employees list in localStorage and notify active listeners immediately
+  // 2. Synchronize cached employees list in localStorage and notify active listeners immediately
   try {
     const empRaw = localStorage.getItem('bim_tracker_employees_v7');
     if (empRaw) {
@@ -515,7 +424,7 @@ export async function persistUserRoleToDatabase(params: {
     console.warn('Employees localStorage role sync notice:', e);
   }
 
-  // 5. If current logged in user is this user, update current user cache in localStorage
+  // 3. If current logged in user is this user, update current user cache in localStorage immediately
   try {
     const curRaw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
     if (curRaw) {
@@ -537,4 +446,73 @@ export async function persistUserRoleToDatabase(params: {
   } catch (e) {
     console.warn('Current user storage update notice:', e);
   }
+
+  // 4. Persist to Firestore 'access_requests' and 'users' with strict fast timeout so UI never blocks
+  const updatePayload: Record<string, any> = {
+    email: cleanEmail,
+    name: params.name || cleanEmail.split('@')[0],
+    fullName: params.name || cleanEmail.split('@')[0],
+    role: validatedRole,
+    assignedRole: validatedRole,
+    requestedRole: displayRole,
+    assignedAccessLevel: calculatedAccessLevel,
+    discipline: params.discipline || 'BIM - ACS',
+    primaryDiscipline: params.discipline || 'BIM - ACS',
+    status: firestoreRequestStatus,
+    reviewedBy:
+      normalizedStatus === 'PENDING'
+        ? null
+        : params.reviewedBy || `${SUPER_ADMIN_NAME} (Super Admin)`,
+    reviewedAt: normalizedStatus === 'PENDING' ? null : nowIso,
+    updatedAt: nowIso,
+    ...(params.notes ? { notes: params.notes } : {}),
+  };
+
+  const userPayload = {
+    id: `emp-${deterministicId}`,
+    email: cleanEmail,
+    name: params.name || cleanEmail.split('@')[0],
+    fullName: params.name || cleanEmail.split('@')[0],
+    role: validatedRole,
+    appRole: validatedRole,
+    assignedRole: validatedRole,
+    status: normalizedStatus,
+    accessLevel: calculatedAccessLevel,
+    assignedAccessLevel: calculatedAccessLevel,
+    discipline: params.discipline || 'BIM - ACS',
+    primaryDiscipline: params.discipline || 'BIM - ACS',
+    isDeleted: false,
+    updatedAt: nowIso,
+  };
+
+  const docIds = Array.from(new Set([deterministicId, targetId].filter(Boolean)));
+  const writeOps: Promise<any>[] = [];
+
+  for (const dId of docIds) {
+    writeOps.push(
+      setDoc(
+        doc(db, 'access_requests', dId),
+        {
+          id: dId,
+          uid: dId,
+          createdAt: nowIso,
+          timestamp: nowIso,
+          ...updatePayload,
+        },
+        { merge: true }
+      ).catch(() => {})
+    );
+    writeOps.push(
+      setDoc(
+        doc(db, 'users', dId),
+        {
+          ...userPayload,
+          id: dId.startsWith('emp-') ? dId : `emp-${dId}`,
+        },
+        { merge: true }
+      ).catch(() => {})
+    );
+  }
+
+  await withTimeout(Promise.allSettled(writeOps), 600);
 }

@@ -375,6 +375,8 @@ export const removeLocalAccessRequest = (idOrEmail: string, email?: string): voi
   }
 };
 
+let lastMergedRequestsSignature = '';
+
 export const mergeAccessRequestsWithLocal = (
   remoteList: OnboardingRequest[],
   currentList: OnboardingRequest[] = []
@@ -480,8 +482,15 @@ export const mergeAccessRequestsWithLocal = (
   });
 
   try {
-    localStorage.setItem(STORAGE_KEYS.ONBOARDING, JSON.stringify(result));
-    localStorage.setItem(PENDING_ACCESS_REQUESTS_KEY, JSON.stringify(result));
+    const signature = result
+      .map((r) => `${r.id}:${r.email}:${r.status}:${r.assignedRole}:${r.timestamp || ''}`)
+      .join('|');
+    if (signature !== lastMergedRequestsSignature) {
+      lastMergedRequestsSignature = signature;
+      const serialized = JSON.stringify(result);
+      localStorage.setItem(STORAGE_KEYS.ONBOARDING, serialized);
+      localStorage.setItem(PENDING_ACCESS_REQUESTS_KEY, serialized);
+    }
   } catch {}
 
   return result;
@@ -2096,26 +2105,52 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const collectionsToListen = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
       const docsByCollection = new Map<string, Map<string, any>>();
       collectionsToListen.forEach((col) => docsByCollection.set(col, new Map()));
+      let syncScheduled = false;
 
       const syncAllRequests = () => {
+        syncScheduled = false;
         const allRaw: any[] = [];
         docsByCollection.forEach((colMap) => {
           colMap.forEach((docData) => allRaw.push(docData));
         });
         const rawList = allRaw.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
         const list = deduplicateAndSortRequests(rawList);
+        let latestMerged: OnboardingRequest[] | null = null;
+
         setOnboardingRequests((prev) => {
           const merged = deduplicateAndSortRequests(mergeAccessRequestsWithLocal(list, prev));
-          syncRequestsToEmployees(merged);
+          latestMerged = merged;
+          if (
+            prev.length === merged.length &&
+            prev.every(
+              (item, idx) =>
+                item.id === merged[idx]?.id &&
+                item.email === merged[idx]?.email &&
+                item.status === merged[idx]?.status &&
+                item.assignedRole === merged[idx]?.assignedRole &&
+                item.timestamp === merged[idx]?.timestamp
+            )
+          ) {
+            return prev;
+          }
           return merged;
         });
+
+        if (latestMerged) {
+          syncRequestsToEmployees(latestMerged);
+        }
+      };
+
+      const scheduleSyncAllRequests = () => {
+        if (syncScheduled) return;
+        syncScheduled = true;
+        queueMicrotask(syncAllRequests);
       };
 
       collectionsToListen.forEach((colName) => {
         try {
           const u = onSnapshot(
             collection(db, colName),
-            { includeMetadataChanges: true },
             (snapshot) => {
               const colMap = docsByCollection.get(colName) || new Map();
               snapshot.docChanges().forEach((change) => {
@@ -2150,7 +2185,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 colMap.set(d.id, d);
               });
               docsByCollection.set(colName, colMap);
-              syncAllRequests();
+              scheduleSyncAllRequests();
             },
             (err) => {
               console.warn(`Firestore ${colName} listener notice:`, err?.message);
@@ -3639,11 +3674,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
     setAuditLogs((prev) => [newAudit, ...prev]);
 
-    // 3. Save to central database collections in Firestore unless caller already wrote it
+    // 3. Save to central database collection in Firestore non-blockingly unless caller already wrote it
     if (!params.skipFirestoreWrite) {
       if (preservedStatus === 'APPROVED') {
         const reqDoc = doc(db, 'access_requests', effectiveDocId);
-        await setDoc(
+        setDoc(
           reqDoc,
           {
             id: effectiveDocId,
@@ -3679,11 +3714,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           requestTimestamp: timestamp,
           updatedAt: isoTimestamp,
         };
-        ['access_requests', 'accessRequests', 'pendingUsers'].forEach((colName) => {
-          setDoc(doc(db, colName, effectiveDocId), firestorePayload, { merge: true }).catch((err) =>
-            console.warn(`Firestore ${colName} write notice:`, err)
-          );
-        });
+        setDoc(doc(db, 'access_requests', effectiveDocId), firestorePayload, { merge: true }).catch(
+          (err) => console.warn('Firestore access_requests write notice:', err)
+        );
       }
     }
 
@@ -4579,11 +4612,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     // 1. Optimistic state update in allWorkLogs
     setAllWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
 
-    // 2. Persist to central Firestore daily_logs and work_logs collections for bi-directional sync
+    // 2. Persist lean payload to Firestore daily_logs and work_logs collections non-blockingly
     try {
-      const sanitizedLog = JSON.parse(JSON.stringify(newLog));
       const payload = {
-        ...sanitizedLog,
+        ...newLog,
         employeeId: newLog.employeeId,
         memberId: newLog.employeeId,
         userId: newLog.employeeId,
@@ -4655,14 +4687,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const basePayload = fullUpdated
         ? { ...fullUpdated }
         : sanitizeWorkLogRecord({ ...(updates as DailyWorkLog), id });
-      const sanitizedUpdates = JSON.parse(
-        JSON.stringify({
-          ...basePayload,
-          ...(basePayload.hoursLogged !== undefined
-            ? { hours: Number(basePayload.hoursLogged) || 0, hoursLogged: Number(basePayload.hoursLogged) || 0 }
-            : {}),
-        })
-      );
+      const sanitizedUpdates = {
+        ...basePayload,
+        ...(basePayload.hoursLogged !== undefined
+          ? { hours: Number(basePayload.hoursLogged) || 0, hoursLogged: Number(basePayload.hoursLogged) || 0 }
+          : {}),
+      };
       setDoc(doc(db, 'daily_logs', id), sanitizedUpdates, { merge: true }).catch((err) =>
         console.warn('Firestore daily_logs updateWorkLog sync notice:', err)
       );
