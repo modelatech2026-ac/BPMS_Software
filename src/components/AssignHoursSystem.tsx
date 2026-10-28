@@ -33,6 +33,9 @@ import {
   sanitizeEmployeeRecord,
   sanitizeWorkLogRecord,
   normalizeDateToIso,
+  mergeAllocationsWithLocal,
+  getDeletedAllocationIds,
+  registerDeletedAllocationId,
 } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import {
@@ -117,6 +120,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     employees,
     workLogs,
     allWorkLogs,
+    resourceAllocations,
     theme,
     currentUser,
     disciplineAssignments,
@@ -192,6 +196,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   // Exclude allocations explicitly marked as deleted while keeping all live active allocations visible
   const isLiveActiveMember = (item: ResourceAllocationItem) => {
     if (!item) return false;
+    if (getDeletedAllocationIds().has(item.id)) return false;
     if ((item as any).isDeleted === true) return false;
     if (String(item.status || '').trim().toLowerCase() === 'deleted') return false;
     return true;
@@ -427,13 +432,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
       if (remoteAllocations.length > 0 || !fromCache) {
         setAllocations((prev) => {
-          if (!hasInitialSeededRef.current) {
-            hasInitialSeededRef.current = true;
-            if (remoteAllocations.length === 0 && prev.length > 0) {
-              return prev;
-            }
-          }
-          return remoteAllocations;
+          hasInitialSeededRef.current = true;
+          const merged = mergeAllocationsWithLocal(remoteAllocations, prev);
+          try {
+            localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(merged));
+          } catch {}
+          return merged;
         });
       }
     };
@@ -512,16 +516,50 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     };
   }, [projects, employees]);
 
-  // Sync allocations with activeMembers collection
+  // Sync allocations with context resourceAllocations, custom events, storage events, and BroadcastChannel
   useEffect(() => {
+    if (Array.isArray(resourceAllocations) && resourceAllocations.length > 0) {
+      setAllocations((prev) => mergeAllocationsWithLocal(resourceAllocations, prev));
+    }
+  }, [resourceAllocations]);
+
+  useEffect(() => {
+    let broadcastChannel: BroadcastChannel | undefined;
     const handleAllocUpdate = (e: any) => {
       if (e.detail && Array.isArray(e.detail)) {
-        setAllocations(isSuperAdmin || activeMembers.length === 0 ? e.detail : e.detail.filter(isLiveActiveMember));
+        setAllocations((prev) => mergeAllocationsWithLocal(e.detail, prev));
+      }
+    };
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'bim_resource_allocations_v2' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setAllocations((prev) => mergeAllocationsWithLocal(parsed, prev));
+          }
+        } catch {}
       }
     };
     window.addEventListener('bim_resource_allocations_updated', handleAllocUpdate);
+    window.addEventListener('storage', handleStorageEvent);
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        broadcastChannel = new BroadcastChannel('bim_resource_allocations_channel');
+        broadcastChannel.onmessage = (event) => {
+          if (event?.data && Array.isArray(event.data)) {
+            setAllocations((prev) => mergeAllocationsWithLocal(event.data, prev));
+          }
+        };
+      }
+    } catch {}
     return () => {
       window.removeEventListener('bim_resource_allocations_updated', handleAllocUpdate);
+      window.removeEventListener('storage', handleStorageEvent);
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.close();
+        } catch {}
+      }
     };
   }, [activeMembers, isSuperAdmin]);
 
@@ -695,11 +733,21 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const [formNotes, setFormNotes] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Persist allocations to state, localStorage, and Firestore assigned_hours & project_assignments
+  // Persist allocations to state, localStorage, BroadcastChannel, and Firestore assigned_hours & project_assignments
   const saveAllocations = (newAllocations: ResourceAllocationItem[], changedItem?: ResourceAllocationItem) => {
-    setAllocations(newAllocations);
-    localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(newAllocations));
-    window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: newAllocations }));
+    const cleanAllocations = newAllocations.filter(isLiveActiveMember);
+    setAllocations(cleanAllocations);
+    try {
+      localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(cleanAllocations));
+    } catch {}
+    window.dispatchEvent(new CustomEvent('bim_resource_allocations_updated', { detail: cleanAllocations }));
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('bim_resource_allocations_channel');
+        bc.postMessage(cleanAllocations);
+        bc.close();
+      }
+    } catch {}
     if (changedItem) {
       try {
         const resolvedName =
@@ -717,20 +765,20 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           memberEmail: resolvedEmail,
           assignedToEmail: resolvedEmail,
           discipline: changedItem.discipline || 'BIM - ACS',
-          updatedAt: new Date().toISOString(),
+          lod: changedItem.lod || 'LOD 350',
+          projectPhase: changedItem.projectPhase || 'Design Development',
+          taskType: changedItem.taskType || '3D Modeling',
+          targetElementOrZone: changedItem.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
+          updatedAt: changedItem.updatedAt || new Date().toISOString(),
         };
         const assignedHoursRef = doc(db, 'assigned_hours', changedItem.id);
-        updateDoc(assignedHoursRef, sanitized).catch(() => {
-          setDoc(assignedHoursRef, sanitized, { merge: true }).catch((err) =>
-            console.warn('Firestore saveAllocation assigned_hours sync notice:', err)
-          );
-        });
+        setDoc(assignedHoursRef, sanitized, { merge: true }).catch((err) =>
+          console.warn('Firestore saveAllocation assigned_hours sync notice:', err)
+        );
         const targetRef = doc(db, 'project_assignments', changedItem.id);
-        updateDoc(targetRef, sanitized).catch(() => {
-          setDoc(targetRef, sanitized, { merge: true }).catch((err) =>
-            console.warn('Firestore saveAllocation project_assignments sync notice:', err)
-          );
-        });
+        setDoc(targetRef, sanitized, { merge: true }).catch((err) =>
+          console.warn('Firestore saveAllocation project_assignments sync notice:', err)
+        );
       } catch (e) {
         console.warn('Firestore saveAllocation error:', e);
       }
@@ -859,22 +907,37 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     );
   }, [currentUser, isSuperAdmin]);
 
-  const viewerMatchedEmployee = useMemo(() => {
-    if (!currentUser) return undefined;
+  const viewerMatchedEmployees = useMemo(() => {
+    if (!currentUser) return [];
     const userId = (currentUser.id || '').trim();
     const userIdStripped = userId.replace(/^emp-/, '');
     const userEmail = normalizePersonEmail(currentUser.email);
     const userName = normalizePersonName(currentUser.name);
-    return employees.find(
-      (e) =>
-        (userId && (e.id === userId || e.id.replace(/^emp-/, '') === userIdStripped)) ||
-        (userEmail && normalizePersonEmail(e.email) === userEmail) ||
-        (userName && normalizePersonName(e.name) === userName)
-    );
-  }, [currentUser, employees]);
+    const detEmailId = userEmail ? generateRequestDocId(userEmail) : '';
+
+    const combinedPool = [...activeTeamMembers, ...employees];
+    return combinedPool.filter((e) => {
+      const empId = (e.id || '').trim();
+      const empIdStripped = empId.replace(/^emp-/, '');
+      const empEmail = normalizePersonEmail(e.email);
+      const empName = normalizePersonName(e.name);
+      return (
+        (userId && (empId === userId || empIdStripped === userIdStripped)) ||
+        (detEmailId && (empId === detEmailId || empIdStripped === detEmailId)) ||
+        (userEmail && empEmail && empEmail === userEmail) ||
+        (userName && empName && empName === userName)
+      );
+    });
+  }, [currentUser, activeTeamMembers, employees]);
+
+  const viewerMatchedEmployee = useMemo(
+    () => viewerMatchedEmployees[0],
+    [viewerMatchedEmployees]
+  );
 
   const visibleAssignments = useMemo(() => {
     const allAssignments = allocations.filter(isLiveActiveMember);
+    // For SUPER_ADMIN / DIRECTOR: full access to view, manage, and filter all organizational work allocations
     if (
       isFullAccessRole ||
       currentUser?.role === 'SUPER_ADMIN' ||
@@ -884,44 +947,90 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
     if (!currentUser) return [];
 
+    // For VIEWER (and non-admin team members): strictly filter by the logged-in user's identifiers
     const userId = (currentUser.id || '').trim();
     const userIdStripped = userId.replace(/^emp-/, '');
+    const userGoogleId = String((currentUser as any).googleId || (currentUser as any).uid || '').trim();
     const userEmail = normalizePersonEmail(currentUser.email);
     const userName = normalizePersonName(currentUser.name);
-    const matchedEmpId = (viewerMatchedEmployee?.id || '').trim();
-    const matchedEmpIdStripped = matchedEmpId.replace(/^emp-/, '');
+    const detEmailId = userEmail ? generateRequestDocId(userEmail) : '';
+
+    const allowedIds = new Set<string>();
+    if (userId) {
+      allowedIds.add(userId);
+      allowedIds.add(userIdStripped);
+    }
+    if (userGoogleId) {
+      allowedIds.add(userGoogleId);
+      allowedIds.add(userGoogleId.replace(/^emp-/, ''));
+    }
+    if (detEmailId) {
+      allowedIds.add(detEmailId);
+      allowedIds.add(`emp-${detEmailId}`);
+    }
+    const allowedEmails = new Set<string>();
+    if (userEmail) allowedEmails.add(userEmail);
+
+    const allowedNames = new Set<string>();
+    if (userName) allowedNames.add(userName);
+
+    viewerMatchedEmployees.forEach((emp) => {
+      const empId = (emp.id || '').trim();
+      if (empId) {
+        allowedIds.add(empId);
+        allowedIds.add(empId.replace(/^emp-/, ''));
+      }
+      const empGoogleId = String((emp as any).googleId || (emp as any).uid || '').trim();
+      if (empGoogleId) {
+        allowedIds.add(empGoogleId);
+        allowedIds.add(empGoogleId.replace(/^emp-/, ''));
+      }
+      const empEmail = normalizePersonEmail(emp.email);
+      if (empEmail) {
+        allowedEmails.add(empEmail);
+        const empDetId = generateRequestDocId(empEmail);
+        allowedIds.add(empDetId);
+        allowedIds.add(`emp-${empDetId}`);
+      }
+      const empName = normalizePersonName(emp.name);
+      if (empName) allowedNames.add(empName);
+    });
 
     return allAssignments.filter((item) => {
       const rawItem = item as any;
-      if (
-        (userId && (rawItem.memberId === userId || item.employeeId === userId)) ||
-        (userEmail && normalizePersonEmail(rawItem.assignedToEmail) === userEmail)
-      ) {
+      const candidateIds = [
+        item.employeeId,
+        item.memberId,
+        rawItem.assignedTo,
+        rawItem.userId,
+      ]
+        .map((v) => String(v || '').trim())
+        .filter(Boolean);
+
+      for (const cid of candidateIds) {
+        const stripped = cid.replace(/^emp-/, '');
+        if (allowedIds.has(cid) || (stripped && allowedIds.has(stripped))) {
+          return true;
+        }
+      }
+
+      const itemEmail = normalizePersonEmail(
+        item.memberEmail || rawItem.assignedToEmail || rawItem.userEmail
+      );
+      if (itemEmail && allowedEmails.has(itemEmail)) {
         return true;
       }
 
-      const itemEmpId = (item.employeeId || rawItem.memberId || '').trim();
-      const itemEmpIdStripped = itemEmpId.replace(/^emp-/, '');
-      if (
-        (userIdStripped && itemEmpIdStripped === userIdStripped) ||
-        (matchedEmpId && (itemEmpId === matchedEmpId || itemEmpIdStripped === matchedEmpIdStripped))
-      ) {
-        return true;
-      }
-
-      const itemEmail = normalizePersonEmail(item.memberEmail || rawItem.assignedToEmail);
-      if (userEmail && itemEmail && itemEmail === userEmail) {
-        return true;
-      }
-
-      const itemName = normalizePersonName(item.employeeName || rawItem.memberName || rawItem.assignedToName);
-      if (userName && itemName && itemName === userName) {
+      const itemName = normalizePersonName(
+        item.employeeName || rawItem.memberName || rawItem.assignedToName
+      );
+      if (itemName && allowedNames.has(itemName)) {
         return true;
       }
 
       return false;
     });
-  }, [allocations, currentUser, isFullAccessRole, viewerMatchedEmployee]);
+  }, [allocations, currentUser, isFullAccessRole, viewerMatchedEmployees]);
 
   // All allocations synced from Firestore assigned_hours & project_assignments
   const liveActiveAllocations = useMemo(() => {
@@ -1367,7 +1476,20 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
 
     const proj = projects.find((p) => p.id === formProject || matchProjectId(p.id, formProject)) || projects[0];
-    const emp = employees.find((e) => e.id === formEmployee) || employees[0];
+    const targetEmpStripped = (formEmployee || '').trim().replace(/^emp-/, '');
+    const emp =
+      activeTeamMembers.find(
+        (m) =>
+          m.id === formEmployee ||
+          (targetEmpStripped && m.id.replace(/^emp-/, '') === targetEmpStripped)
+      ) ||
+      employees.find(
+        (m) =>
+          m.id === formEmployee ||
+          (targetEmpStripped && m.id.replace(/^emp-/, '') === targetEmpStripped)
+      ) ||
+      activeTeamMembers[0] ||
+      employees[0];
 
     if (!proj) {
       setFormError('Please select a valid target project.');
@@ -1378,30 +1500,52 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       return;
     }
 
+    const sanitizedEmp = sanitizeEmployeeRecord(emp);
+    const resolvedEmpId = sanitizedEmp.id || emp.id;
+    const resolvedEmpName = sanitizedEmp.name || emp.name;
+    const resolvedEmpEmail = normalizePersonEmail(sanitizedEmp.email || emp.email);
+
     const newItem: ResourceAllocationItem = {
       id: `alloc-${Date.now()}`,
       projectId: proj.id,
       projectName: proj.name,
-      employeeId: emp.id,
-      memberId: emp.id,
-      assignedTo: emp.id,
-      employeeName: emp.name,
-      assignedToName: emp.name,
-      memberName: emp.name,
-      employeeRole: emp.role,
-      memberEmail: emp.email,
-      assignedToEmail: emp.email,
+      employeeId: resolvedEmpId,
+      memberId: resolvedEmpId,
+      assignedTo: resolvedEmpId,
+      employeeName: resolvedEmpName,
+      assignedToName: resolvedEmpName,
+      memberName: resolvedEmpName,
+      employeeRole: emp.role || 'Editor',
+      memberEmail: resolvedEmpEmail,
+      assignedToEmail: resolvedEmpEmail,
       discipline: formDiscipline,
+      lod: formLOD,
       projectPhase: formPhase,
       taskType: formTaskType,
+      targetElementOrZone: formTargetZone || 'MOD-AR-LVL01-ZONE-A',
       assignedHours: Number(formHours),
       viewFrequency,
-      startDate: formStartDate,
-      dueDate: formDueDate,
+      startDate: normalizeDateToIso(formStartDate) || formStartDate,
+      dueDate: normalizeDateToIso(formDueDate) || formDueDate,
       status: 'Allocated',
       notes: formNotes,
       updatedAt: new Date().toISOString(),
     };
+
+    // Ensure active filters do not hide the newly allocated work item
+    if (selectedProjectId !== 'all' && !matchProjectId(proj.id, selectedProjectId)) {
+      setSelectedProjectId('all');
+    }
+    if (selectedEmployeeId !== 'all' && !doesAllocationMatchEmployee(newItem, selectedEmployeeId)) {
+      setSelectedEmployeeId('all');
+    }
+    if (
+      (filterStartDate || filterEndDate) &&
+      !doesTaskTimelineOverlapFilter(newItem, filterStartDate, filterEndDate)
+    ) {
+      setFilterStartDate('');
+      setFilterEndDate('');
+    }
 
     saveAllocations([newItem, ...allocations], newItem);
     setShowAddModal(false);
@@ -1465,6 +1609,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   // Delete Allocation with Firestore deleteDoc
   const handleDeleteAllocation = async (id: string) => {
+    registerDeletedAllocationId(id);
     const updated = allocations.filter((a) => a.id !== id);
     saveAllocations(updated);
     setAllocationToDelete(null);
@@ -2108,6 +2253,17 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                                 }
                                 className="px-2 py-1 text-[13px] font-semibold rounded bg-slate-800 border border-slate-700 text-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                               >
+                                {!(activeTeamMembers.some(
+                                  (emp) => emp.id === (selectedMember?.id || row.employeeId || '')
+                                )) &&
+                                  (selectedMember?.id || row.employeeId) && (
+                                    <option
+                                      value={selectedMember?.id || row.employeeId || ''}
+                                      className="bg-slate-900"
+                                    >
+                                      {assignedName}
+                                    </option>
+                                  )}
                                 {activeTeamMembers.map((emp) => (
                                   <option key={emp.id} value={emp.id} className="bg-slate-900">
                                     {emp.name}
@@ -2123,37 +2279,63 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         </div>
                       </td>
 
-                      {/* Project (Synced with Firestore projectId / projectName) */}
+                      {/* Project & Detailed Work Breakdown (Synced with Firestore projectId / projectName / task details) */}
                       <td className="py-3 px-3">
-                        {canManageAllocations ? (
-                          <div className="flex items-center gap-1.5">
-                            <Building className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                            <select
-                              aria-label={`Assigned project for ${assignedName}`}
-                              value={resolvedProjectId}
-                              onChange={(e) => handleInlineProjectChange(alloc.id, e.target.value)}
-                              className="px-2 py-1 text-xs font-semibold rounded bg-slate-800 border border-slate-700 text-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer max-w-[200px] truncate"
-                            >
-                              {!projects.some((p) => p.id === resolvedProjectId) && resolvedProjectId && (
-                                <option value={resolvedProjectId} className="bg-slate-900">
-                                  {cleanProjectName(resolvedProjectName)}
-                                </option>
+                        <div className="flex flex-col gap-1">
+                          {canManageAllocations ? (
+                            <div className="flex items-center gap-1.5">
+                              <Building className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                              <select
+                                aria-label={`Assigned project for ${assignedName}`}
+                                value={resolvedProjectId}
+                                onChange={(e) => handleInlineProjectChange(alloc.id, e.target.value)}
+                                className="px-2 py-1 text-xs font-semibold rounded bg-slate-800 border border-slate-700 text-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer max-w-[200px] truncate"
+                              >
+                                {!projects.some((p) => p.id === resolvedProjectId) && resolvedProjectId && (
+                                  <option value={resolvedProjectId} className="bg-slate-900">
+                                    {cleanProjectName(resolvedProjectName)}
+                                  </option>
+                                )}
+                                {projects.map((p) => (
+                                  <option key={p.id} value={p.id} className="bg-slate-900">
+                                    {cleanProjectName(p.name)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 font-semibold text-blue-300 text-xs">
+                              <Building className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                              <span className="truncate max-w-[200px]" title={cleanProjectName(resolvedProjectName)}>
+                                {cleanProjectName(resolvedProjectName)}
+                              </span>
+                            </div>
+                          )}
+                          {(row.taskType || row.projectPhase || row.lod || row.notes) && (
+                            <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-400 pl-5">
+                              {row.taskType && (
+                                <span className="px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/70 text-slate-300 font-medium">
+                                  {row.taskType}
+                                </span>
                               )}
-                              {projects.map((p) => (
-                                <option key={p.id} value={p.id} className="bg-slate-900">
-                                  {cleanProjectName(p.name)}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 font-semibold text-blue-300 text-xs">
-                            <Building className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                            <span className="truncate max-w-[200px]" title={cleanProjectName(resolvedProjectName)}>
-                              {cleanProjectName(resolvedProjectName)}
-                            </span>
-                          </div>
-                        )}
+                              {row.lod && (
+                                <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 font-mono">
+                                  {row.lod}
+                                </span>
+                              )}
+                              {row.projectPhase && (
+                                <span className="text-slate-400 truncate max-w-[140px]" title={row.projectPhase}>
+                                  • {row.projectPhase}
+                                </span>
+                              )}
+                              {row.notes && (
+                                <span className="text-slate-300/90 italic truncate max-w-[180px]" title={row.notes}>
+                                  — "{row.notes}"
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       {/* Assigned Hours (Inline Editable for Admins, Read-Only for Viewers) */}

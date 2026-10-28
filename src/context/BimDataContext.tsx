@@ -877,6 +877,76 @@ export const sanitizeEmployeeRecord = (emp: Employee): Employee => {
   };
 };
 
+export const DELETED_ALLOCATIONS_STORAGE_KEY = 'bim_deleted_allocations_v1';
+
+export const getDeletedAllocationIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(DELETED_ALLOCATIONS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.map((id) => String(id)));
+      }
+    }
+  } catch {}
+  return new Set<string>();
+};
+
+export const registerDeletedAllocationId = (id: string): void => {
+  if (!id) return;
+  try {
+    const existing = getDeletedAllocationIds();
+    existing.add(String(id));
+    localStorage.setItem(DELETED_ALLOCATIONS_STORAGE_KEY, JSON.stringify(Array.from(existing)));
+  } catch {}
+};
+
+export const mergeAllocationsWithLocal = (
+  incomingList: ResourceAllocationItem[],
+  currentList: ResourceAllocationItem[] = []
+): ResourceAllocationItem[] => {
+  const deletedIds = getDeletedAllocationIds();
+  const mergedMap = new Map<string, ResourceAllocationItem>();
+
+  const upsert = (item: ResourceAllocationItem) => {
+    if (!item || !item.id) return;
+    if (deletedIds.has(item.id)) return;
+    if ((item as any).isDeleted === true) return;
+    if (String(item.status || '').trim().toLowerCase() === 'deleted') return;
+
+    const existing = mergedMap.get(item.id);
+    if (!existing) {
+      mergedMap.set(item.id, item);
+      return;
+    }
+    const existingTime = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
+    const itemTime = item.updatedAt ? Date.parse(item.updatedAt) : 0;
+    if (!existingTime || (itemTime && itemTime >= existingTime)) {
+      mergedMap.set(item.id, { ...existing, ...item });
+    }
+  };
+
+  try {
+    const saved = localStorage.getItem('bim_resource_allocations_v2');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        parsed.forEach(upsert);
+      }
+    }
+  } catch {}
+
+  (currentList || []).forEach(upsert);
+  (incomingList || []).forEach(upsert);
+
+  return Array.from(mergedMap.values()).sort((a, b) => {
+    const timeA = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+    const timeB = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+    if (timeA !== timeB) return timeB - timeA;
+    return String(b.id).localeCompare(String(a.id));
+  });
+};
+
 export const sanitizeWorkLogRecord = (log: DailyWorkLog): DailyWorkLog => {
   const rawName = String(log.employeeName || '').trim();
   const lowerName = rawName.toLowerCase();
@@ -2683,16 +2753,40 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     let unsubProjectAssignments: (() => void) | undefined;
     let unsubAssignedHours: (() => void) | undefined;
+    let broadcastChannel: BroadcastChannel | undefined;
 
     const projectAssignmentsMap = new Map<string, ResourceAllocationItem>();
     const assignedHoursMap = new Map<string, ResourceAllocationItem>();
 
     const handleLocalAllocUpdate = (e: any) => {
       if (e?.detail && Array.isArray(e.detail)) {
-        setResourceAllocations(e.detail);
+        setResourceAllocations((prev) => mergeAllocationsWithLocal(e.detail, prev));
       }
     };
     window.addEventListener('bim_resource_allocations_updated', handleLocalAllocUpdate);
+
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'bim_resource_allocations_v2' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setResourceAllocations((prev) => mergeAllocationsWithLocal(parsed, prev));
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageEvent);
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        broadcastChannel = new BroadcastChannel('bim_resource_allocations_channel');
+        broadcastChannel.onmessage = (event) => {
+          if (event?.data && Array.isArray(event.data)) {
+            setResourceAllocations((prev) => mergeAllocationsWithLocal(event.data, prev));
+          }
+        };
+      }
+    } catch {}
 
     const parseAllocDoc = (docSnap: any): ResourceAllocationItem => {
       const data = docSnap.data();
@@ -2773,10 +2867,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       });
       const remoteAllocations = Array.from(combined.values());
 
-      setResourceAllocations(remoteAllocations);
-      try {
-        localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(remoteAllocations));
-      } catch {}
+      setResourceAllocations((prev) => {
+        const merged = mergeAllocationsWithLocal(remoteAllocations, prev);
+        try {
+          localStorage.setItem('bim_resource_allocations_v2', JSON.stringify(merged));
+        } catch {}
+        return merged;
+      });
     };
 
     try {
@@ -2813,6 +2910,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     return () => {
       window.removeEventListener('bim_resource_allocations_updated', handleLocalAllocUpdate);
+      window.removeEventListener('storage', handleStorageEvent);
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.close();
+        } catch {}
+      }
       if (unsubProjectAssignments) unsubProjectAssignments();
       if (unsubAssignedHours) unsubAssignedHours();
     };
