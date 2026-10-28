@@ -334,10 +334,10 @@ export async function persistUserRoleToDatabase(params: {
   const normalizedStatus: UserApprovalStatus = normalizeApprovalStatus(params.status || 'APPROVED');
   const firestoreRequestStatus =
     normalizedStatus === 'APPROVED'
-      ? 'Approved'
+      ? 'APPROVED'
       : normalizedStatus === 'REJECTED'
-      ? 'Rejected'
-      : 'Pending';
+      ? 'REJECTED'
+      : 'pending';
   const displayRole = mapAppRoleToDisplayRole(validatedRole);
   const nowIso = new Date().toISOString();
   const deterministicId = generateRequestDocId(cleanEmail);
@@ -447,7 +447,7 @@ export async function persistUserRoleToDatabase(params: {
     console.warn('Current user storage update notice:', e);
   }
 
-  // 4. Persist to Firestore 'access_requests' and 'users' with strict fast timeout so UI never blocks
+  // 4. Persist to Firestore 'access_requests', 'accessRequests', and 'users' + server SSE store
   const updatePayload: Record<string, any> = {
     email: cleanEmail,
     name: params.name || cleanEmail.split('@')[0],
@@ -467,6 +467,20 @@ export async function persistUserRoleToDatabase(params: {
     updatedAt: nowIso,
     ...(params.notes ? { notes: params.notes } : {}),
   };
+
+  // Sync to backend real-time store non-blockingly
+  if (typeof fetch !== 'undefined') {
+    fetch('/api/access-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: deterministicId,
+        uid: targetId,
+        ...updatePayload,
+        timestamp: nowIso,
+      }),
+    }).catch(() => {});
+  }
 
   const userPayload = {
     id: `emp-${deterministicId}`,
@@ -489,19 +503,20 @@ export async function persistUserRoleToDatabase(params: {
   const writeOps: Promise<any>[] = [];
 
   for (const dId of docIds) {
-    writeOps.push(
-      setDoc(
-        doc(db, 'access_requests', dId),
-        {
-          id: dId,
-          uid: dId,
-          createdAt: nowIso,
-          timestamp: nowIso,
-          ...updatePayload,
-        },
-        { merge: true }
-      ).catch(() => {})
-    );
+    for (const colName of ['access_requests', 'accessRequests']) {
+      writeOps.push(
+        setDoc(
+          doc(db, colName, dId),
+          {
+            id: dId,
+            uid: dId,
+            timestamp: nowIso,
+            ...updatePayload,
+          },
+          { merge: true }
+        ).catch(() => {})
+      );
+    }
     writeOps.push(
       setDoc(
         doc(db, 'users', dId),
@@ -516,3 +531,4 @@ export async function persistUserRoleToDatabase(params: {
 
   await withTimeout(Promise.allSettled(writeOps), 600);
 }
+

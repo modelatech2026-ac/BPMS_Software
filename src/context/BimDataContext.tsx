@@ -331,6 +331,22 @@ export const saveLocalAccessRequest = (req: OnboardingRequest): void => {
       bc.postMessage({ type: 'UPSERT_REQUEST', request: req });
       bc.close();
     }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('bim_access_request_submitted', {
+          detail: req,
+        })
+      );
+    }
+
+    if (typeof fetch !== 'undefined') {
+      fetch('/api/access-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      }).catch(() => {});
+    }
   } catch (e) {
     console.warn('saveLocalAccessRequest notice:', e);
   }
@@ -369,6 +385,12 @@ export const removeLocalAccessRequest = (idOrEmail: string, email?: string): voi
       const bc = new BroadcastChannel(ACCESS_REQUESTS_CHANNEL);
       bc.postMessage({ type: 'DELETE_REQUEST', id: idOrEmail, email: cleanEmail });
       bc.close();
+    }
+
+    if (typeof fetch !== 'undefined' && (cleanId || cleanEmail)) {
+      const target = encodeURIComponent(cleanId || cleanEmail);
+      const q = cleanEmail ? `?email=${encodeURIComponent(cleanEmail)}` : '';
+      fetch(`/api/access-requests/${target}${q}`, { method: 'DELETE' }).catch(() => {});
     }
   } catch (e) {
     console.warn('removeLocalAccessRequest notice:', e);
@@ -427,7 +449,11 @@ export const mergeAccessRequestsWithLocal = (
     if (!cleanEmail) continue;
     const cleanId = String(item.id || '').trim().toLowerCase();
 
-    if (deletedSet.has(cleanEmail) || (cleanId && deletedSet.has(cleanId))) {
+    // Only filter out by deletedSet if the item is NOT a fresh pending request
+    if (
+      !isStatusPending(rawStatus) &&
+      (deletedSet.has(cleanEmail) || (cleanId && deletedSet.has(cleanId)))
+    ) {
       continue;
     }
 
@@ -483,7 +509,10 @@ export const mergeAccessRequestsWithLocal = (
 
   try {
     const signature = result
-      .map((r) => `${r.id}:${r.email}:${r.status}:${r.assignedRole}:${r.timestamp || ''}`)
+      .map(
+        (r) =>
+          `${r.id}:${r.email}:${r.name}:${r.status}:${r.assignedRole}:${r.createdAt || ''}:${r.timestamp || ''}`
+      )
       .join('|');
     if (signature !== lastMergedRequestsSignature) {
       lastMergedRequestsSignature = signature;
@@ -1919,7 +1948,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         formatFirestoreTimestamp(data.createdAt) ||
         formatFirestoreTimestamp(data.requestedAt) ||
         formatFirestoreTimestamp(data.timestamp) ||
-        new Date().toISOString();
+        '1970-01-01T00:00:00.000Z';
       const updatedAt =
         formatFirestoreTimestamp(data.updatedAt) ||
         formatFirestoreTimestamp(data.reviewedAt) ||
@@ -2101,11 +2130,16 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         });
       };
 
-      // Multi-collection real-time listener on access_requests, accessRequests, pendingUsers, and pendingSignups
+      // Multi-collection real-time listener on access_requests, accessRequests, pendingUsers, and pendingSignups + SSE stream
       const collectionsToListen = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
       const docsByCollection = new Map<string, Map<string, any>>();
       collectionsToListen.forEach((col) => docsByCollection.set(col, new Map()));
+      docsByCollection.set('server_sse', new Map());
       let syncScheduled = false;
+      let listenerActive = true;
+      unsubs.push(() => {
+        listenerActive = false;
+      });
 
       const syncAllRequests = () => {
         syncScheduled = false;
@@ -2126,8 +2160,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               (item, idx) =>
                 item.id === merged[idx]?.id &&
                 item.email === merged[idx]?.email &&
+                item.name === merged[idx]?.name &&
                 item.status === merged[idx]?.status &&
                 item.assignedRole === merged[idx]?.assignedRole &&
+                item.createdAt === merged[idx]?.createdAt &&
                 item.timestamp === merged[idx]?.timestamp
             )
           ) {
@@ -2147,7 +2183,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         queueMicrotask(syncAllRequests);
       };
 
-      collectionsToListen.forEach((colName) => {
+      const subscribeCollectionWithRetry = (colName: string) => {
+        if (!listenerActive) return;
         try {
           const u = onSnapshot(
             collection(db, colName),
@@ -2188,14 +2225,69 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               scheduleSyncAllRequests();
             },
             (err) => {
-              console.warn(`Firestore ${colName} listener notice:`, err?.message);
+              console.warn(`[BimDataContext] Firestore ${colName} listener diagnostic:`, err?.message);
+              if (listenerActive) {
+                const retryTimer = setTimeout(() => subscribeCollectionWithRetry(colName), 2500);
+                unsubs.push(() => clearTimeout(retryTimer));
+              }
             }
           );
           if (u) unsubs.push(u);
         } catch (e) {
-          console.warn(`Failed to attach listener for ${colName}:`, e);
+          console.warn(`[BimDataContext] Failed to attach listener for ${colName}:`, e);
         }
-      });
+      };
+
+      collectionsToListen.forEach((colName) => subscribeCollectionWithRetry(colName));
+
+      // Subscribe to backend SSE stream and initial fetch for zero-latency cross-session sync
+      if (typeof EventSource !== 'undefined') {
+        try {
+          const sse = new EventSource('/api/access-requests/stream');
+          sse.onmessage = (ev) => {
+            try {
+              const payload = JSON.parse(ev.data);
+              const sseMap = docsByCollection.get('server_sse') || new Map();
+              if (payload?.type === 'INIT_REQUESTS' && Array.isArray(payload.requests)) {
+                payload.requests.forEach((req: any) => {
+                  const docKey = req?.id || req?.uid || req?.email;
+                  if (docKey) {
+                    sseMap.set(docKey, {
+                      id: docKey,
+                      data: () => ({ ...req }),
+                      ...req,
+                    });
+                  }
+                });
+                docsByCollection.set('server_sse', sseMap);
+                syncAllRequests();
+              } else if (payload?.type === 'UPSERT_REQUEST' && payload?.request) {
+                const req = payload.request;
+                const docKey = req?.id || req?.uid || req?.email || `req_${Date.now()}`;
+                sseMap.set(docKey, {
+                  id: docKey,
+                  data: () => ({ ...req }),
+                  ...req,
+                });
+                docsByCollection.set('server_sse', sseMap);
+                syncAllRequests();
+              } else if (payload?.type === 'DELETE_REQUEST') {
+                const delId = String(payload.id || '').toLowerCase();
+                const delEmail = String(payload.email || '').toLowerCase();
+                sseMap.forEach((val, key) => {
+                  const vEmail = String(val?.email || '').toLowerCase();
+                  if (key.toLowerCase() === delId || (delEmail && vEmail === delEmail)) {
+                    sseMap.delete(key);
+                  }
+                });
+                docsByCollection.set('server_sse', sseMap);
+                syncAllRequests();
+              }
+            } catch {}
+          };
+          unsubs.push(() => sse.close());
+        } catch {}
+      }
 
       const handleCustomSubmit = (e: Event) => {
         const detail = (e as CustomEvent)?.detail;
@@ -3674,24 +3766,25 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
     setAuditLogs((prev) => [newAudit, ...prev]);
 
-    // 3. Save to central database collection in Firestore non-blockingly unless caller already wrote it
+    // 3. Save to central database collections ('access_requests' and 'accessRequests') in Firestore non-blockingly unless caller already wrote it
     if (!params.skipFirestoreWrite) {
       if (preservedStatus === 'APPROVED') {
-        const reqDoc = doc(db, 'access_requests', effectiveDocId);
-        setDoc(
-          reqDoc,
-          {
-            id: effectiveDocId,
-            uid: effectiveDocId,
-            fullName: formattedName,
-            name: formattedName,
-            email: trimmedEmail,
-            lastLoginAt: isoTimestamp,
-            lastActive: isoTimestamp,
-            updatedAt: isoTimestamp,
-          },
-          { merge: true }
-        ).catch((err) => console.warn('Firestore access_requests update notice:', err));
+        for (const colName of ['access_requests', 'accessRequests']) {
+          setDoc(
+            doc(db, colName, effectiveDocId),
+            {
+              id: effectiveDocId,
+              uid: effectiveDocId,
+              fullName: formattedName,
+              name: formattedName,
+              email: trimmedEmail,
+              lastLoginAt: isoTimestamp,
+              lastActive: isoTimestamp,
+              updatedAt: isoTimestamp,
+            },
+            { merge: true }
+          ).catch((err) => console.warn(`[BimDataContext] Firestore ${colName} update diagnostic:`, err?.message || err));
+        }
       } else {
         const firestorePayload = {
           id: effectiveDocId,
@@ -3708,15 +3801,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           role: 'Editor',
           assignedRole: 'EDITOR',
           requestedRole: 'Editor',
+          assignedAccessLevel: 'Editor',
           createdAt: serverTimestamp(),
           requestedAt: isoTimestamp,
           timestamp: isoTimestamp,
           requestTimestamp: timestamp,
           updatedAt: isoTimestamp,
         };
-        setDoc(doc(db, 'access_requests', effectiveDocId), firestorePayload, { merge: true }).catch(
-          (err) => console.warn('Firestore access_requests write notice:', err)
-        );
+        for (const colName of ['access_requests', 'accessRequests']) {
+          setDoc(doc(db, colName, effectiveDocId), firestorePayload, { merge: true }).catch(
+            (err) => console.warn(`[BimDataContext] Firestore ${colName} write diagnostic:`, err?.message || err)
+          );
+        }
       }
     }
 

@@ -209,7 +209,7 @@ export const AdminNexus: React.FC = () => {
       formatFirestoreTimestamp(raw.createdAt) ||
       formatFirestoreTimestamp(raw.requestedAt) ||
       formatFirestoreTimestamp(raw.timestamp) ||
-      new Date().toISOString();
+      '1970-01-01T00:00:00.000Z';
     const updatedAt =
       formatFirestoreTimestamp(raw.updatedAt) ||
       formatFirestoreTimestamp(raw.reviewedAt) ||
@@ -302,8 +302,10 @@ export const AdminNexus: React.FC = () => {
             (item, idx) =>
               item.id === merged[idx]?.id &&
               item.email === merged[idx]?.email &&
+              item.name === merged[idx]?.name &&
               item.status === merged[idx]?.status &&
               item.assignedRole === merged[idx]?.assignedRole &&
+              item.createdAt === merged[idx]?.createdAt &&
               item.timestamp === merged[idx]?.timestamp
           )
         ) {
@@ -315,18 +317,29 @@ export const AdminNexus: React.FC = () => {
     [setOnboardingRequests]
   );
 
-  // Manual Live Sync fallback button handler across all alias collections with strict timeout
+  // Manual Live Sync & fallback reconciliation across backend API and all Firestore collections
   const fetchPendingRequests = useCallback(async () => {
     setIsSyncing(true);
     setSyncError(null);
     try {
       const collectionsToQuery = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
-      const results = await Promise.race([
-        Promise.allSettled(collectionsToQuery.map((colName) => getDocs(collection(db, colName)))),
-        new Promise<PromiseSettledResult<any>[]>((resolve) => setTimeout(() => resolve([]), 1200)),
+      const [firestoreResults, apiResponse] = await Promise.all([
+        Promise.race([
+          Promise.allSettled(collectionsToQuery.map((colName) => getDocs(collection(db, colName)))),
+          new Promise<PromiseSettledResult<any>[]>((resolve) => setTimeout(() => resolve([]), 1200)),
+        ]),
+        fetch('/api/access-requests')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
       ]);
+
       const allRaw: any[] = [];
-      results.forEach((res) => {
+      if (Array.isArray(apiResponse?.requests)) {
+        apiResponse.requests.forEach((req: any) => {
+          if (req) allRaw.push(req);
+        });
+      }
+      firestoreResults.forEach((res) => {
         if (res.status === 'fulfilled') {
           res.value.docs.forEach((d: any) => {
             allRaw.push({
@@ -346,8 +359,9 @@ export const AdminNexus: React.FC = () => {
     setLastSyncTime(new Date().toLocaleTimeString());
   }, [setAccessRequests]);
 
-  // Multi-collection real-time unfiltered onSnapshot listener & cross-tab/custom event listeners
+  // Multi-collection real-time unfiltered onSnapshot listener + SSE stream + auto-reconnect + fallback polling
   useEffect(() => {
+    let isMounted = true;
     // Hydrate from local storage queue immediately on mount so Pending Queue (N) is instant
     setOnboardingRequests((prev) =>
       deduplicateAndSortRequests(mergeAccessRequestsWithLocal([], prev))
@@ -356,9 +370,11 @@ export const AdminNexus: React.FC = () => {
     const collectionsToListen = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
     const docsMap = new Map<string, Map<string, any>>();
     collectionsToListen.forEach((name) => docsMap.set(name, new Map()));
+    docsMap.set('server_sse', new Map());
     let updateScheduled = false;
 
     const updateState = () => {
+      if (!isMounted) return;
       updateScheduled = false;
       const allRaw: any[] = [];
       docsMap.forEach((colDocs) => {
@@ -369,16 +385,21 @@ export const AdminNexus: React.FC = () => {
     };
 
     const scheduleUpdateState = () => {
-      if (updateScheduled) return;
+      if (updateScheduled || !isMounted) return;
       updateScheduled = true;
       queueMicrotask(updateState);
     };
 
-    const unsubs = collectionsToListen.map((colName) => {
+    const activeUnsubs: Array<() => void> = [];
+    const retryTimers: Array<ReturnType<typeof setTimeout>> = [];
+
+    const attachFirestoreListener = (colName: string) => {
+      if (!isMounted) return;
       try {
-        return onSnapshot(
+        const unsub = onSnapshot(
           collection(db, colName),
           (snapshot) => {
+            if (!isMounted) return;
             setSyncError(null);
             const colMap = docsMap.get(colName) || new Map();
             snapshot.docChanges().forEach((change) => {
@@ -401,14 +422,89 @@ export const AdminNexus: React.FC = () => {
             scheduleUpdateState();
           },
           (err: any) => {
-            console.warn(`Admin Nexus onSnapshot notice on ${colName}:`, err?.message);
+            console.warn(`[AdminNexus] onSnapshot diagnostic on ${colName}:`, err?.message || err);
+            if (isMounted) {
+              const timer = setTimeout(() => attachFirestoreListener(colName), 2500);
+              retryTimers.push(timer);
+            }
           }
         );
+        activeUnsubs.push(unsub);
       } catch (e) {
-        console.warn(`Failed to attach onSnapshot to ${colName}:`, e);
-        return () => {};
+        console.warn(`[AdminNexus] Failed to attach onSnapshot to ${colName}:`, e);
       }
-    });
+    };
+
+    collectionsToListen.forEach((colName) => attachFirestoreListener(colName));
+
+    // Real-time Server-Sent Events (SSE) subscription for 0ms cross-browser/incognito propagation
+    let eventSource: EventSource | null = null;
+    if (typeof EventSource !== 'undefined') {
+      try {
+        eventSource = new EventSource('/api/access-requests/stream');
+        eventSource.onmessage = (ev) => {
+          if (!isMounted) return;
+          try {
+            const payload = JSON.parse(ev.data);
+            const sseMap = docsMap.get('server_sse') || new Map();
+            if (payload?.type === 'INIT_REQUESTS' && Array.isArray(payload.requests)) {
+              payload.requests.forEach((req: any) => {
+                const docKey = req?.id || req?.uid || req?.email;
+                if (docKey) {
+                  sseMap.set(docKey, { id: docKey, ...req });
+                }
+              });
+              docsMap.set('server_sse', sseMap);
+              updateState();
+            } else if (payload?.type === 'UPSERT_REQUEST' && payload?.request) {
+              const req = payload.request;
+              const docKey = req?.id || req?.uid || req?.email || `req_${Date.now()}`;
+              sseMap.set(docKey, { id: docKey, ...req });
+              docsMap.set('server_sse', sseMap);
+              updateState();
+            } else if (payload?.type === 'DELETE_REQUEST') {
+              const delId = String(payload.id || '').toLowerCase();
+              const delEmail = String(payload.email || '').toLowerCase();
+              sseMap.forEach((val, key) => {
+                const vEmail = String(val?.email || '').toLowerCase();
+                if (key.toLowerCase() === delId || (delEmail && vEmail === delEmail)) {
+                  sseMap.delete(key);
+                }
+              });
+              docsMap.set('server_sse', sseMap);
+              updateState();
+            }
+          } catch {}
+        };
+      } catch {}
+    }
+
+    // Fallback polling reconciliation interval (every 3000ms) + window focus/online sync
+    const pollBackendAndLocal = async () => {
+      if (!isMounted) return;
+      try {
+        const res = await fetch('/api/access-requests');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.requests)) {
+            const sseMap = docsMap.get('server_sse') || new Map();
+            data.requests.forEach((req: any) => {
+              const docKey = req?.id || req?.uid || req?.email;
+              if (docKey) {
+                sseMap.set(docKey, { id: docKey, ...req });
+              }
+            });
+            docsMap.set('server_sse', sseMap);
+          }
+        }
+      } catch {}
+      if (isMounted) {
+        updateState();
+      }
+    };
+
+    pollBackendAndLocal();
+    const pollInterval = setInterval(pollBackendAndLocal, 3000);
 
     const handleCustomSubmit = (e: Event) => {
       const detail = (e as CustomEvent)?.detail;
@@ -436,6 +532,12 @@ export const AdminNexus: React.FC = () => {
     };
     window.addEventListener('storage', handleStorageChange);
 
+    const handleWindowFocusOrOnline = () => {
+      pollBackendAndLocal();
+    };
+    window.addEventListener('focus', handleWindowFocusOrOnline);
+    window.addEventListener('online', handleWindowFocusOrOnline);
+
     let bc: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
       try {
@@ -459,16 +561,30 @@ export const AdminNexus: React.FC = () => {
     }
 
     return () => {
-      unsubs.forEach((unsub) => unsub && unsub());
+      isMounted = false;
+      clearInterval(pollInterval);
+      activeUnsubs.forEach((unsub) => {
+        try {
+          unsub();
+        } catch {}
+      });
+      retryTimers.forEach((t) => clearTimeout(t));
+      if (eventSource) {
+        try {
+          eventSource.close();
+        } catch {}
+      }
       window.removeEventListener('bim_access_request_submitted', handleCustomSubmit);
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('focus', handleWindowFocusOrOnline);
+      window.removeEventListener('online', handleWindowFocusOrOnline);
       if (bc) {
         try {
           bc.close();
         } catch {}
       }
     };
-  }, []);
+  }, [setAccessRequests, setOnboardingRequests]);
 
   // Dynamic Team Efficiency reference
   const members = employees;

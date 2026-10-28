@@ -148,13 +148,18 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
       return;
     }
 
-    let unsubscribe: (() => void) | undefined;
-    try {
-      const reqQuery = query(collection(db, 'access_requests'), where('email', '==', cleanEmail));
-      unsubscribe = onSnapshot(
-        reqQuery,
-        (snapshot) => {
-          if (!snapshot.empty) {
+    let isMounted = true;
+    const unsubs: Array<() => void> = [];
+    const reconnectTimers: Array<ReturnType<typeof setTimeout>> = [];
+
+    const subscribeToCollection = (colName: string) => {
+      if (!isMounted) return;
+      try {
+        const reqQuery = query(collection(db, colName), where('email', '==', cleanEmail));
+        const unsub = onSnapshot(
+          reqQuery,
+          (snapshot) => {
+            if (!isMounted || snapshot.empty) return;
             const docs = snapshot.docs.map(
               (d) =>
                 ({
@@ -177,14 +182,56 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
             if (firestoreStatus === 'approved' || firestoreStatus === 'active') {
               applyApprovedData(data);
             }
+          },
+          (err) => {
+            console.warn(`[AuthGateway] Real-time ${colName} listener notice:`, err?.message || err);
+            if (isMounted) {
+              const timer = setTimeout(() => subscribeToCollection(colName), 2500);
+              reconnectTimers.push(timer);
+            }
           }
-        },
-        (err) => {
-          console.warn('Real-time access request listener notice:', err);
-        }
-      );
-    } catch (err) {
-      console.warn('Error establishing Firestore listener:', err);
+        );
+        unsubs.push(unsub);
+      } catch (err) {
+        console.warn(`[AuthGateway] Error establishing Firestore listener on ${colName}:`, err);
+      }
+    };
+
+    subscribeToCollection('access_requests');
+    subscribeToCollection('accessRequests');
+
+    // Subscribe to backend SSE stream for zero-latency approval propagation
+    let eventSource: EventSource | null = null;
+    if (typeof EventSource !== 'undefined') {
+      try {
+        eventSource = new EventSource('/api/access-requests/stream');
+        eventSource.onmessage = (ev) => {
+          try {
+            const payload = JSON.parse(ev.data);
+            if (payload?.type === 'UPSERT_REQUEST' && payload?.request) {
+              const req = payload.request;
+              if (
+                String(req.email || '').trim().toLowerCase() === cleanEmail &&
+                (String(req.status || '').toUpperCase() === 'APPROVED' ||
+                  String(req.status || '').toLowerCase() === 'approved')
+              ) {
+                applyApprovedData(req);
+              }
+            } else if (payload?.type === 'INIT_REQUESTS' && Array.isArray(payload.requests)) {
+              const matched = payload.requests.find(
+                (r: any) => String(r?.email || '').trim().toLowerCase() === cleanEmail
+              );
+              if (
+                matched &&
+                (String(matched.status || '').toUpperCase() === 'APPROVED' ||
+                  String(matched.status || '').toLowerCase() === 'approved')
+              ) {
+                applyApprovedData(matched);
+              }
+            }
+          } catch {}
+        };
+      } catch {}
     }
 
     const handleRoleSynced = (e: Event) => {
@@ -200,7 +247,18 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
     window.addEventListener('bim_user_role_synced', handleRoleSynced);
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      isMounted = false;
+      unsubs.forEach((u) => {
+        try {
+          u();
+        } catch {}
+      });
+      reconnectTimers.forEach((t) => clearTimeout(t));
+      if (eventSource) {
+        try {
+          eventSource.close();
+        } catch {}
+      }
       window.removeEventListener('bim_user_role_synced', handleRoleSynced);
     };
   }, [
@@ -394,6 +452,20 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
           );
         } catch {}
 
+        // Broadcast to backend SSE real-time store for instant cross-tab/cross-browser propagation
+        if (typeof fetch !== 'undefined') {
+          fetch('/api/access-requests', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...requestPayload,
+              createdAt: isoTimestamp,
+            }),
+          }).catch((err) => {
+            console.warn('[AuthGateway] Backend access request sync notice:', err);
+          });
+        }
+
         // 4. Transition UI state immediately so the user never experiences "Submitting Request..." lag
         const record: SubmittedRequestData = {
           name: cleanName,
@@ -405,17 +477,19 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         setViewStep('pending');
         setIsLoading(false);
 
-        // 5. Persist to Firestore asynchronously in background with non-blocking error handling
+        // 5. Persist to Firestore collections ('access_requests' and 'accessRequests') asynchronously in background
         const firestorePayload = {
           ...requestPayload,
           createdAt: serverTimestamp(),
         };
 
-        setDoc(doc(db, 'access_requests', finalDocId), firestorePayload, { merge: true }).catch(
-          (err) => {
-            console.warn('Firestore access_requests write notice:', err);
-          }
-        );
+        for (const colName of ['access_requests', 'accessRequests']) {
+          setDoc(doc(db, colName, finalDocId), firestorePayload, { merge: true }).catch(
+            (err) => {
+              console.warn(`[AuthGateway] Firestore ${colName} write diagnostic:`, err?.message || err);
+            }
+          );
+        }
       } catch (err: any) {
         console.error('Access request submission error:', err);
         setErrorMessage(

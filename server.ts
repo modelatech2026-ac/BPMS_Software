@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -9,6 +10,185 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: "10mb" }));
+
+// Real-time Server-Side Access Requests Store & SSE Stream
+const ACCESS_REQUESTS_STORE_PATH = path.join(process.cwd(), ".access-requests-store.json");
+const accessRequestsStore = new Map<string, any>();
+const deletedRequestEmails = new Map<string, number>();
+const sseClients = new Set<express.Response>();
+
+function loadAccessRequestsStore() {
+  try {
+    if (fs.existsSync(ACCESS_REQUESTS_STORE_PATH)) {
+      const raw = fs.readFileSync(ACCESS_REQUESTS_STORE_PATH, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.requests)) {
+        parsed.requests.forEach((req: any) => {
+          const emailKey = String(req?.email || "").trim().toLowerCase();
+          if (emailKey) {
+            accessRequestsStore.set(emailKey, req);
+          }
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[AccessRequestsStore] Failed to load store from disk:", err);
+  }
+}
+
+function persistAccessRequestsStore() {
+  try {
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      requests: Array.from(accessRequestsStore.values()),
+    };
+    fs.writeFileSync(ACCESS_REQUESTS_STORE_PATH, JSON.stringify(payload, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("[AccessRequestsStore] Failed to persist store to disk:", err);
+  }
+}
+
+function broadcastAccessRequestEvent(data: any) {
+  const message = `data: ${JSON.stringify(data)}\n\n`;
+  sseClients.forEach((client) => {
+    try {
+      client.write(message);
+    } catch {
+      sseClients.delete(client);
+    }
+  });
+}
+
+loadAccessRequestsStore();
+
+// Server-Sent Events (SSE) endpoint for instant real-time queue synchronization
+app.get("/api/access-requests/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  const initialPayload = {
+    type: "INIT_REQUESTS",
+    requests: Array.from(accessRequestsStore.values()),
+  };
+  res.write(`data: ${JSON.stringify(initialPayload)}\n\n`);
+
+  sseClients.add(res);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`: heartbeat ${Date.now()}\n\n`);
+    } catch {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
+    }
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+  });
+});
+
+// GET all access requests
+app.get("/api/access-requests", (_req, res) => {
+  res.json({
+    success: true,
+    requests: Array.from(accessRequestsStore.values()),
+  });
+});
+
+// POST upsert an access request (submission, approval, rejection, or role update)
+app.post("/api/access-requests", (req, res) => {
+  try {
+    const body = req.body || {};
+    const cleanEmail = String(body.email || "").trim().toLowerCase();
+    if (!cleanEmail) {
+      res.status(400).json({ success: false, error: "Valid email is required" });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const rawStatus = String(body.status || "pending").trim();
+    const isPending = rawStatus.toLowerCase() === "pending" || rawStatus.toLowerCase().includes("pending");
+
+    if (isPending) {
+      deletedRequestEmails.delete(cleanEmail);
+    }
+
+    const existing = accessRequestsStore.get(cleanEmail) || {};
+    const docId = String(body.id || body.uid || existing.id || `req_${cleanEmail.replace(/[^a-z0-9]/g, "_")}`);
+    const fullName = String(body.fullName || body.name || existing.fullName || existing.name || cleanEmail.split("@")[0]).trim();
+    const discipline = String(body.discipline || body.primaryDiscipline || existing.discipline || "BIM - ACS");
+    const reasonForAccess = String(
+      body.reasonForAccess || body.accessReason || existing.reasonForAccess || "Sign-in Access Request for ProductionPulse BPMS"
+    );
+
+    const record = {
+      ...existing,
+      ...body,
+      id: docId,
+      uid: body.uid || docId,
+      email: cleanEmail,
+      name: fullName,
+      fullName,
+      discipline,
+      primaryDiscipline: discipline,
+      organization: body.organization || discipline,
+      reasonForAccess,
+      accessReason: reasonForAccess,
+      status: isPending ? "pending" : rawStatus,
+      role: body.role || existing.role || "Editor",
+      requestedRole: body.requestedRole || existing.requestedRole || "Editor",
+      assignedRole: body.assignedRole || existing.assignedRole || "EDITOR",
+      assignedAccessLevel: body.assignedAccessLevel || existing.assignedAccessLevel || "Editor",
+      createdAt: isPending ? body.createdAt || body.requestedAt || nowIso : existing.createdAt || body.createdAt || nowIso,
+      requestedAt: isPending ? body.requestedAt || nowIso : existing.requestedAt || body.requestedAt || nowIso,
+      timestamp: body.timestamp || nowIso,
+      updatedAt: nowIso,
+      reviewedBy: isPending ? undefined : body.reviewedBy ?? existing.reviewedBy,
+      reviewedAt: isPending ? undefined : body.reviewedAt ?? existing.reviewedAt,
+      isDeleted: false,
+    };
+
+    accessRequestsStore.set(cleanEmail, record);
+    persistAccessRequestsStore();
+    broadcastAccessRequestEvent({ type: "UPSERT_REQUEST", request: record });
+
+    res.json({ success: true, request: record });
+  } catch (err: any) {
+    console.error("[AccessRequestsStore] POST error:", err);
+    res.status(500).json({ success: false, error: err?.message || "Failed to save access request" });
+  }
+});
+
+// DELETE an access request by id or email
+app.delete("/api/access-requests/:idOrEmail", (req, res) => {
+  try {
+    const param = String(req.params.idOrEmail || "").trim().toLowerCase();
+    const queryEmail = String(req.query.email || "").trim().toLowerCase();
+
+    for (const [emailKey, record] of accessRequestsStore.entries()) {
+      const recId = String(record?.id || "").trim().toLowerCase();
+      if (emailKey === param || emailKey === queryEmail || (recId && recId === param)) {
+        accessRequestsStore.delete(emailKey);
+        deletedRequestEmails.set(emailKey, Date.now());
+      }
+    }
+
+    persistAccessRequestsStore();
+    broadcastAccessRequestEvent({
+      type: "DELETE_REQUEST",
+      id: param,
+      email: queryEmail || param,
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to delete access request" });
+  }
+});
 
 // Server-side Gemini API initialization
 const ai = new GoogleGenAI({
