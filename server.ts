@@ -17,19 +17,110 @@ const accessRequestsStore = new Map<string, any>();
 const deletedRequestEmails = new Map<string, number>();
 const sseClients = new Set<express.Response>();
 
+const INITIAL_SEED_REQUESTS = [
+  {
+    id: "req_hm_gmail_com",
+    uid: "req_hm_gmail_com",
+    email: "hm@gmail.com",
+    name: "hammy",
+    fullName: "hammy",
+    discipline: "BIM - ACS",
+    primaryDiscipline: "BIM - ACS",
+    organization: "BIM - ACS",
+    reasonForAccess: "Sign-in Access Request for ProductionPulse BPMS",
+    accessReason: "Sign-in Access Request for ProductionPulse BPMS",
+    notes: "Sign-in Access Request for ProductionPulse BPMS",
+    status: "pending",
+    role: "Editor",
+    requestedRole: "Editor",
+    assignedRole: "EDITOR",
+    assignedAccessLevel: "Editor",
+    createdAt: "2026-10-28T19:55:00.000Z",
+    requestedAt: "2026-10-28T19:55:00.000Z",
+    requestTimestamp: "2026-10-28T19:55:00.000Z",
+    timestamp: "2026-10-28T19:55:00.000Z",
+    updatedAt: "2026-10-28T19:55:00.000Z",
+    isDeleted: false,
+  },
+  {
+    id: "req_an_gmail_com",
+    uid: "hcXqh6pZOB2qmouYGa1v",
+    email: "an@gmail.com",
+    name: "anny",
+    fullName: "anny",
+    discipline: "BIM - ACS",
+    primaryDiscipline: "BIM - ACS",
+    organization: "BIM - ACS",
+    reasonForAccess: "Sign-in Access Request for ProductionPulse BPMS",
+    accessReason: "Sign-in Access Request for ProductionPulse BPMS",
+    notes: "Sign-in Access Request for ProductionPulse BPMS",
+    status: "pending",
+    role: "Editor",
+    requestedRole: "Editor",
+    assignedRole: "EDITOR",
+    assignedAccessLevel: "Editor",
+    createdAt: "2026-10-28T19:29:31.248Z",
+    requestedAt: "2026-10-28T19:29:31.248Z",
+    requestTimestamp: "2026-10-28T19:29:31.248Z",
+    timestamp: "2026-10-28T19:29:31.248Z",
+    updatedAt: "2026-10-28T19:29:31.248Z",
+    isDeleted: false,
+  },
+  {
+    id: "req_ha_gmail_com",
+    uid: "zqolVcnoKm1EA1RfexfY",
+    email: "ha@gmail.com",
+    name: "harry",
+    fullName: "harry",
+    discipline: "BIM - ACS",
+    primaryDiscipline: "BIM - ACS",
+    organization: "BIM - ACS",
+    reasonForAccess: "Sign-in Access Request for ProductionPulse BPMS",
+    accessReason: "Sign-in Access Request for ProductionPulse BPMS",
+    notes: "Sign-in Access Request for ProductionPulse BPMS",
+    status: "pending",
+    role: "Editor",
+    requestedRole: "Editor",
+    assignedRole: "EDITOR",
+    assignedAccessLevel: "Editor",
+    createdAt: "2026-10-28T18:57:56.591Z",
+    requestedAt: "2026-10-28T18:57:56.591Z",
+    requestTimestamp: "2026-10-28T18:57:56.591Z",
+    timestamp: "2026-10-28T18:57:56.591Z",
+    updatedAt: "2026-10-28T18:57:56.591Z",
+    isDeleted: false,
+  },
+];
+
 function loadAccessRequestsStore() {
   try {
+    let loadedDeleted: string[] = [];
     if (fs.existsSync(ACCESS_REQUESTS_STORE_PATH)) {
       const raw = fs.readFileSync(ACCESS_REQUESTS_STORE_PATH, "utf-8");
       const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.deletedEmails)) {
+        loadedDeleted = parsed.deletedEmails.map((e: string) => String(e).trim().toLowerCase());
+        loadedDeleted.forEach((e) => deletedRequestEmails.set(e, Date.now()));
+      }
       if (Array.isArray(parsed?.requests)) {
         parsed.requests.forEach((req: any) => {
           const emailKey = String(req?.email || "").trim().toLowerCase();
-          if (emailKey) {
+          if (emailKey && !deletedRequestEmails.has(emailKey)) {
             accessRequestsStore.set(emailKey, req);
           }
         });
       }
+    }
+    let seeded = false;
+    for (const seed of INITIAL_SEED_REQUESTS) {
+      const emailKey = seed.email.toLowerCase();
+      if (!accessRequestsStore.has(emailKey) && !deletedRequestEmails.has(emailKey)) {
+        accessRequestsStore.set(emailKey, seed);
+        seeded = true;
+      }
+    }
+    if (seeded) {
+      persistAccessRequestsStore();
     }
   } catch (err) {
     console.warn("[AccessRequestsStore] Failed to load store from disk:", err);
@@ -40,6 +131,7 @@ function persistAccessRequestsStore() {
   try {
     const payload = {
       updatedAt: new Date().toISOString(),
+      deletedEmails: Array.from(deletedRequestEmails.keys()),
       requests: Array.from(accessRequestsStore.values()),
     };
     fs.writeFileSync(ACCESS_REQUESTS_STORE_PATH, JSON.stringify(payload, null, 2), "utf-8");
@@ -61,11 +153,27 @@ function broadcastAccessRequestEvent(data: any) {
 
 loadAccessRequestsStore();
 
+// CORS & cache-busting middleware for /api/access-requests
+app.use("/api/access-requests", (req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
 // Server-Sent Events (SSE) endpoint for instant real-time queue synchronization
 app.get("/api/access-requests/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.flushHeaders?.();
 
   const initialPayload = {
@@ -95,6 +203,7 @@ app.get("/api/access-requests/stream", (req, res) => {
 app.get("/api/access-requests", (_req, res) => {
   res.json({
     success: true,
+    timestamp: new Date().toISOString(),
     requests: Array.from(accessRequestsStore.values()),
   });
 });

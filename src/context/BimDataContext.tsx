@@ -233,13 +233,83 @@ const DEFAULT_CURRENT_USER: AuthUser = {
   avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
 };
 
-const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [];
+const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [
+  {
+    id: 'req_hm_gmail_com',
+    googleId: 'req_hm_gmail_com',
+    email: 'hm@gmail.com',
+    name: 'hammy',
+    fullName: 'hammy',
+    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=hammy',
+    role: 'Editor',
+    requestedRole: 'Editor',
+    assignedRole: 'EDITOR',
+    assignedAccessLevel: 'Editor',
+    primaryDiscipline: 'BIM - ACS',
+    discipline: 'BIM - ACS',
+    organization: 'BIM - ACS',
+    reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+    accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+    createdAt: '2026-10-28T19:55:00.000Z',
+    requestedAt: '2026-10-28T19:55:00.000Z',
+    requestTimestamp: '2026-10-28T19:55:00.000Z',
+    timestamp: '2026-10-28T19:55:00.000Z',
+    status: 'pending',
+    notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+  },
+  {
+    id: 'req_an_gmail_com',
+    googleId: 'hcXqh6pZOB2qmouYGa1v',
+    email: 'an@gmail.com',
+    name: 'anny',
+    fullName: 'anny',
+    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=anny',
+    role: 'Editor',
+    requestedRole: 'Editor',
+    assignedRole: 'EDITOR',
+    assignedAccessLevel: 'Editor',
+    primaryDiscipline: 'BIM - ACS',
+    discipline: 'BIM - ACS',
+    organization: 'BIM - ACS',
+    reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+    accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+    createdAt: '2026-10-28T19:29:31.248Z',
+    requestedAt: '2026-10-28T19:29:31.248Z',
+    requestTimestamp: '2026-10-28T19:29:31.248Z',
+    timestamp: '2026-10-28T19:29:31.248Z',
+    status: 'pending',
+    notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+  },
+  {
+    id: 'req_ha_gmail_com',
+    googleId: 'zqolVcnoKm1EA1RfexfY',
+    email: 'ha@gmail.com',
+    name: 'harry',
+    fullName: 'harry',
+    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=harry',
+    role: 'Editor',
+    requestedRole: 'Editor',
+    assignedRole: 'EDITOR',
+    assignedAccessLevel: 'Editor',
+    primaryDiscipline: 'BIM - ACS',
+    discipline: 'BIM - ACS',
+    organization: 'BIM - ACS',
+    reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
+    accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
+    createdAt: '2026-10-28T18:57:56.591Z',
+    requestedAt: '2026-10-28T18:57:56.591Z',
+    requestTimestamp: '2026-10-28T18:57:56.591Z',
+    timestamp: '2026-10-28T18:57:56.591Z',
+    status: 'pending',
+    notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
+  },
+];
 
 export const PENDING_ACCESS_REQUESTS_KEY = 'bim_pending_access_requests_v1';
 export const DELETED_ACCESS_REQUESTS_KEY = 'bim_deleted_access_requests_v1';
 export const ACCESS_REQUESTS_CHANNEL = 'bim_access_requests_channel';
 
-const getRequestTimeMs = (req: any): number => {
+export const getRequestTimeMs = (req: any): number => {
   if (!req) return 0;
   const candidates = [
     req.updatedAt,
@@ -249,24 +319,30 @@ const getRequestTimeMs = (req: any): number => {
     req.createdAt,
     req.requestTimestamp,
   ];
+  let maxMs = 0;
   for (const val of candidates) {
     if (!val) continue;
-    if (typeof val === 'number' && !Number.isNaN(val)) return val;
-    if (typeof val?.toDate === 'function') {
+    let ms = 0;
+    if (typeof val === 'number' && !Number.isNaN(val)) {
+      ms = val;
+    } else if (typeof val?.toDate === 'function') {
       try {
-        const ms = val.toDate().getTime();
-        if (!Number.isNaN(ms)) return ms;
+        const parsed = val.toDate().getTime();
+        if (!Number.isNaN(parsed)) ms = parsed;
       } catch {}
+    } else if (typeof val?.seconds === 'number') {
+      ms = val.seconds * 1000;
+    } else if (typeof val?._seconds === 'number') {
+      ms = val._seconds * 1000;
+    } else if (typeof val === 'string') {
+      const parsed = new Date(val).getTime();
+      if (!Number.isNaN(parsed)) ms = parsed;
     }
-    if (typeof val?.seconds === 'number') {
-      return val.seconds * 1000;
-    }
-    if (typeof val === 'string') {
-      const ms = new Date(val).getTime();
-      if (!Number.isNaN(ms)) return ms;
+    if (ms > maxMs) {
+      maxMs = ms;
     }
   }
-  return 0;
+  return maxMs;
 };
 
 const isStatusPending = (status?: string): boolean => {
@@ -399,6 +475,10 @@ export const removeLocalAccessRequest = (idOrEmail: string, email?: string): voi
 
 let lastMergedRequestsSignature = '';
 
+export const invalidateAccessRequestsCache = (): void => {
+  lastMergedRequestsSignature = '';
+};
+
 export const mergeAccessRequestsWithLocal = (
   remoteList: OnboardingRequest[],
   currentList: OnboardingRequest[] = []
@@ -431,7 +511,14 @@ export const mergeAccessRequestsWithLocal = (
     }
   } catch {}
 
+  const seedDefaults = DEFAULT_ONBOARDING_REQUESTS.filter((d) => {
+    const dEmail = (d.email || '').trim().toLowerCase();
+    const dId = (d.id || '').trim().toLowerCase();
+    return !deletedSet.has(dEmail) && !deletedSet.has(dId);
+  });
+
   const combined = [
+    ...seedDefaults,
     ...(currentList || []),
     ...localPending,
     ...localOnboarding,
@@ -1997,19 +2084,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         return 1;
       };
 
+      // Deduplicate by email prioritizing SUPER_ADMIN first, then the strictly newest timestamp
       const sorted = [...rawList].sort((a, b) => {
         const aRoleSuper = a.assignedRole === 'SUPER_ADMIN' || normalizeUserRole(a.role) === 'SUPER_ADMIN';
         const bRoleSuper = b.assignedRole === 'SUPER_ADMIN' || normalizeUserRole(b.role) === 'SUPER_ADMIN';
         if (aRoleSuper !== bRoleSuper) return aRoleSuper ? -1 : 1;
 
-        const rA = rank(a.status);
-        const rB = rank(b.status);
-        if (rA !== rB) {
-          return rB - rA;
+        const tA = getRequestTimeMs(a);
+        const tB = getRequestTimeMs(b);
+        if (Math.abs(tB - tA) > 1000) {
+          return tB - tA;
         }
-        const tA = new Date(a.timestamp || a.reviewedAt || a.createdAt || 0).getTime() || 0;
-        const tB = new Date(b.timestamp || b.reviewedAt || b.createdAt || 0).getTime() || 0;
-        return tB - tA;
+        return rank(b.status) - rank(a.status);
       });
 
       for (const req of sorted) {
@@ -2021,9 +2107,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       return Array.from(byEmail.values()).sort((a, b) => {
-        const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
-        const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
-        return tB - tA;
+        const rA = rank(a.status);
+        const rB = rank(b.status);
+        if (rA !== rB) return rB - rA;
+        return getRequestTimeMs(b) - getRequestTimeMs(a);
       });
     };
 

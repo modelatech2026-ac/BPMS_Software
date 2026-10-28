@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   useBimData,
   mergeAccessRequestsWithLocal,
+  invalidateAccessRequestsCache,
+  getRequestTimeMs,
   PENDING_ACCESS_REQUESTS_KEY,
   DELETED_ACCESS_REQUESTS_KEY,
   ACCESS_REQUESTS_CHANNEL,
@@ -47,7 +49,7 @@ import {
 import { persistUserRoleToDatabase } from '../auth/roleSync';
 import { SecuritySettingsModal } from './SecuritySettingsModal';
 import { db } from '../firebase/config';
-import { collection, doc, getDocs, onSnapshot, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, getDocsFromServer, onSnapshot, updateDoc } from 'firebase/firestore';
 
 export const AdminNexus: React.FC = () => {
   const {
@@ -258,19 +260,14 @@ export const AdminNexus: React.FC = () => {
       return 1;
     };
 
-    // Pending requests always take priority (rank 3), followed by newest creation/timestamp
-    const sorted = [...rawList].sort((a, b) => {
-      const rA = rank(a.status);
-      const rB = rank(b.status);
-      if (rA !== rB) {
-        return rB - rA;
-      }
-      const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
-      const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
-      return tB - tA;
+    // Deduplicate by email keeping the most recent state (by timestamp)
+    const sortedByTime = [...rawList].sort((a, b) => {
+      const tDiff = getRequestTimeMs(b) - getRequestTimeMs(a);
+      if (Math.abs(tDiff) > 1000) return tDiff;
+      return rank(b.status) - rank(a.status);
     });
 
-    for (const req of sorted) {
+    for (const req of sortedByTime) {
       const key = (req.email || '').trim().toLowerCase();
       if (!key) continue;
       if (!byEmail.has(key)) {
@@ -278,25 +275,30 @@ export const AdminNexus: React.FC = () => {
       }
     }
 
+    // Sort deduplicated records so pending requests appear first, newest first
     return Array.from(byEmail.values()).sort((a, b) => {
       const rA = rank(a.status);
       const rB = rank(b.status);
       if (rA !== rB) {
         return rB - rA;
       }
-      const tA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
-      const tB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
-      return tB - tA;
+      return getRequestTimeMs(b) - getRequestTimeMs(a);
     });
   };
 
+  const docsMapRef = useRef<Map<string, Map<string, any>>>(new Map());
+
   const setAccessRequests = useCallback(
-    (rawRequests: any[]) => {
+    (rawRequests: any[], forceInvalidate = false) => {
+      if (forceInvalidate) {
+        invalidateAccessRequestsCache();
+      }
       const mapped = rawRequests.map(normalizeRawRequest).filter(Boolean) as OnboardingRequest[];
       const list = deduplicateAndSortRequests(mapped);
       setOnboardingRequests((prev) => {
         const merged = deduplicateAndSortRequests(mergeAccessRequestsWithLocal(list, prev));
         if (
+          !forceInvalidate &&
           prev.length === merged.length &&
           prev.every(
             (item, idx) =>
@@ -311,90 +313,136 @@ export const AdminNexus: React.FC = () => {
         ) {
           return prev;
         }
-        return merged;
+        return [...merged];
       });
     },
     [setOnboardingRequests]
   );
 
-  // Manual Live Sync & fallback reconciliation across backend API and all Firestore collections
+  const setAccessRequestsRef = useRef(setAccessRequests);
+  setAccessRequestsRef.current = setAccessRequests;
+
+  // Manual Live Sync & cache-busting getDocsFromServer() force fetch handler
   const fetchPendingRequests = useCallback(async () => {
     setIsSyncing(true);
     setSyncError(null);
+    invalidateAccessRequestsCache();
     try {
       const collectionsToQuery = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
+      const fetchCollectionFromServer = async (colName: string) => {
+        try {
+          return await getDocsFromServer(collection(db, colName));
+        } catch {
+          return await getDocs(collection(db, colName));
+        }
+      };
+
       const [firestoreResults, apiResponse] = await Promise.all([
         Promise.race([
-          Promise.allSettled(collectionsToQuery.map((colName) => getDocs(collection(db, colName)))),
-          new Promise<PromiseSettledResult<any>[]>((resolve) => setTimeout(() => resolve([]), 1200)),
+          Promise.allSettled(collectionsToQuery.map((colName) => fetchCollectionFromServer(colName))),
+          new Promise<PromiseSettledResult<any>[]>((resolve) => setTimeout(() => resolve([]), 4500)),
         ]),
-        fetch('/api/access-requests')
+        fetch(`/api/access-requests?_t=${Date.now()}`, { cache: 'no-store' })
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
       ]);
 
-      const allRaw: any[] = [];
+      const docsMap = docsMapRef.current;
       if (Array.isArray(apiResponse?.requests)) {
+        const sseMap = docsMap.get('server_sse') || new Map();
         apiResponse.requests.forEach((req: any) => {
-          if (req) allRaw.push(req);
+          const docKey = req?.id || req?.uid || req?.email;
+          if (docKey) {
+            sseMap.set(docKey, { id: docKey, ...req });
+          }
         });
+        docsMap.set('server_sse', sseMap);
       }
-      firestoreResults.forEach((res) => {
-        if (res.status === 'fulfilled') {
+
+      firestoreResults.forEach((res, idx) => {
+        const colName = collectionsToQuery[idx] || 'access_requests';
+        if (res.status === 'fulfilled' && res.value?.docs) {
+          const colMap = docsMap.get(colName) || new Map();
           res.value.docs.forEach((d: any) => {
-            allRaw.push({
+            colMap.set(d.id, {
               id: d.id,
               ...d.data({ serverTimestamps: 'estimate' }),
             });
           });
+          docsMap.set(colName, colMap);
         }
       });
-      setAccessRequests(allRaw);
+
+      const allRaw: any[] = [];
+      docsMap.forEach((colDocs) => {
+        colDocs.forEach((docData) => allRaw.push(docData));
+      });
+      setAccessRequestsRef.current(allRaw, true);
     } catch (err: any) {
       console.error('Admin Nexus pending fetch error:', err);
-      // Even if Firestore query errors, still merge and refresh from local queue
-      setAccessRequests([]);
+      setAccessRequestsRef.current([], true);
     }
     setIsSyncing(false);
     setLastSyncTime(new Date().toLocaleTimeString());
-  }, [setAccessRequests]);
+  }, []);
 
-  // Multi-collection real-time unfiltered onSnapshot listener + SSE stream + auto-reconnect + fallback polling
+  const fetchPendingRequestsRef = useRef(fetchPendingRequests);
+  fetchPendingRequestsRef.current = fetchPendingRequests;
+
+  // Persistent multi-collection real-time onSnapshot listener + SSE stream + reconnect/resubscribe handler
+  // Empty dependency array [] guarantees tab switches or re-renders NEVER detach or unbind the listener
   useEffect(() => {
     let isMounted = true;
-    // Hydrate from local storage queue immediately on mount so Pending Queue (N) is instant
-    setOnboardingRequests((prev) =>
-      deduplicateAndSortRequests(mergeAccessRequestsWithLocal([], prev))
-    );
+    invalidateAccessRequestsCache();
 
     const collectionsToListen = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
-    const docsMap = new Map<string, Map<string, any>>();
-    collectionsToListen.forEach((name) => docsMap.set(name, new Map()));
-    docsMap.set('server_sse', new Map());
+    const docsMap = docsMapRef.current;
+    collectionsToListen.forEach((name) => {
+      if (!docsMap.has(name)) docsMap.set(name, new Map());
+    });
+    if (!docsMap.has('server_sse')) docsMap.set('server_sse', new Map());
+
     let updateScheduled = false;
 
-    const updateState = () => {
+    const updateState = (forceInvalidate = false) => {
       if (!isMounted) return;
       updateScheduled = false;
       const allRaw: any[] = [];
       docsMap.forEach((colDocs) => {
         colDocs.forEach((docData) => allRaw.push(docData));
       });
-      setAccessRequests(allRaw);
+      setAccessRequestsRef.current(allRaw, forceInvalidate);
       setLastSyncTime(new Date().toLocaleTimeString());
     };
 
     const scheduleUpdateState = () => {
       if (updateScheduled || !isMounted) return;
       updateScheduled = true;
-      queueMicrotask(updateState);
+      queueMicrotask(() => updateState(false));
     };
 
-    const activeUnsubs: Array<() => void> = [];
-    const retryTimers: Array<ReturnType<typeof setTimeout>> = [];
+    // Hydrate immediately on mount
+    updateState(true);
 
-    const attachFirestoreListener = (colName: string) => {
+    const activeUnsubs = new Map<string, () => void>();
+    const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    const attachFirestoreListener = (colName: string, forceResubscribe = false) => {
       if (!isMounted) return;
+      if (activeUnsubs.has(colName) && !forceResubscribe) return;
+      const existingUnsub = activeUnsubs.get(colName);
+      if (existingUnsub) {
+        try {
+          existingUnsub();
+        } catch {}
+        activeUnsubs.delete(colName);
+      }
+      const existingTimer = retryTimers.get(colName);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        retryTimers.delete(colName);
+      }
+
       try {
         const unsub = onSnapshot(
           collection(db, colName),
@@ -423,23 +471,26 @@ export const AdminNexus: React.FC = () => {
           },
           (err: any) => {
             console.warn(`[AdminNexus] onSnapshot diagnostic on ${colName}:`, err?.message || err);
+            activeUnsubs.delete(colName);
             if (isMounted) {
-              const timer = setTimeout(() => attachFirestoreListener(colName), 2500);
-              retryTimers.push(timer);
+              const timer = setTimeout(() => attachFirestoreListener(colName, true), 2500);
+              retryTimers.set(colName, timer);
             }
           }
         );
-        activeUnsubs.push(unsub);
+        activeUnsubs.set(colName, unsub);
       } catch (e) {
         console.warn(`[AdminNexus] Failed to attach onSnapshot to ${colName}:`, e);
       }
     };
 
-    collectionsToListen.forEach((colName) => attachFirestoreListener(colName));
+    collectionsToListen.forEach((colName) => attachFirestoreListener(colName, true));
 
-    // Real-time Server-Sent Events (SSE) subscription for 0ms cross-browser/incognito propagation
+    // Real-time Server-Sent Events (SSE) subscription with auto-reconnect
     let eventSource: EventSource | null = null;
-    if (typeof EventSource !== 'undefined') {
+    const connectEventSource = () => {
+      if (!isMounted || typeof EventSource === 'undefined') return;
+      if (eventSource && eventSource.readyState !== EventSource.CLOSED) return;
       try {
         eventSource = new EventSource('/api/access-requests/stream');
         eventSource.onmessage = (ev) => {
@@ -455,13 +506,13 @@ export const AdminNexus: React.FC = () => {
                 }
               });
               docsMap.set('server_sse', sseMap);
-              updateState();
+              updateState(true);
             } else if (payload?.type === 'UPSERT_REQUEST' && payload?.request) {
               const req = payload.request;
               const docKey = req?.id || req?.uid || req?.email || `req_${Date.now()}`;
               sseMap.set(docKey, { id: docKey, ...req });
               docsMap.set('server_sse', sseMap);
-              updateState();
+              updateState(true);
             } else if (payload?.type === 'DELETE_REQUEST') {
               const delId = String(payload.id || '').toLowerCase();
               const delEmail = String(payload.email || '').toLowerCase();
@@ -472,18 +523,25 @@ export const AdminNexus: React.FC = () => {
                 }
               });
               docsMap.set('server_sse', sseMap);
-              updateState();
+              updateState(true);
             }
           } catch {}
         };
+        eventSource.onerror = () => {
+          try {
+            eventSource?.close();
+          } catch {}
+        };
       } catch {}
-    }
+    };
 
-    // Fallback polling reconciliation interval (every 3000ms) + window focus/online sync
-    const pollBackendAndLocal = async () => {
+    connectEventSource();
+
+    // Fallback polling reconciliation interval (every 3000ms)
+    const pollBackendAndLocal = async (forceInvalidate = false) => {
       if (!isMounted) return;
       try {
-        const res = await fetch('/api/access-requests');
+        const res = await fetch(`/api/access-requests?_t=${Date.now()}`, { cache: 'no-store' });
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data?.requests)) {
@@ -499,12 +557,12 @@ export const AdminNexus: React.FC = () => {
         }
       } catch {}
       if (isMounted) {
-        updateState();
+        updateState(forceInvalidate);
       }
     };
 
-    pollBackendAndLocal();
-    const pollInterval = setInterval(pollBackendAndLocal, 3000);
+    fetchPendingRequestsRef.current();
+    const pollInterval = setInterval(() => pollBackendAndLocal(false), 3000);
 
     const handleCustomSubmit = (e: Event) => {
       const detail = (e as CustomEvent)?.detail;
@@ -516,7 +574,7 @@ export const AdminNexus: React.FC = () => {
           ...detail,
         });
         docsMap.set('access_requests', colMap);
-        updateState();
+        updateState(true);
       }
     };
     window.addEventListener('bim_access_request_submitted', handleCustomSubmit);
@@ -527,16 +585,32 @@ export const AdminNexus: React.FC = () => {
         e.key === 'bim_tracker_onboarding_v7' ||
         e.key === DELETED_ACCESS_REQUESTS_KEY
       ) {
-        updateState();
+        updateState(true);
       }
     };
     window.addEventListener('storage', handleStorageChange);
 
-    const handleWindowFocusOrOnline = () => {
-      pollBackendAndLocal();
+    // Explicit reconnect / resubscribe handler on window focus, network online, or tab visibility restore
+    const handleReconnectAndResubscribe = () => {
+      if (!isMounted) return;
+      collectionsToListen.forEach((colName) => {
+        if (!activeUnsubs.has(colName)) {
+          attachFirestoreListener(colName, true);
+        }
+      });
+      connectEventSource();
+      fetchPendingRequestsRef.current();
     };
-    window.addEventListener('focus', handleWindowFocusOrOnline);
-    window.addEventListener('online', handleWindowFocusOrOnline);
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        handleReconnectAndResubscribe();
+      }
+    };
+
+    window.addEventListener('focus', handleReconnectAndResubscribe);
+    window.addEventListener('online', handleReconnectAndResubscribe);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     let bc: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
@@ -552,9 +626,9 @@ export const AdminNexus: React.FC = () => {
               ...req,
             });
             docsMap.set('access_requests', colMap);
-            updateState();
+            updateState(true);
           } else if (event.data?.type === 'DELETE_REQUEST') {
-            updateState();
+            updateState(true);
           }
         };
       } catch {}
@@ -568,7 +642,9 @@ export const AdminNexus: React.FC = () => {
           unsub();
         } catch {}
       });
+      activeUnsubs.clear();
       retryTimers.forEach((t) => clearTimeout(t));
+      retryTimers.clear();
       if (eventSource) {
         try {
           eventSource.close();
@@ -576,15 +652,16 @@ export const AdminNexus: React.FC = () => {
       }
       window.removeEventListener('bim_access_request_submitted', handleCustomSubmit);
       window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('focus', handleWindowFocusOrOnline);
-      window.removeEventListener('online', handleWindowFocusOrOnline);
+      window.removeEventListener('focus', handleReconnectAndResubscribe);
+      window.removeEventListener('online', handleReconnectAndResubscribe);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (bc) {
         try {
           bc.close();
         } catch {}
       }
     };
-  }, [setAccessRequests, setOnboardingRequests]);
+  }, []);
 
   // Dynamic Team Efficiency reference
   const members = employees;
