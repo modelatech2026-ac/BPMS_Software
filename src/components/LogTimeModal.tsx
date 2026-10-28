@@ -13,11 +13,13 @@ import confetti from 'canvas-confetti';
 import {
   useBimData,
   isUserSuperAdmin,
+  isUserViewer,
   toLocalIsoDate,
   cleanProjectName,
   getMemberLabel,
   sanitizeEmployeeRecord,
 } from '../context/BimDataContext';
+import { normalizeUserRole } from '../auth/googleAuth';
 import { generateRequestDocId } from '../auth/roleSync';
 import { Discipline, ActivityType, LODLevel } from '../types';
 
@@ -40,6 +42,22 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
     currentUser,
   } = useBimData();
   const isSuper = isUserSuperAdmin(currentUser);
+
+  const isViewer = React.useMemo(() => {
+    if (!currentUser) return false;
+    if (isSuper) return false;
+    const roleNormalized = normalizeUserRole(currentUser.appRole || currentUser.role || '');
+    if (roleNormalized === 'SUPER_ADMIN' || roleNormalized === 'DIRECTOR') return false;
+    return (
+      roleNormalized === 'VIEWER' ||
+      currentUser.securityRole === 'Viewer' ||
+      currentUser.accessLevel === 'Viewer' ||
+      currentUser.role === 'Viewer' ||
+      currentUser.role === 'VIEWER' ||
+      currentUser.appRole === 'VIEWER' ||
+      isUserViewer(currentUser, true, currentUser.securityRole)
+    );
+  }, [currentUser, isSuper]);
 
   // Resolve allocations belonging strictly to the current logged-in user
   const viewerAllocations = React.useMemo(() => {
@@ -70,7 +88,7 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       .filter((member) => !member.isDeleted && member.status !== 'deleted')
       .map((member) => sanitizeEmployeeRecord({ ...member }));
     const seen = new Set<string>();
-    return raw.filter((member) => {
+    const deduplicated = raw.filter((member) => {
       const emailKey = (member.email || '').trim().toLowerCase();
       const idKey = (member.id || '').trim().toLowerCase();
       const strippedId = idKey.replace(/^emp-/, '');
@@ -92,7 +110,53 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
       if (nameKey) seen.add(nameKey);
       return true;
     });
-  }, [employees]);
+
+    if (isViewer && currentUser) {
+      const userEmail = (currentUser.email || '').trim().toLowerCase();
+      const userId = (currentUser.id || '').trim();
+      const userIdStripped = userId.replace(/^emp-/, '');
+      const userName = (currentUser.name || '').trim().toLowerCase();
+
+      const matched = deduplicated.find((m) => {
+        const mEmail = (m.email || '').trim().toLowerCase();
+        const mId = (m.id || '').trim();
+        const mIdStripped = mId.replace(/^emp-/, '');
+        const mName = (m.name || '').trim().toLowerCase();
+        if (userEmail && mEmail && mEmail === userEmail) return true;
+        if (userId && (mId === userId || mIdStripped === userIdStripped)) return true;
+        if (userName && mName && (mName === userName || mName.includes(userName) || userName.includes(mName))) return true;
+        return false;
+      });
+
+      if (matched) {
+        return [matched];
+      }
+
+      return [
+        {
+          id: userId || 'emp-user',
+          name: currentUser.name || (userEmail ? userEmail.split('@')[0] : 'Team Member'),
+          email: currentUser.email || '',
+          avatar:
+            currentUser.avatar ||
+            `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+              currentUser.name || 'User'
+            )}`,
+          role: 'VIEWER' as any,
+          primaryDiscipline: 'BIM - ACS',
+          discipline: 'BIM - ACS',
+          weeklyCapacityHours: 40,
+          experienceYears: 3,
+          status: 'Active',
+          activeProjectIds: [],
+          skills: ['BIM - ACS'],
+          phone: '',
+        },
+      ];
+    }
+
+    return deduplicated;
+  }, [employees, isViewer, currentUser]);
 
   const [projectId, setProjectId] = useState<string>(
     preselectedProjectId || viewerAllocations[0]?.projectId || projects[0]?.id || ''
@@ -480,48 +544,62 @@ export const LogTimeModal: React.FC<LogTimeModalProps> = ({
               <label className="block text-slate-400 font-medium mb-1">
                 BIM Specialist / Modeler
               </label>
-              <select
-                aria-label="Select Modeler"
-                value={assignedMemberId || ''}
-                onChange={(e) => handleMemberSelect(discipline, e.target.value)}
-                className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-                required
-              >
-                {activeTeamMembers.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {getMemberLabel(emp)}
-                  </option>
-                ))}
-                {currentUser &&
-                  !activeTeamMembers.some((e) => {
-                    const eEmail = (e.email || '').trim().toLowerCase();
-                    const uEmail = (currentUser.email || '').trim().toLowerCase();
-                    const eId = (e.id || '').trim().replace(/^emp-/, '');
-                    const uId = (currentUser.id || '').trim().replace(/^emp-/, '');
-                    const uDetId = uEmail ? generateRequestDocId(uEmail) : '';
-                    const eName = (e.name || '').trim().toLowerCase();
-                    const uName = (currentUser.name || '').trim().toLowerCase();
-                    return (
-                      (uId && eId === uId) ||
-                      (uDetId && eId === uDetId) ||
-                      (uEmail && eEmail && eEmail === uEmail) ||
-                      (uName && eName && eName === uName)
-                    );
-                  }) && (
-                    <option
-                      value={
-                        selectedEmployee?.id ||
-                        currentUser.id ||
-                        (currentUser.email ? `emp-${generateRequestDocId(currentUser.email)}` : 'emp-user')
-                      }
-                    >
-                      {getMemberLabel({
-                        name: currentUser.name || currentUser.email,
-                        role: isSuper ? 'SUPER_ADMIN' : (currentUser.appRole || currentUser.role || 'VIEWER'),
-                      })}
+              {isViewer ? (
+                <div className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 flex items-center justify-between text-xs">
+                  <span className="font-semibold text-white">
+                    {getMemberLabel({
+                      name: currentUser?.name || currentUser?.email || 'Modeler',
+                      role: 'VIEWER',
+                    })}
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-semibold border border-blue-500/30">
+                    Logged-In User
+                  </span>
+                </div>
+              ) : (
+                <select
+                  aria-label="Select Modeler"
+                  value={assignedMemberId || ''}
+                  onChange={(e) => handleMemberSelect(discipline, e.target.value)}
+                  className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  required
+                >
+                  {activeTeamMembers.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {getMemberLabel(emp)}
                     </option>
-                  )}
-              </select>
+                  ))}
+                  {currentUser &&
+                    !activeTeamMembers.some((e) => {
+                      const eEmail = (e.email || '').trim().toLowerCase();
+                      const uEmail = (currentUser.email || '').trim().toLowerCase();
+                      const eId = (e.id || '').trim().replace(/^emp-/, '');
+                      const uId = (currentUser.id || '').trim().replace(/^emp-/, '');
+                      const uDetId = uEmail ? generateRequestDocId(uEmail) : '';
+                      const eName = (e.name || '').trim().toLowerCase();
+                      const uName = (currentUser.name || '').trim().toLowerCase();
+                      return (
+                        (uId && eId === uId) ||
+                        (uDetId && eId === uDetId) ||
+                        (uEmail && eEmail && eEmail === uEmail) ||
+                        (uName && eName && eName === uName)
+                      );
+                    }) && (
+                      <option
+                        value={
+                          selectedEmployee?.id ||
+                          currentUser.id ||
+                          (currentUser.email ? `emp-${generateRequestDocId(currentUser.email)}` : 'emp-user')
+                        }
+                      >
+                        {getMemberLabel({
+                          name: currentUser.name || currentUser.email,
+                          role: isSuper ? 'SUPER_ADMIN' : (currentUser.appRole || currentUser.role || 'VIEWER'),
+                        })}
+                      </option>
+                    )}
+                </select>
+              )}
             </div>
 
             <div>

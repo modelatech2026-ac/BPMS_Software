@@ -26,6 +26,7 @@ import {
   getEffectiveLogDate,
   toLocalIsoDate,
   isUserSuperAdmin,
+  isUserViewer,
   cleanProjectName,
   getMemberLabel,
   sanitizeEmployeeRecord,
@@ -69,6 +70,22 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   }, [currentUser]);
 
   const isSuperAdmin = useMemo(() => isUserSuperAdmin(currentUser), [currentUser]);
+
+  const isViewer = useMemo(() => {
+    if (!currentUser) return true;
+    if (isSuperAdmin || isDirector) return false;
+    const norm = normalizeUserRole(currentUser.appRole || currentUser.role || '');
+    if (norm === 'SUPER_ADMIN' || norm === 'DIRECTOR') return false;
+    return (
+      norm === 'VIEWER' ||
+      currentUser.securityRole === 'Viewer' ||
+      currentUser.accessLevel === 'Viewer' ||
+      currentUser.role === 'Viewer' ||
+      currentUser.role === 'VIEWER' ||
+      currentUser.appRole === 'VIEWER' ||
+      isUserViewer(currentUser, true, currentUser.securityRole)
+    );
+  }, [currentUser, isSuperAdmin, isDirector]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployeeFilter, setSelectedEmployeeFilter] = useState('all');
@@ -836,6 +853,51 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       });
     });
 
+    // Role-based isolation: If user is a Viewer, strictly isolate to their own single employee record
+    if (isViewer) {
+      const userEmail = (currentUser?.email || '').toLowerCase().trim();
+      const userId = (currentUser?.id || '').trim();
+      const userIdStripped = userId.replace(/^emp-/, '');
+      const userName = (currentUser?.name || '').toLowerCase().trim();
+
+      const matchedUserEmp = list.find((emp) => {
+        const empEmail = (emp.email || '').toLowerCase().trim();
+        const empId = (emp.id || '').trim();
+        const empIdStripped = empId.replace(/^emp-/, '');
+        const empName = (emp.name || '').toLowerCase().trim();
+
+        if (userEmail && empEmail && empEmail === userEmail) return true;
+        if (userId && (empId === userId || empIdStripped === userIdStripped)) return true;
+        if (userName && empName && (empName === userName || empName.includes(userName) || userName.includes(empName))) return true;
+        return false;
+      });
+
+      if (matchedUserEmp) {
+        return [matchedUserEmp];
+      }
+
+      const singleViewerEmp: Employee = {
+        id: userId || 'emp-user',
+        name: currentUser?.name || (userEmail ? userEmail.split('@')[0] : 'Team Member'),
+        email: currentUser?.email || '',
+        avatar:
+          currentUser?.avatar ||
+          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+            currentUser?.name || 'User'
+          )}`,
+        role: 'VIEWER' as any,
+        primaryDiscipline: 'BIM - ACS',
+        discipline: 'BIM - ACS',
+        weeklyCapacityHours: 40,
+        experienceYears: 3,
+        status: 'Active',
+        activeProjectIds: [],
+        skills: ['BIM - ACS'],
+        phone: '',
+      };
+      return [singleViewerEmp];
+    }
+
     return list;
   }, [
     employees,
@@ -845,12 +907,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     resourceAllocations,
     currentUser,
     deletedMatrixEmpIds,
+    isViewer,
   ]);
 
   // Full Member Matrix Outer Join: maps directly from the complete list of active team members,
   // performing an outer join with daily_logs for the selected week range so 0.0h members are always rendered.
   const fullWeeklyMatrix = useMemo(() => {
-    const rawSourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
+    const rawSourceLogs = isViewer
+      ? (workLogs || [])
+      : (allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || []);
     const sourceLogs = rawSourceLogs.map((w) => sanitizeWorkLogRecord(w));
     const weeklyLogs = sourceLogs.filter((w) => {
       const matchesType =
@@ -921,10 +986,26 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
   // Base filtered logs (by role/ownership, search, project, employee, discipline) before logTypeFilter
   const baseFilteredLogs = useMemo(() => {
-    return (workLogs || []).filter((log) => {
+    const rawLogs = isViewer ? (workLogs || []) : (allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || []);
+    return rawLogs.filter((log) => {
       const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
 
-      if (!isSuperAdmin) {
+      if (isViewer) {
+        const userEmail = (currentUser?.email || '').trim().toLowerCase();
+        const userId = (currentUser?.id || '').trim();
+        const userIdStripped = userId.replace(/^emp-/, '');
+        const logEmpId = (log.employeeId || '').trim();
+        const logUserId = ((log as any).userId || (log as any).memberId || '').trim();
+        const logEmail = ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase());
+        const logName = (log.employeeName || '').toLowerCase().trim();
+        const currentName = (currentUser?.name || '').toLowerCase().trim();
+
+        const isOwned =
+          (userEmail && logEmail && logEmail === userEmail) ||
+          (userId && (logUserId === userId || logEmpId === userId || logUserId.replace(/^emp-/, '') === userIdStripped || logEmpId.replace(/^emp-/, '') === userIdStripped)) ||
+          (currentName && logName && (logName === currentName || logName.includes(currentName) || currentName.includes(logName)));
+        if (!isOwned) return false;
+      } else if (!isSuperAdmin) {
         const userEmail = (currentUser?.email || '').trim().toLowerCase();
         const userId = (currentUser?.id || '').trim();
         const userIdStripped = userId.replace(/^emp-/, '');
@@ -947,6 +1028,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         (log.activityType || '').toLowerCase().includes(searchQuery.toLowerCase());
 
       const matchesEmp =
+        isViewer ||
         !isSuperAdmin ||
         selectedEmployeeFilter === 'all' ||
         (selectedEmpObj ? doesLogMatchEmployee(log, selectedEmpObj) : log.employeeId === selectedEmployeeFilter);
@@ -972,9 +1054,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     });
   }, [
     workLogs,
+    allWorkLogs,
     allTrackedEmployees,
     selectedEmployeeFilter,
     isSuperAdmin,
+    isViewer,
     currentUser,
     searchQuery,
     selectedProjectFilter,
@@ -1084,11 +1168,13 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
               Daily Hour Tracking
             </h2>
             <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
-              Organizational Timesheets
+              {isViewer ? 'Personal Timesheet' : 'Organizational Timesheets'}
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Tracking daily modeler work hours, multi-project tasks, and weekly employee capacity utilization
+            {isViewer
+              ? 'Tracking personal daily work hours, task submissions, and weekly capacity utilization'
+              : 'Tracking daily modeler work hours, multi-project tasks, and weekly employee capacity utilization'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1116,7 +1202,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400 font-semibold uppercase">
-                {logTypeFilter === 'test' ? 'Total Logged (Test Only)' : 'Total Logged (Operational)'}
+                {isViewer
+                  ? 'Total Logged'
+                  : logTypeFilter === 'test'
+                  ? 'Total Logged (Test Only)'
+                  : 'Total Logged (Operational)'}
               </span>
               {totalFilteredHours > 0 && (
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
@@ -1168,11 +1258,20 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
             <span className="text-xs text-slate-400 font-semibold uppercase">
-              {isSuperAdmin ? 'Active Engaged Staff' : 'Active Modeler'}
+              {isViewer ? 'Active Modeler' : isSuperAdmin ? 'Active Engaged Staff' : 'Active Modeler'}
             </span>
             <p className="text-2xl font-bold text-white mt-1">
-              {isSuperAdmin ? `${allTrackedEmployees.length} Specialists` : (currentUser?.name || 'My Record')}
+              {isViewer
+                ? '1 Active Modeler'
+                : isSuperAdmin
+                ? `${allTrackedEmployees.length} Specialists`
+                : (currentUser?.name || '1 Active Modeler')}
             </p>
+            {isViewer && currentUser?.name && (
+              <p className="text-[11px] text-slate-400 truncate mt-0.5 font-medium">
+                {currentUser.name}
+              </p>
+            )}
           </div>
           <div className="w-10 h-10 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center">
             <User className="w-5 h-5" />
@@ -1191,7 +1290,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}
           >
-            Weekly Timesheet Matrix
+            {isViewer ? 'My Timesheet Matrix' : 'Weekly Timesheet Matrix'}
           </button>
           <button
             onClick={() => setActiveView('logs')}
@@ -1253,9 +1352,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
           <div className="p-4 border-b border-slate-800 flex items-center justify-between text-xs text-slate-300 bg-slate-800/40">
             <div className="flex items-center gap-2">
               <span className="font-semibold text-white">
-                {isSuperAdmin
-                  ? `Weekly Team Timesheet Matrix (${currentWeekRange.label})`
-                  : `My Weekly Timesheet Matrix (${currentWeekRange.label})`}
+                {isViewer
+                  ? `My Weekly Timesheet Matrix (${currentWeekRange.label})`
+                  : `Weekly Team Timesheet Matrix (${currentWeekRange.label})`}
               </span>
               {logTypeFilter === 'test' && (
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
@@ -1457,9 +1556,13 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
             <div>
               <label className="block text-slate-400 font-medium mb-1">
-                {isSuperAdmin ? 'Filter by Employee' : 'Member Timesheet'}
+                {isViewer ? 'Personal Timesheet' : isSuperAdmin ? 'Filter by Employee' : 'Member Timesheet'}
               </label>
-              {isSuperAdmin ? (
+              {isViewer ? (
+                <div className="w-full bg-slate-800/80 text-blue-300 font-semibold rounded-lg px-2.5 py-1.5 border border-slate-700/80 text-xs truncate">
+                  {currentUser?.name || currentUser?.email || 'My Personal Timesheet'}
+                </div>
+              ) : isSuperAdmin ? (
                 <select
                   value={selectedEmployeeFilter}
                   onChange={(e) => setSelectedEmployeeFilter(e.target.value)}
