@@ -32,6 +32,7 @@ import {
   getMemberLabel,
   sanitizeEmployeeRecord,
   sanitizeWorkLogRecord,
+  isRecordOwnedByMember,
 } from '../context/BimDataContext';
 import { normalizeUserRole } from '../auth/googleAuth';
 import { generateRequestDocId } from '../auth/roleSync';
@@ -547,12 +548,13 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const hasActualDailyLogs =
       deleteCandidateLogs.length > 0 &&
       logToDelete.id !== '__fallback_allocation_delete__' &&
-      workLogs.some((w) => w.id === logToDelete.id);
+      (workLogs.some((w) => w.id === logToDelete.id) ||
+        allWorkLogs.some((w) => w.id === logToDelete.id));
 
     if (hasActualDailyLogs) {
       deleteWorkLog(logToDelete.id);
-    } else {
-      // Fallback: no matching daily_logs found -> delete from assigned_hours / allocations
+    } else if (isSuperAdmin) {
+      // Fallback: no matching daily_logs found -> delete from assigned_hours / allocations (super admin only)
       await deleteFallbackAllocationsForMember(matchedEmp, logToDelete.id);
       if (matchedEmp?.id) {
         setDeletedMatrixEmpIds((prev) =>
@@ -560,6 +562,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         );
         deleteEmployee(matchedEmp.id);
       }
+    } else {
+      deleteWorkLog(logToDelete.id);
     }
 
     setLogToDelete(null);
@@ -1358,8 +1362,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     document.body.removeChild(link);
   };
 
-  const canModifyLog = (_log: DailyWorkLog): boolean => {
-    return isSuperAdmin;
+  const canModifyLog = (log: DailyWorkLog): boolean => {
+    if (isSuperAdmin) return true;
+    if (isViewer && currentUser) {
+      return isRecordOwnedByMember(log, currentUser, employees);
+    }
+    return false;
   };
 
   return (
@@ -1601,9 +1609,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   ))}
                   <th className="p-3.5 text-right font-bold min-w-[100px]">Weekly Total</th>
                   <th className="p-3.5 text-center min-w-[100px]">Capacity</th>
-                  {isSuperAdmin && (
-                    <th className="p-3.5 text-right min-w-[90px]">Action</th>
-                  )}
+                  <th className="p-3.5 text-right min-w-[90px]">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
@@ -1635,23 +1641,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           <td key={d.date} className="p-3.5 text-center">
                             {d.hours > 0 ? (
                               <span
-                                onClick={
-                                  isSuperAdmin
-                                    ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
-                                    : undefined
-                                }
-                                title={
-                                  isSuperAdmin
-                                    ? `Click to edit ${emp.name}'s hours for ${d.date}${
-                                        isUnderTarget ? ' (Shortfall: < 9.0h daily target)' : ''
-                                      }`
-                                    : isUnderTarget
-                                    ? 'Shortfall: Below 9.0h daily target'
-                                    : undefined
-                                }
-                                className={`inline-block px-2 py-0.5 rounded font-semibold text-xs ${
-                                  isSuperAdmin ? 'cursor-pointer hover:ring-1 hover:ring-blue-400/60 transition' : ''
-                                } ${
+                                onClick={() => openMatrixRowEditModal(emp, empActionLogs, d.date)}
+                                title={`Click to edit ${emp.name}'s hours for ${d.date}${
+                                  isUnderTarget ? ' (Shortfall: < 9.0h daily target)' : ''
+                                }`}
+                                className={`inline-block px-2 py-0.5 rounded font-semibold text-xs cursor-pointer hover:ring-1 hover:ring-blue-400/60 transition ${
                                   logTypeFilter === 'test'
                                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                     : isUnderTarget
@@ -1663,19 +1657,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                               </span>
                             ) : (
                               <span
-                                onClick={
-                                  isSuperAdmin
-                                    ? () => openMatrixRowEditModal(emp, empActionLogs, d.date)
-                                    : undefined
-                                }
-                                title={
-                                  isSuperAdmin
-                                    ? `Click to log/edit hours for ${emp.name} on ${d.date}`
-                                    : undefined
-                                }
-                                className={`text-slate-600 font-mono ${
-                                  isSuperAdmin ? 'cursor-pointer hover:text-slate-400 transition' : ''
-                                }`}
+                                onClick={() => openMatrixRowEditModal(emp, empActionLogs, d.date)}
+                                title={`Click to log/edit hours for ${emp.name} on ${d.date}`}
+                                className="text-slate-600 font-mono cursor-pointer hover:text-slate-400 transition"
                               >
                                 -
                               </span>
@@ -1709,30 +1693,28 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                         </span>
                       </td>
 
-                      {isSuperAdmin && (
-                        <td className="p-3.5 text-right whitespace-nowrap">
-                          <div className="inline-flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => openMatrixRowEditModal(emp, empActionLogs)}
-                              className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition"
-                              title="Edit logged hours for a specific day or project"
-                              aria-label={`Edit matrix hours for ${emp.name}`}
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openMatrixRowDeleteModal(emp, empWeekLogs, empAllLogs)}
-                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
-                              title="Delete this daily log entry?"
-                              aria-label={`Delete daily log entry for ${emp.name}`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      )}
+                      <td className="p-3.5 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openMatrixRowEditModal(emp, empActionLogs)}
+                            className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition cursor-pointer"
+                            title="Edit logged hours for a specific day or project"
+                            aria-label={`Edit matrix hours for ${emp.name}`}
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openMatrixRowDeleteModal(emp, empWeekLogs, empAllLogs)}
+                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition cursor-pointer"
+                            title="Delete this daily log entry?"
+                            aria-label={`Delete daily log entry for ${emp.name}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1966,7 +1948,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                             {log.notes}
                           </td>
                           <td className="p-3.5 text-right whitespace-nowrap">
-                            {isSuperAdmin && allowModify ? (
+                            {allowModify ? (
                               <div className="inline-flex items-center justify-end gap-1.5">
                                 <button
                                   type="button"
