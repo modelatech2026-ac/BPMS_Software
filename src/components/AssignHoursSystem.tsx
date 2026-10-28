@@ -32,6 +32,7 @@ import {
   getMemberLabel,
   sanitizeEmployeeRecord,
   sanitizeWorkLogRecord,
+  normalizeDateToIso,
 } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import {
@@ -76,6 +77,22 @@ const getInitials = (name = '') =>
     .join('')
     .toUpperCase()
     .slice(0, 2) || 'U';
+
+export const toUtcMidnightTimestamp = (dateInput: any): number | null => {
+  if (!dateInput) return null;
+  const iso = normalizeDateToIso(dateInput);
+  if (!iso) return null;
+  const parts = iso.split('-');
+  if (parts.length === 3) {
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    const d = parseInt(parts[2], 10);
+    if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+      return Date.UTC(y, m, d);
+    }
+  }
+  return null;
+};
 
 const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [];
 
@@ -192,7 +209,29 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return parsed.map((item) => ({
+            ...item,
+            startDate:
+              normalizeDateToIso(
+                item.startDate ||
+                (item as any).start ||
+                (item as any).timelineStart ||
+                (item as any).targetStartDate ||
+                (item as any).targetDate ||
+                (item as any).date
+              ) || getCurrentWeekRange().startIso,
+            dueDate:
+              normalizeDateToIso(
+                item.dueDate ||
+                (item as any).due ||
+                (item as any).endDate ||
+                (item as any).end ||
+                (item as any).timelineEnd ||
+                (item as any).targetCompletionDate ||
+                (item as any).targetDate ||
+                (item as any).date
+              ) || getCurrentWeekRange().endIso,
+          }));
         }
       } catch (e) {
         return [];
@@ -294,8 +333,26 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
         assignedHours: Number(data.assignedHours) || 0,
         viewFrequency: data.viewFrequency || 'Weekly',
-        startDate: data.startDate || getCurrentWeekRange().startIso,
-        dueDate: data.dueDate || getCurrentWeekRange().endIso,
+        startDate:
+          normalizeDateToIso(
+            data.startDate ||
+            data.start ||
+            data.timelineStart ||
+            data.targetStartDate ||
+            data.targetDate ||
+            data.date
+          ) || getCurrentWeekRange().startIso,
+        dueDate:
+          normalizeDateToIso(
+            data.dueDate ||
+            data.due ||
+            data.endDate ||
+            data.end ||
+            data.timelineEnd ||
+            data.targetCompletionDate ||
+            data.targetDate ||
+            data.date
+          ) || getCurrentWeekRange().endIso,
         ...(data.priority ? { priority: data.priority } : {}),
         status: data.status || 'Allocated',
         notes: data.notes || '',
@@ -606,6 +663,26 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const [searchQuery, setSearchQuery] = useState('');
   const [viewFrequency, setViewFrequency] = useState<'Daily' | 'Weekly'>('Weekly');
 
+  // Date Range Calendar Filter State
+  const [filterStartDate, setFilterStartDate] = useState<string>('');
+  const [filterEndDate, setFilterEndDate] = useState<string>('');
+  const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
+  const datePickerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
+        setShowDatePicker(false);
+      }
+    };
+    if (showDatePicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showDatePicker]);
+
   // Modal / Add Form State
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -893,11 +970,18 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   }, [liveActiveAllocations]);
 
   // Cross-Collection Data Aggregation helper:
-  // Dynamically aggregates matching records from daily_logs (activeWorkLogs) where
-  // log.employeeId === assignment.memberId (or matching employee identifiers) and log.projectId === assignment.projectId
+  // Fetches and aggregates all daily log entries submitted by the assigned team member
+  // for that specific project during the filtered window or task timeline window.
   const getLoggedHoursForAssignment = React.useCallback(
-    (assignment: ResourceAllocationItem): number => {
+    (
+      assignment: ResourceAllocationItem,
+      filterStart: string = filterStartDate,
+      filterEnd: string = filterEndDate
+    ): number => {
+      if (!assignment) return 0;
       const rawAlloc = assignment as any;
+
+      // 1. Resolve Assigned Team Member Identifiers
       const assignmentMemberId = (assignment.memberId || rawAlloc.memberId || assignment.employeeId || rawAlloc.assignedTo || '').trim();
       const assignmentEmpId = (assignment.employeeId || assignmentMemberId).trim();
       const assignmentIdStripped = assignmentMemberId.replace(/^emp-/, '');
@@ -916,43 +1000,70 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         rawAlloc.assignedToEmail ||
         matchedEmp?.email ||
         ''
-      )
-        .trim()
-        .toLowerCase();
+      ).trim().toLowerCase();
       const detEmailId = targetEmail ? generateRequestDocId(targetEmail) : '';
       const targetName = (assignment.employeeName || matchedEmp?.name || '').trim().toLowerCase();
+      const normTargetName = targetName.replace(/sushoovan|sushovon/g, 'sushovan');
 
+      // 2. Resolve Project Identifiers
       const matchedProj = projects.find((p) => matchProjectId(p.id, assignment.projectId));
-      const targetProjNameNorm = (matchedProj?.name || assignment.projectName || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '');
+      const targetProjId = assignment.projectId || matchedProj?.id || '';
+      const targetProjNameClean = cleanProjectName(matchedProj?.name || assignment.projectName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // 3. Resolve Timeline Window Bounds for this assignment
+      const rawStart =
+        assignment.startDate ||
+        rawAlloc.start ||
+        rawAlloc.timelineStart ||
+        rawAlloc.targetStartDate ||
+        rawAlloc.targetDate ||
+        rawAlloc.date;
+      const rawDue =
+        assignment.dueDate ||
+        rawAlloc.due ||
+        rawAlloc.endDate ||
+        rawAlloc.end ||
+        rawAlloc.timelineEnd ||
+        rawAlloc.targetCompletionDate ||
+        rawAlloc.targetDate ||
+        rawAlloc.date;
+      let taskStart = normalizeDateToIso(rawStart);
+      let taskDue = normalizeDateToIso(rawDue);
+      if (taskStart && taskDue && taskStart > taskDue) {
+        const tmp = taskStart;
+        taskStart = taskDue;
+        taskDue = tmp;
+      }
+
+      let fStart = filterStart ? normalizeDateToIso(filterStart) : '';
+      let fEnd = filterEnd ? normalizeDateToIso(filterEnd) : '';
+      if (fStart && fEnd && fStart > fEnd) {
+        const tmp = fStart;
+        fStart = fEnd;
+        fEnd = tmp;
+      }
 
       const matchingLogs = activeWorkLogs.filter((log) => {
-        // 1. Project match: log.projectId === assignment.projectId (or normalized project ID/name)
+        // A. Project Match: project ID, normalized ID, or clean project name
+        const logProjId = log.projectId || '';
         const sameProjId =
-          log.projectId === assignment.projectId || matchProjectId(log.projectId, assignment.projectId);
-        const logProjNameNorm = (log.projectName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          logProjId === targetProjId ||
+          logProjId === assignment.projectId ||
+          matchProjectId(logProjId, targetProjId) ||
+          matchProjectId(logProjId, assignment.projectId);
+
+        const logProjNameClean = cleanProjectName(log.projectName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const sameProjName =
-          Boolean(targetProjNameNorm) &&
-          targetProjNameNorm !== 'unassignedproject' &&
-          targetProjNameNorm !== 'bimproject' &&
-          logProjNameNorm === targetProjNameNorm;
+          Boolean(targetProjNameClean) &&
+          targetProjNameClean !== 'unassignedproject' &&
+          targetProjNameClean !== 'bimproject' &&
+          (logProjNameClean === targetProjNameClean ||
+            (targetProjNameClean.length > 4 && logProjNameClean.includes(targetProjNameClean)) ||
+            (logProjNameClean.length > 4 && targetProjNameClean.includes(logProjNameClean)));
 
         if (!sameProjId && !sameProjName) return false;
 
-        // 2. Member match: log.employeeId === assignment.memberId (plus normalized ID, email, or name)
-        const logName = (log.employeeName || '').trim().toLowerCase();
-        // If both assignment and log have explicit employee names and they differ, they are distinct users
-        if (
-          targetName &&
-          logName &&
-          logName !== 'bim modeler' &&
-          logName !== 'team member' &&
-          targetName !== logName
-        ) {
-          return false;
-        }
-
+        // B. Team Member Match
         const logEmpId = (log.employeeId || '').trim();
         const logMemberId = ((log as any).memberId || log.userId || '').trim();
         const logEmpIdStripped = logEmpId.replace(/^emp-/, '');
@@ -960,8 +1071,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
         const directMemberMatch =
           Boolean(assignmentMemberId) &&
-          (log.employeeId === assignmentMemberId ||
-            log.employeeId === assignmentEmpId ||
+          (logEmpId === assignmentMemberId ||
+            logEmpId === assignmentEmpId ||
             logMemberId === assignmentMemberId ||
             logMemberId === assignmentEmpId);
 
@@ -978,24 +1089,143 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             (logEmpId === matchedEmp.id ||
               logEmpIdStripped === matchedEmp.id.replace(/^emp-/, '')));
 
-        const logEmail = (log.memberEmail || (log as any).userEmail || '')
-          .trim()
-          .toLowerCase();
+        const logEmail = (log.memberEmail || (log as any).userEmail || '').trim().toLowerCase();
         const emailMatch = Boolean(targetEmail) && Boolean(logEmail) && logEmail === targetEmail;
 
-        const nameMatch = Boolean(targetName) && Boolean(logName) && logName === targetName;
+        const logName = (log.employeeName || '').trim().toLowerCase();
+        const normLogName = logName.replace(/sushoovan|sushovon/g, 'sushovan');
+        const nameMatch =
+          Boolean(targetName) &&
+          Boolean(logName) &&
+          (logName === targetName ||
+            normLogName === normTargetName ||
+            (normTargetName.length > 4 && normLogName.includes(normTargetName)) ||
+            (normLogName.length > 4 && normTargetName.includes(normLogName)));
 
-        return directMemberMatch || strippedIdMatch || emailMatch || nameMatch;
+        const memberMatched = directMemberMatch || strippedIdMatch || emailMatch || nameMatch;
+        if (!memberMatched) return false;
+
+        // C. Date Window Match
+        const rawLogDate = log.date || (log as any).workDate || (log as any).entryDate || log.timestamp || (log as any).createdAt;
+        const logDateIso = normalizeDateToIso(rawLogDate);
+        if (!logDateIso) return false;
+
+        // If a calendar date filter is active, evaluate within the filtered window
+        if (fStart || fEnd) {
+          if (fStart && logDateIso < fStart) return false;
+          if (fEnd && logDateIso > fEnd) return false;
+        } else if (taskStart || taskDue) {
+          // If no top calendar filter is active, evaluate within the task's timeline
+          if (taskStart && logDateIso < taskStart) return false;
+          if (taskDue && logDateIso > taskDue) return false;
+        }
+
+        return true;
       });
+
+      if (matchingLogs.length === 0) {
+        return 0;
+      }
 
       const operationalLogs = matchingLogs.filter((l) => !l.isTestEntry);
       const targetList = operationalLogs.length > 0 ? operationalLogs : matchingLogs;
-      return targetList.reduce((sum, w) => sum + (Number(w.hoursLogged ?? (w as any).hours) || 0), 0);
+      const totalHours = targetList.reduce(
+        (sum, w) => sum + (Number(w.hoursLogged !== undefined ? w.hoursLogged : (w as any).hours) || 0),
+        0
+      );
+      return Number(totalHours.toFixed(1));
     },
-    [activeWorkLogs, employees, projects]
+    [activeWorkLogs, employees, projects, filterStartDate, filterEndDate]
   );
 
-  // Overall Workspace Metrics & Efficiency Dashboard based on table parameters
+  // Helper to determine if a task's timeline overlaps with the calendar date filter range
+  // Formula: IsVisible = (task.startDate <= filterEnd) AND (task.dueDate >= filterStart)
+  const doesTaskTimelineOverlapFilter = React.useCallback(
+    (task: ResourceAllocationItem, filterStart: string, filterEnd: string): boolean => {
+      if (!filterStart && !filterEnd) return true;
+
+      const rawFStartUtc = filterStart ? toUtcMidnightTimestamp(filterStart) : null;
+      const rawFEndUtc = filterEnd ? toUtcMidnightTimestamp(filterEnd) : null;
+
+      let fStartUtc = rawFStartUtc;
+      let fEndUtc = rawFEndUtc;
+
+      // Handle inverted date range bounds gracefully (e.g. user selected filterStart > filterEnd)
+      if (fStartUtc !== null && fEndUtc !== null && fStartUtc > fEndUtc) {
+        const tmp = fStartUtc;
+        fStartUtc = fEndUtc;
+        fEndUtc = tmp;
+      }
+
+      if (fStartUtc === null && fEndUtc === null) return true;
+
+      // Extract task dates across possible field variants and fallbacks
+      const rawStart =
+        task.startDate ||
+        (task as any).start ||
+        (task as any).timelineStart ||
+        (task as any).targetStartDate ||
+        (task as any).targetDate ||
+        (task as any).date;
+
+      const rawDue =
+        task.dueDate ||
+        (task as any).due ||
+        (task as any).endDate ||
+        (task as any).end ||
+        (task as any).timelineEnd ||
+        (task as any).targetCompletionDate ||
+        (task as any).targetDate ||
+        (task as any).date;
+
+      let taskStartUtc = rawStart ? toUtcMidnightTimestamp(rawStart) : null;
+      let taskDueUtc = rawDue ? toUtcMidnightTimestamp(rawDue) : null;
+
+      // Check task timeline string (e.g. "2026-10-26 → 2026-11-01" or "2026-10-26 - 2026-11-01")
+      if ((taskStartUtc === null || taskDueUtc === null) && typeof (task as any).timeline === 'string') {
+        const parts = (task as any).timeline.split(/→|至|to|[-–—]/i).map((s: string) => s.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          if (taskStartUtc === null) taskStartUtc = toUtcMidnightTimestamp(parts[0]);
+          if (taskDueUtc === null) taskDueUtc = toUtcMidnightTimestamp(parts[1]);
+        } else if (parts.length === 1) {
+          if (taskStartUtc === null) taskStartUtc = toUtcMidnightTimestamp(parts[0]);
+          if (taskDueUtc === null) taskDueUtc = toUtcMidnightTimestamp(parts[0]);
+        }
+      }
+
+      // If one date boundary is present, use it for both (single-day schedule point)
+      if (taskStartUtc === null && taskDueUtc !== null) taskStartUtc = taskDueUtc;
+      if (taskDueUtc === null && taskStartUtc !== null) taskDueUtc = taskStartUtc;
+
+      // Ensure task start is not after task due
+      if (taskStartUtc !== null && taskDueUtc !== null && taskStartUtc > taskDueUtc) {
+        const tmp = taskStartUtc;
+        taskStartUtc = taskDueUtc;
+        taskDueUtc = tmp;
+      }
+
+      // If task has no discernible dates at all, keep it visible
+      if (taskStartUtc === null && taskDueUtc === null) return true;
+
+      // Robust Date-Range Overlap Evaluation:
+      // IsVisible = (task.startDate <= filterEnd) AND (task.dueDate >= filterStart)
+      if (fStartUtc !== null && fEndUtc !== null) {
+        return (
+          (taskStartUtc !== null ? taskStartUtc <= fEndUtc : true) &&
+          (taskDueUtc !== null ? taskDueUtc >= fStartUtc : true)
+        );
+      } else if (fStartUtc !== null) {
+        return taskDueUtc !== null ? taskDueUtc >= fStartUtc : true;
+      } else if (fEndUtc !== null) {
+        return taskStartUtc !== null ? taskStartUtc <= fEndUtc : true;
+      }
+
+      return true;
+    },
+    []
+  );
+
+  // Overall Workspace Metrics & Efficiency Dashboard based on table parameters and date range
   const workspaceMetrics = useMemo(() => {
     let budgetHours = 0;
     if (selectedProjectId === 'all') {
@@ -1018,11 +1248,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       ? relevantAllocations
       : relevantAllocations.filter((a) => a.employeeId === selectedEmployeeId);
 
-    const allocatedHours = filteredByEmployee.reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
+    // Apply date range filter to metrics calculations using overlap rule: (task.startDate <= filterEnd) AND (task.dueDate >= filterStart)
+    const filteredForMetrics = filteredByEmployee.filter((a) =>
+      doesTaskTimelineOverlapFilter(a, filterStartDate, filterEndDate)
+    );
+
+    const allocatedHours = filteredForMetrics.reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
 
     // Dynamically aggregate total logged hours across daily_logs for all matching assignments
-    const loggedHours = filteredByEmployee.reduce(
-      (sum, alloc) => sum + getLoggedHoursForAssignment(alloc),
+    const loggedHours = filteredForMetrics.reduce(
+      (sum, alloc) => sum + getLoggedHoursForAssignment(alloc, filterStartDate, filterEndDate),
       0
     );
 
@@ -1031,12 +1266,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     const utilizationPct = budgetHours > 0 ? Math.round((allocatedHours / budgetHours) * 100) : 0;
 
     // Efficiency & Status Metrics
-    const completedTasks = filteredByEmployee.filter((a) => a.status === 'Completed');
+    const completedTasks = filteredForMetrics.filter((a) => a.status === 'Completed');
     const completedHours = completedTasks.reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
-    const inProgressTasks = filteredByEmployee.filter((a) => a.status === 'In Progress');
+    const inProgressTasks = filteredForMetrics.filter((a) => a.status === 'In Progress');
     const inProgressHours = inProgressTasks.reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
-    const criticalTasks = filteredByEmployee.filter((a) => a.priority === 'Critical' || a.priority === 'High');
-    const delayedTasks = filteredByEmployee.filter((a) => a.status === 'Delayed');
+    const criticalTasks = filteredForMetrics.filter((a) => a.priority === 'Critical' || a.priority === 'High');
+    const delayedTasks = filteredForMetrics.filter((a) => a.status === 'Delayed');
 
     const completionRate = allocatedHours > 0 ? Math.round((completedHours / allocatedHours) * 100) : 0;
 
@@ -1051,7 +1286,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       Estimation: 0
     };
 
-    filteredByEmployee.forEach((a) => {
+    filteredForMetrics.forEach((a) => {
       if (disciplineBreakdown[a.discipline] !== undefined) {
         disciplineBreakdown[a.discipline] += Number(a.assignedHours || 0);
       }
@@ -1059,10 +1294,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     // Priority breakdown
     const priorityBreakdown = {
-      Critical: filteredByEmployee.filter(a => a.priority === 'Critical').length,
-      High: filteredByEmployee.filter(a => a.priority === 'High').length,
-      Medium: filteredByEmployee.filter(a => a.priority === 'Medium').length,
-      Low: filteredByEmployee.filter(a => a.priority === 'Low').length,
+      Critical: filteredForMetrics.filter(a => a.priority === 'Critical').length,
+      High: filteredForMetrics.filter(a => a.priority === 'High').length,
+      Medium: filteredForMetrics.filter(a => a.priority === 'Medium').length,
+      Low: filteredForMetrics.filter(a => a.priority === 'Low').length,
     };
 
     // Overallocated staff count
@@ -1085,9 +1320,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       completionRate,
       priorityBreakdown
     };
-  }, [projects, employees, liveActiveAllocations, activeWorkLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours, getLoggedHoursForAssignment]);
+  }, [projects, employees, liveActiveAllocations, activeWorkLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours, getLoggedHoursForAssignment, isFullAccessRole, filterStartDate, filterEndDate, doesTaskTimelineOverlapFilter]);
 
-  // Filtered Allocations based on 2 Dropdowns (Project + Team Member) and Search
+  // Filtered Allocations based on Dropdowns (Project + Team Member + Date Range) and Search
   const filteredAllocations = useMemo(() => {
     return visibleAssignments.filter((a) => {
       const matchesProj = selectedProjectId === 'all' || matchProjectId(a.projectId, selectedProjectId);
@@ -1104,9 +1339,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         (a.status || '').toLowerCase().includes(q) ||
         (a.priority || '').toLowerCase().includes(q);
 
-      return matchesProj && matchesEmp && matchesDisc && matchesStatus && matchesPriority && matchesSearch;
+      // Date Range Filter check against allocation timeline using overlap rule:
+      // Render a task if (task.startDate <= filterEnd) AND (task.dueDate >= filterStart)
+      const matchesDateRange = doesTaskTimelineOverlapFilter(a, filterStartDate, filterEndDate);
+
+      return matchesProj && matchesEmp && matchesDisc && matchesStatus && matchesPriority && matchesSearch && matchesDateRange;
     });
-  }, [visibleAssignments, isFullAccessRole, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery]);
+  }, [visibleAssignments, isFullAccessRole, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery, filterStartDate, filterEndDate, doesTaskTimelineOverlapFilter]);
 
   // Handle Form Submission
   const handleAddAllocation = (e: React.FormEvent) => {
@@ -1507,8 +1746,178 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             )}
           </div>
 
+          {/* Dropdown 3: Date Range Calendar Filter Dropdown */}
+          <div className="relative" ref={datePickerRef}>
+            <div
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition ${
+                filterStartDate || filterEndDate
+                  ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-200 hover:border-slate-600'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setShowDatePicker((prev) => !prev)}
+                aria-label="Filter by Timeline Date Range"
+                className="flex items-center gap-1.5 focus:outline-none cursor-pointer"
+              >
+                <Calendar className={`w-3.5 h-3.5 ${filterStartDate || filterEndDate ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mr-1">Timeline:</span>
+                <span className="max-w-[145px] truncate font-mono text-[11px]">
+                  {filterStartDate && filterEndDate
+                    ? `${filterStartDate} → ${filterEndDate}`
+                    : filterStartDate
+                    ? `From ${filterStartDate}`
+                    : filterEndDate
+                    ? `Until ${filterEndDate}`
+                    : 'All Dates'}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showDatePicker ? 'rotate-180' : ''}`} />
+              </button>
+              {(filterStartDate || filterEndDate) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterStartDate('');
+                    setFilterEndDate('');
+                  }}
+                  className="p-0.5 rounded hover:bg-emerald-500/20 text-emerald-400 hover:text-white transition ml-0.5 cursor-pointer"
+                  title="Reset date filter"
+                  aria-label="Reset date filter"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {/* Date Range Popover */}
+            {showDatePicker && (
+              <div className="absolute right-0 top-full mt-2 z-50 w-80 p-4 rounded-xl bg-slate-900 border border-slate-700 shadow-2xl text-slate-200 animate-in fade-in slide-in-from-top-2">
+                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">Date Range Filter</span>
+                  </div>
+                  {(filterStartDate || filterEndDate) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterStartDate('');
+                        setFilterEndDate('');
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-emerald-400 transition font-medium"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+
+                {/* Quick Presets */}
+                <div className="mb-3">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                    Quick Presets
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterStartDate('');
+                        setFilterEndDate('');
+                      }}
+                      className={`px-2 py-1.5 rounded text-[11px] font-medium transition text-center ${
+                        !filterStartDate && !filterEndDate
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      }`}
+                    >
+                      All Dates
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const curWeek = getCurrentWeekRange();
+                        setFilterStartDate(curWeek.startIso);
+                        setFilterEndDate(curWeek.endIso);
+                      }}
+                      className={`px-2 py-1.5 rounded text-[11px] font-medium transition text-center ${
+                        filterStartDate === getCurrentWeekRange().startIso &&
+                        filterEndDate === getCurrentWeekRange().endIso
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      }`}
+                    >
+                      This Week
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const now = new Date();
+                        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+                        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                        const pad = (n: number) => String(n).padStart(2, '0');
+                        setFilterStartDate(`${firstDay.getFullYear()}-${pad(firstDay.getMonth() + 1)}-${pad(firstDay.getDate())}`);
+                        setFilterEndDate(`${lastDay.getFullYear()}-${pad(lastDay.getMonth() + 1)}-${pad(lastDay.getDate())}`);
+                      }}
+                      className="px-2 py-1.5 rounded text-[11px] font-medium transition text-center bg-slate-800 hover:bg-slate-700 text-slate-300"
+                    >
+                      This Month
+                    </button>
+                  </div>
+                </div>
+
+                {/* Custom Date Inputs */}
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      From (Start Date)
+                    </label>
+                    <input
+                      type="date"
+                      value={filterStartDate}
+                      onChange={(e) => setFilterStartDate(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-xs font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      To (Due Date)
+                    </label>
+                    <input
+                      type="date"
+                      value={filterEndDate}
+                      onChange={(e) => setFilterEndDate(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-xs font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterStartDate('');
+                      setFilterEndDate('');
+                      setShowDatePicker(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-slate-400 hover:text-white text-xs transition"
+                  >
+                    Reset Filter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDatePicker(false)}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition"
+                  >
+                    Apply Filter
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Quick Clear Filters button if filtered */}
-          {(selectedProjectId !== 'all' || (isFullAccessRole && selectedEmployeeId !== 'all') || searchQuery) && (
+          {(selectedProjectId !== 'all' || (isFullAccessRole && selectedEmployeeId !== 'all') || searchQuery || filterStartDate || filterEndDate) && (
             <button
               onClick={() => {
                 setSelectedProjectId('all');
@@ -1516,6 +1925,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   setSelectedEmployeeId('all');
                 }
                 setSearchQuery('');
+                setFilterStartDate('');
+                setFilterEndDate('');
               }}
               className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium border border-slate-700 transition"
             >
@@ -1546,7 +1957,26 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                 <tr>
                   <td colSpan={6} className="py-12 text-center text-slate-500">
                     <p className="text-sm font-semibold text-slate-400">No resource hour allocations found.</p>
-                    <p className="text-xs text-slate-500 mt-1">Click "Assign Hours" above to allocate hours to project members.</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {filterStartDate || filterEndDate
+                        ? `No assignments match the selected timeline date range (${filterStartDate || 'start'} to ${filterEndDate || 'end'}). Try clearing or widening the date filter.`
+                        : 'Click "Assign Hours" above to allocate hours to project members.'}
+                    </p>
+                    {(selectedProjectId !== 'all' || (isFullAccessRole && selectedEmployeeId !== 'all') || searchQuery || filterStartDate || filterEndDate) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedProjectId('all');
+                          if (isFullAccessRole) setSelectedEmployeeId('all');
+                          setSearchQuery('');
+                          setFilterStartDate('');
+                          setFilterEndDate('');
+                        }}
+                        className="mt-3 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-400 text-xs font-semibold border border-slate-700 transition"
+                      >
+                        Reset All Filters
+                      </button>
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -1636,7 +2066,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   const badgeText = `Work Assigned to ${assignedName}`;
                   const avatarInitials = getInitials(assignedName);
 
-                  const loggedHours = getLoggedHoursForAssignment(row);
+                  const loggedHours = getLoggedHoursForAssignment(row, filterStartDate, filterEndDate);
 
                   return (
                     <tr
@@ -1738,7 +2168,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         <div className="flex flex-col items-start gap-1">
                           <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-emerald-400">
                             <Clock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                            <span>Hours Logged: {loggedHours.toFixed(1)}h</span>
+                            <span>{loggedHours.toFixed(1)}h Logged</span>
                           </div>
                           {loggedHours > 0 ? (
                             <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
@@ -1747,7 +2177,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                             </span>
                           ) : (
                             <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/80">
-                              Awaiting Daily Log
+                              0.0h Logged • Awaiting Daily Log
                             </span>
                           )}
                         </div>

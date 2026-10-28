@@ -357,6 +357,30 @@ export const normalizeDateToIso = (raw: any): string => {
         return `${year}-${month}-${day}`;
       }
     }
+    // 2.5 English Month Names (e.g. Oct 26, 2026 or 26 Oct 2026)
+    const monthNames: Record<string, string> = {
+      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+    };
+    const namedMatch1 = s.match(/^([a-zA-Z]{3,9})\s+(\d{1,2}),?\s+(\d{4})/);
+    if (namedMatch1) {
+      const mKey = namedMatch1[1].slice(0, 3).toLowerCase();
+      if (monthNames[mKey]) {
+        const day = namedMatch1[2].padStart(2, '0');
+        const year = namedMatch1[3];
+        return `${year}-${monthNames[mKey]}-${day}`;
+      }
+    }
+    const namedMatch2 = s.match(/^(\d{1,2})\s+([a-zA-Z]{3,9}),?\s+(\d{4})/);
+    if (namedMatch2) {
+      const mKey = namedMatch2[2].slice(0, 3).toLowerCase();
+      if (monthNames[mKey]) {
+        const day = namedMatch2[1].padStart(2, '0');
+        const year = namedMatch2[3];
+        return `${year}-${monthNames[mKey]}-${day}`;
+      }
+    }
+
     // 3. Fallback date parse
     const parsed = new Date(s);
     if (!Number.isNaN(parsed.getTime())) {
@@ -368,6 +392,14 @@ export const normalizeDateToIso = (raw: any): string => {
     return s.slice(0, 10);
   }
   if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) return '';
+    // If UTC midnight (e.g. from UTC ISO string), use UTC getters to prevent timezone day-shift
+    if (raw.getUTCHours() === 0 && raw.getUTCMinutes() === 0) {
+      const year = raw.getUTCFullYear();
+      const month = String(raw.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(raw.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
     const year = raw.getFullYear();
     const month = String(raw.getMonth() + 1).padStart(2, '0');
     const day = String(raw.getDate()).padStart(2, '0');
@@ -376,6 +408,12 @@ export const normalizeDateToIso = (raw: any): string => {
   if (typeof raw?.toDate === 'function') {
     try {
       const d = raw.toDate();
+      if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+        const year = d.getUTCFullYear();
+        const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
       const year = d.getFullYear();
       const month = String(d.getMonth() + 1).padStart(2, '0');
       const day = String(d.getDate()).padStart(2, '0');
@@ -384,6 +422,13 @@ export const normalizeDateToIso = (raw: any): string => {
   }
   if (typeof raw?.seconds === 'number') {
     const d = new Date(raw.seconds * 1000);
+    // Firestore Timestamp seconds for dates (midnight UTC): use UTC getters to prevent day-shift
+    if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+      const year = d.getUTCFullYear();
+      const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(d.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -2698,8 +2743,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         targetElementOrZone: data.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
         assignedHours: Number(data.assignedHours) || 0,
         viewFrequency: data.viewFrequency || 'Weekly',
-        startDate: data.startDate || toLocalIsoDate(new Date()),
-        dueDate: data.dueDate || toLocalIsoDate(new Date()),
+        startDate:
+          normalizeDateToIso(data.startDate || data.start || data.timelineStart || data.targetDate || data.date) ||
+          getCurrentWeekRange().startIso,
+        dueDate:
+          normalizeDateToIso(data.dueDate || data.due || data.endDate || data.end || data.timelineEnd || data.targetCompletionDate || data.targetDate || data.date) ||
+          getCurrentWeekRange().endIso,
         ...(data.priority ? { priority: data.priority } : {}),
         status: data.status || 'Allocated',
         notes: data.notes || '',
