@@ -26,7 +26,26 @@ interface EmployeeDirectoryProps {
 
 export type EfficiencyTier = 'Poor' | 'Average' | 'Good' | 'Star';
 
-export const getEfficiencyTier = (efficiencyPct: number): EfficiencyTier => {
+export const calculateEfficiencyPct = (loggedHours: number, assignedHours: number): number => {
+  if (assignedHours <= 0 || loggedHours <= 0) return 0;
+  if (loggedHours > assignedHours) {
+    return Number(Math.min(100, (assignedHours / loggedHours) * 100).toFixed(1));
+  }
+  return Number(Math.min(100, (loggedHours / assignedHours) * 100).toFixed(1));
+};
+
+export const getEfficiencyTier = (
+  efficiencyPct: number,
+  loggedHours?: number,
+  assignedHours?: number
+): EfficiencyTier => {
+  if (
+    typeof loggedHours === 'number' &&
+    typeof assignedHours === 'number' &&
+    loggedHours > assignedHours
+  ) {
+    return 'Poor';
+  }
   const normalized = Number(efficiencyPct.toFixed(1));
   if (normalized === 50 || Math.round(efficiencyPct) === 50) {
     return 'Average';
@@ -39,6 +58,21 @@ export const getEfficiencyTier = (efficiencyPct: number): EfficiencyTier => {
   }
   return 'Star';
 };
+
+const normalizePersonName = (name?: string): string =>
+  (name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/sushoovan|sushovon/g, 'sushovan')
+    .replace(/abhinandn/g, 'abhinandan')
+    .replace(/\s+/g, ' ');
+
+const normalizePersonEmail = (email?: string): string =>
+  (email || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^abhinandnb@/, 'abhinandanb@')
+    .replace(/^sushovandas@/, 'sushoovandas@');
 
 const matchProjectId = (idA?: string, idB?: string): boolean => {
   if (!idA || !idB) return false;
@@ -111,13 +145,13 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
     const resolveEmployee = (empId?: string, email?: string, name?: string): Employee | undefined => {
       const cleanId = (empId || '').trim();
       const strippedId = cleanId.replace(/^emp-/, '');
-      const cleanEmail = (email || '').trim().toLowerCase();
-      const cleanName = (name || '').trim().toLowerCase();
+      const cleanEmail = normalizePersonEmail(email);
+      const cleanName = normalizePersonName(name);
 
       return activeEmployees.find((e) => {
         const eIdStripped = (e.id || '').replace(/^emp-/, '');
-        const eEmail = (e.email || '').trim().toLowerCase();
-        const eName = (e.name || '').trim().toLowerCase();
+        const eEmail = normalizePersonEmail(e.email);
+        const eName = normalizePersonName(e.name);
         return (
           (cleanId && (e.id === cleanId || (strippedId && eIdStripped === strippedId))) ||
           (cleanEmail && eEmail === cleanEmail) ||
@@ -137,13 +171,13 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
     const findExistingMemberKey = (emp?: Employee, rawId?: string, rawEmail?: string, rawName?: string): string => {
       const targetId = (emp?.id || rawId || '').trim();
       const targetStripped = targetId.replace(/^emp-/, '').toLowerCase();
-      const targetEmail = (emp?.email || rawEmail || '').trim().toLowerCase();
-      const targetName = (emp?.name || rawName || '').trim().toLowerCase();
+      const targetEmail = normalizePersonEmail(emp?.email || rawEmail);
+      const targetName = normalizePersonName(emp?.name || rawName);
 
       for (const [key, entry] of memberMap.entries()) {
         const entryIdStripped = (entry.employeeId || '').replace(/^emp-/, '').toLowerCase();
-        const entryEmail = (entry.employeeEmail || '').trim().toLowerCase();
-        const entryName = (entry.employeeName || '').trim().toLowerCase();
+        const entryEmail = normalizePersonEmail(entry.employeeEmail);
+        const entryName = normalizePersonName(entry.employeeName);
         if (
           (targetStripped && entryIdStripped && targetStripped === entryIdStripped) ||
           (targetEmail && entryEmail && targetEmail === entryEmail) ||
@@ -263,8 +297,8 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
             return false;
           }
 
-          const itemNameNorm = (item.employeeName || '').trim().toLowerCase();
-          const wNameNorm = (w.employeeName || '').trim().toLowerCase();
+          const itemNameNorm = normalizePersonName(item.employeeName);
+          const wNameNorm = normalizePersonName(w.employeeName);
           if (
             itemNameNorm &&
             wNameNorm &&
@@ -283,8 +317,8 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
               (itemEmpIdStripped && wEmpIdStripped === itemEmpIdStripped));
           const matchEmail =
             Boolean(item.employeeEmail) &&
-            ((w.memberEmail || (w as any).userEmail || '').trim().toLowerCase() ===
-              item.employeeEmail.trim().toLowerCase());
+            normalizePersonEmail(w.memberEmail || (w as any).userEmail) ===
+              normalizePersonEmail(item.employeeEmail);
           const matchName = Boolean(itemNameNorm) && wNameNorm === itemNameNorm;
 
           return matchId || matchEmail || matchName;
@@ -305,9 +339,8 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
         ? Number(item.assignedHours) || 0
         : fallbackCapacity;
       const varianceHours = Number((loggedHours - assignedHours).toFixed(1));
-      const efficiencyPct =
-        assignedHours > 0 ? Number(((loggedHours / assignedHours) * 100).toFixed(1)) : 0;
-      const tier = getEfficiencyTier(efficiencyPct);
+      const efficiencyPct = calculateEfficiencyPct(loggedHours, assignedHours);
+      const tier = getEfficiencyTier(efficiencyPct, loggedHours, assignedHours);
 
       rows.push({
         rowKey,
@@ -352,14 +385,13 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
   const summaryStats = useMemo(() => {
     const totalLogged = filteredRows.reduce((s, r) => s + r.loggedHours, 0);
     const totalAssigned = filteredRows.reduce((s, r) => s + r.assignedHours, 0);
-    const overallEfficiency =
-      totalAssigned > 0 ? Number(((totalLogged / totalAssigned) * 100).toFixed(1)) : 0;
+    const overallEfficiency = calculateEfficiencyPct(totalLogged, totalAssigned);
 
     return {
       totalLogged: Number(totalLogged.toFixed(1)),
       totalAssigned: Number(totalAssigned.toFixed(1)),
       overallEfficiency,
-      overallTier: getEfficiencyTier(overallEfficiency),
+      overallTier: getEfficiencyTier(overallEfficiency, totalLogged, totalAssigned),
       starCount: filteredRows.filter((r) => r.tier === 'Star').length,
       goodCount: filteredRows.filter((r) => r.tier === 'Good').length,
       averageCount: filteredRows.filter((r) => r.tier === 'Average').length,

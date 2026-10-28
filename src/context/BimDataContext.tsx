@@ -1029,9 +1029,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       if (cleanName) keysToAdd.push(`name:${cleanName}`);
 
-      if (keysToAdd.length === 0) return;
-      keysToAdd.forEach((k) => deletedKeysRef.current.add(k));
-      setDeletedMemberKeys((prev) => Array.from(new Set([...prev, ...keysToAdd])));
+      const newKeys = keysToAdd.filter((k) => !deletedKeysRef.current.has(k));
+      if (newKeys.length === 0) return;
+      newKeys.forEach((k) => deletedKeysRef.current.add(k));
+      setDeletedMemberKeys((prev) => Array.from(new Set([...prev, ...newKeys])));
     },
     []
   );
@@ -1057,9 +1058,18 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       if (cleanName) keysToRemove.add(`name:${cleanName}`);
 
-      if (keysToRemove.size === 0) return;
-      keysToRemove.forEach((k) => deletedKeysRef.current.delete(k));
-      setDeletedMemberKeys((prev) => prev.filter((k) => !keysToRemove.has(k)));
+      let hasExistingKey = false;
+      keysToRemove.forEach((k) => {
+        if (deletedKeysRef.current.has(k)) {
+          hasExistingKey = true;
+          deletedKeysRef.current.delete(k);
+        }
+      });
+      if (!hasExistingKey) return;
+      setDeletedMemberKeys((prev) => {
+        const next = prev.filter((k) => !keysToRemove.has(k));
+        return next.length === prev.length ? prev : next;
+      });
     },
     []
   );
@@ -1929,27 +1939,6 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     let unsubUsers: (() => void) | undefined;
     try {
-      // Ensure Super Admin profile (Aditi Chakraborty - modelatech2026@gmail.com) exists in Firestore 'users' collection
-      setDoc(
-        doc(db, 'users', 'modelatech2026_gmail_com'),
-        {
-          id: 'emp-modelatech2026_gmail_com',
-          name: SUPER_ADMIN_NAME,
-          fullName: SUPER_ADMIN_NAME,
-          email: SUPER_ADMIN_EMAIL,
-          role: 'SUPER_ADMIN',
-          appRole: 'SUPER_ADMIN',
-          assignedRole: 'SUPER_ADMIN',
-          accessLevel: 'Super Admin',
-          assignedAccessLevel: 'Super Admin',
-          discipline: 'BIM - ACS',
-          primaryDiscipline: 'BIM - ACS',
-          status: 'Active',
-          isDeleted: false,
-        },
-        { merge: true }
-      ).catch(() => {});
-
       unsubUsers = onSnapshot(
         collection(db, 'users'),
         (snapshot) => {
@@ -2228,7 +2217,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => {
       if (unsubUsers) unsubUsers();
     };
-  }, [registerDeletedMemberKeys, isMemberDeleted]);
+  }, [registerDeletedMemberKeys, unregisterDeletedMemberKeys]);
 
   // Real-time onSnapshot listener on Firestore 'disciplines' collection to hydrate assignment dropdowns
   useEffect(() => {
@@ -2353,37 +2342,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               INITIAL_PROJECTS.map((mp) => [normalizeProjectNameKey(mp.name), mp])
             );
 
-            // Seed missing master portfolio projects to Firestore once without rewriting already-synced docs
+            // Mark projects seeded without triggering automatic background writes on every snapshot
             if (!hasSeededProjectsRef.current && !snapshot.metadata.fromCache) {
               hasSeededProjectsRef.current = true;
-              const baseList = mergeWithMasterProjects(prev);
-              baseList.forEach((p) => {
-                if (!firestoreDocsMap.has(p.id)) {
-                  const sanitized = JSON.parse(JSON.stringify(p));
-                  setDoc(
-                    doc(db, 'projects', p.id),
-                    {
-                      ...sanitized,
-                      projectName: p.name,
-                      status: p.status || 'WIP',
-                      estimatedHours: Number(p.totalEstimatedHours) || 0,
-                      totalHoursLogged: Number(p.totalCompletedHours) || 0,
-                      plannedDeliveryDate: p.plannedDeliveryDate || p.targetCompletionDate || '',
-                      createdAt: serverTimestamp(),
-                    },
-                    { merge: true }
-                  ).catch(() => {});
-                }
-              });
-
-              // Remove any legacy duplicate Firestore docs that have the same normalized name as a canonical master project
-              firestoreDocsMap.forEach((remote, docId) => {
-                const nKey = normalizeProjectNameKey(remote.name);
-                const canonicalMaster = nKey ? masterByName.get(nKey) : undefined;
-                if (canonicalMaster && canonicalMaster.id !== docId) {
-                  deleteDoc(doc(db, 'projects', docId)).catch(() => {});
-                }
-              });
             }
 
             if (firestoreDocsMap.size === 0) {

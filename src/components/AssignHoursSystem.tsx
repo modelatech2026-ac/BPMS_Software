@@ -430,11 +430,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           if (!hasInitialSeededRef.current) {
             hasInitialSeededRef.current = true;
             if (remoteAllocations.length === 0 && prev.length > 0) {
-              prev.forEach((item) => {
-                const sanitized = JSON.parse(JSON.stringify(item));
-                setDoc(doc(db, 'assigned_hours', item.id), sanitized, { merge: true }).catch(() => {});
-                setDoc(doc(db, 'project_assignments', item.id), sanitized, { merge: true }).catch(() => {});
-              });
               return prev;
             }
           }
@@ -599,24 +594,21 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       if (!selectedMember) return alloc;
 
       if (
-        alloc.employeeId !== selectedMember.id ||
-        alloc.memberId !== selectedMember.id ||
-        alloc.assignedToName !== selectedMember.name ||
-        alloc.employeeName !== selectedMember.name
+        (!alloc.employeeId && selectedMember.id) ||
+        (!alloc.employeeName && selectedMember.name)
       ) {
         hasChanges = true;
         const healed: ResourceAllocationItem = {
           ...alloc,
-          assignedTo: selectedMember.id,
-          employeeId: selectedMember.id,
-          memberId: selectedMember.id,
-          assignedToName: selectedMember.name,
-          memberName: selectedMember.name,
-          employeeName: selectedMember.name,
-          employeeRole: selectedMember.role || alloc.employeeRole,
-          memberEmail: selectedMember.email || alloc.memberEmail,
-          assignedToEmail: selectedMember.email || alloc.assignedToEmail,
-          updatedAt: new Date().toISOString(),
+          assignedTo: alloc.assignedTo || selectedMember.id,
+          employeeId: alloc.employeeId || selectedMember.id,
+          memberId: alloc.memberId || selectedMember.id,
+          assignedToName: alloc.assignedToName || selectedMember.name,
+          memberName: alloc.memberName || selectedMember.name,
+          employeeName: alloc.employeeName || selectedMember.name,
+          employeeRole: alloc.employeeRole || selectedMember.role,
+          memberEmail: alloc.memberEmail || selectedMember.email,
+          assignedToEmail: alloc.assignedToEmail || selectedMember.email,
         };
         itemsToSync.push(healed);
         return healed;
@@ -630,28 +622,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       window.dispatchEvent(
         new CustomEvent('bim_resource_allocations_updated', { detail: normalizedList })
       );
-      itemsToSync.forEach((healed) => {
-        const payload = {
-          assignedTo: healed.employeeId,
-          employeeId: healed.employeeId,
-          memberId: healed.memberId || healed.employeeId,
-          assignedToName: healed.assignedToName || healed.employeeName,
-          memberName: healed.memberName || healed.employeeName,
-          employeeName: healed.employeeName,
-          employeeRole: healed.employeeRole || 'Editor',
-          memberEmail: healed.memberEmail || '',
-          assignedToEmail: healed.assignedToEmail || healed.memberEmail || '',
-          updatedAt: healed.updatedAt || new Date().toISOString(),
-        };
-        const assignedHoursRef = doc(db, 'assigned_hours', healed.id);
-        const assignRef = doc(db, 'project_assignments', healed.id);
-        updateDoc(assignedHoursRef, payload).catch(() => {
-          setDoc(assignedHoursRef, { ...healed, ...payload }, { merge: true }).catch(() => {});
-        });
-        updateDoc(assignRef, payload).catch(() => {
-          setDoc(assignRef, { ...healed, ...payload }, { merge: true }).catch(() => {});
-        });
-      });
     }
   }, [allocations, activeTeamMembers, canManageAllocations, disciplineAssignments, projects]);
 
