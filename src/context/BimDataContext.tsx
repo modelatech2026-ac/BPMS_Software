@@ -342,6 +342,8 @@ export const getMemberLabel = (member: { name?: string; role?: string }): string
 
 export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
   if (!u) return false;
+  const email = (u.email || '').trim().toLowerCase();
+  if (isSuperAdminEmail(email)) return true;
   // If user has an explicitly assigned non-admin role (e.g., switched role to Viewer/Editor/PM or standard user), respect it first
   if (
     u.securityRole === 'Project Manager' ||
@@ -373,8 +375,6 @@ export const isUserSuperAdmin = (u: AuthUser | null | undefined): boolean => {
   ) {
     return true;
   }
-  const email = (u.email || '').trim().toLowerCase();
-  if (isSuperAdminEmail(email)) return true;
   if (u.appRole && (normalizeUserRole(u.appRole) === 'SUPER_ADMIN' || normalizeUserRole(u.appRole) === 'DIRECTOR')) return true;
   if (u.isAdmin && (u.role?.toLowerCase().includes('admin') || u.role?.toLowerCase().includes('director'))) return true;
   return false;
@@ -386,6 +386,7 @@ export const isUserViewer = (
   securityRole?: string
 ): boolean => {
   if (!isAuthenticated || !u) return true;
+  if (isSuperAdminEmail(u.email)) return false;
   if (
     securityRole === 'Viewer' ||
     u.securityRole === 'Viewer' ||
@@ -403,6 +404,7 @@ export const resolveSecurityRole = (
   isAuthenticated: boolean = true,
   explicitSecurityRole?: SecurityRole | string
 ): SecurityRole => {
+  if (u && isSuperAdminEmail(u.email)) return 'Super Admin';
   if (!isAuthenticated && !u && !explicitSecurityRole) return 'Viewer';
 
   const candidate = (explicitSecurityRole || u?.securityRole || '').trim();
@@ -724,8 +726,9 @@ export const sanitizeEmployeeRecord = (emp: Employee): Employee => {
     return {
       ...emp,
       id: 'emp-sushoovan_das',
-      name: !isGenericName ? rawName : 'Sushovan Das',
+      name: !isGenericName ? rawName : 'Sushoovan Das',
       email: cleanSushovanEmail,
+      role: 'SUPER_ADMIN',
     };
   }
 

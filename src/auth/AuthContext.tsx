@@ -12,6 +12,8 @@ import {
 import {
   SUPER_ADMIN_EMAIL,
   SUPER_ADMIN_NAME,
+  SECONDARY_ADMIN_EMAIL,
+  SECONDARY_ADMIN_NAME,
   isSuperAdminEmail,
   mapAppRoleToAccessLevel,
   mapAppRoleToDisplayRole,
@@ -450,21 +452,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       try {
         const cleanEmail = firebaseUser.email.trim().toLowerCase();
+        const isSuper = isSuperAdminEmail(cleanEmail);
         const isAditiSuper = cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase();
-        const uid = isAditiSuper ? 'emp-modelatech2026_gmail_com' : firebaseUser.uid;
+        const isSushovanSuper = isSuper && !isAditiSuper;
+        const uid = isAditiSuper
+          ? 'emp-modelatech2026_gmail_com'
+          : isSushovanSuper
+          ? 'emp-sushoovan_das'
+          : firebaseUser.uid;
         const displayName = isAditiSuper
           ? SUPER_ADMIN_NAME
+          : isSushovanSuper
+          ? SECONDARY_ADMIN_NAME
           : firebaseUser.displayName || cleanEmail.split('@')[0];
 
         // Fetch user profile record from the users (or access_requests) database table
         const dbRecord = await fetchUserRoleFromDatabase(cleanEmail, uid);
 
-        // Dynamically set user session state using dbRecord.role
-        const role = dbRecord.role;
-        const status = dbRecord.status;
-        const accessLevel = dbRecord.accessLevel;
-        const securityRole = dbRecord.securityRole;
-        const displayRole = dbRecord.displayRole || mapAppRoleToDisplayRole(role);
+        // Dynamically set user session state using dbRecord.role (guaranteeing Super Admin status)
+        const role = isSuper ? 'SUPER_ADMIN' : dbRecord.role;
+        const status = isSuper ? 'APPROVED' : dbRecord.status;
+        const accessLevel = isSuper ? 'Super Admin' : dbRecord.accessLevel;
+        const securityRole = isSuper ? 'Super Admin' : dbRecord.securityRole;
+        const displayRole = isSuper
+          ? 'Super Administrator & Lead Architect'
+          : dbRecord.displayRole || mapAppRoleToDisplayRole(role);
 
         const authUser: AuthUser = {
           id: uid,

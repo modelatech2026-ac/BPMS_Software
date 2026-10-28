@@ -12,6 +12,7 @@ export const SECONDARY_ADMIN_NAME = 'Sushoovan Das';
 export const SUPER_ADMIN_EMAILS = [
   'modelatech2026@gmail.com',
   'sushoovandas@gmail.com',
+  'sushovandas@gmail.com',
 ];
 
 export function isSuperAdminEmail(email?: string | null): boolean {
@@ -46,7 +47,9 @@ export function handleGoogleAuthCallback(
   const isSuperAdminUser =
     isSuperAdminEmail(normalizedEmail) ||
     profile.name.toLowerCase().includes('modela') ||
-    profile.name.toLowerCase().includes('sushoovan');
+    profile.name.toLowerCase().includes('sushoovan') ||
+    profile.name.toLowerCase().includes('sushovon') ||
+    profile.name.toLowerCase().includes('sushovan');
 
   const existing = existingUsers.find(
     (u) => u.email.toLowerCase() === normalizedEmail || (u.googleId && u.googleId === profile.googleId)
@@ -55,9 +58,14 @@ export function handleGoogleAuthCallback(
   const now = new Date().toISOString();
 
   if (isSuperAdminUser) {
-    const isSecondary = normalizedEmail === SECONDARY_ADMIN_EMAIL.toLowerCase();
-    const adminEmail = isSecondary ? SECONDARY_ADMIN_EMAIL : SUPER_ADMIN_EMAIL;
-    const adminName = isSecondary ? SECONDARY_ADMIN_NAME : SUPER_ADMIN_NAME;
+    const isSecondary =
+      normalizedEmail === SECONDARY_ADMIN_EMAIL.toLowerCase() ||
+      normalizedEmail === 'sushovandas@gmail.com' ||
+      profile.name.toLowerCase().includes('sushoovan') ||
+      profile.name.toLowerCase().includes('sushovon') ||
+      profile.name.toLowerCase().includes('sushovan');
+    const adminEmail = isSecondary ? (normalizedEmail || SECONDARY_ADMIN_EMAIL) : SUPER_ADMIN_EMAIL;
+    const adminName = isSecondary ? (profile.name || SECONDARY_ADMIN_NAME) : SUPER_ADMIN_NAME;
 
     const adminUser: UserDatabaseModel = {
       id: existing?.id || (isSecondary ? 'usr_super_admin_sushoovan' : 'usr_super_admin_modelatech'),
@@ -115,6 +123,7 @@ export function handleGoogleAuthCallback(
 
 export function toAuthUser(user: UserDatabaseModel): AuthUser {
   const isSuper = user.role === 'SUPER_ADMIN' || isSuperAdminEmail(user.email);
+  const effectiveRole: UserRole = isSuper ? 'SUPER_ADMIN' : user.role;
   
   return {
     id: user.id,
@@ -122,11 +131,11 @@ export function toAuthUser(user: UserDatabaseModel): AuthUser {
     email: user.email,
     name: user.name,
     avatar: user.avatar,
-    role: mapAppRoleToDisplayRole(user.role),
-    appRole: user.role,
-    status: user.status,
+    role: mapAppRoleToDisplayRole(effectiveRole),
+    appRole: effectiveRole,
+    status: isSuper ? 'APPROVED' : user.status,
     isAdmin: isSuper || user.role === 'DIRECTOR' || user.role === 'PROJECT_MANAGER',
-    accessLevel: mapAppRoleToAccessLevel(user.role),
+    accessLevel: mapAppRoleToAccessLevel(effectiveRole),
     requestTimestamp: user.createdAt,
   };
 }

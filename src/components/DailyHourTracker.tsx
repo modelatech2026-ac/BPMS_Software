@@ -698,7 +698,115 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     };
   }, []);
 
-  // Active team members across the organization (including Super Admin Aditi Chakraborty)
+  // Direct real-time onSnapshot listeners on both 'work_logs' and 'daily_logs' collections in Firestore
+  // to ensure historical backfill from inception and instant real-time synchronization for Detailed Log Records
+  const [realtimeFirestoreLogs, setRealtimeFirestoreLogs] = useState<DailyWorkLog[]>([]);
+
+  useEffect(() => {
+    let unsubWorkLogs: (() => void) | undefined;
+    let unsubDailyLogs: (() => void) | undefined;
+
+    const workLogsMap = new Map<string, DailyWorkLog>();
+    const dailyLogsMap = new Map<string, DailyWorkLog>();
+
+    const parseLogSnapshot = (docSnap: any): DailyWorkLog => {
+      const data = docSnap.data() || {};
+      const rawEmployeeName = String(data.employeeName || 'BIM Modeler').trim();
+      const rawEmail = String(data.memberEmail || data.userEmail || '').trim().toLowerCase();
+      const resolvedCreatedAt =
+        typeof data.createdAt === 'string'
+          ? data.createdAt
+          : typeof data.createdAt?.toDate === 'function'
+          ? data.createdAt.toDate().toISOString()
+          : typeof data.createdAt?.seconds === 'number'
+          ? new Date(data.createdAt.seconds * 1000).toISOString()
+          : data.timestamp || new Date().toISOString();
+      const resolvedMemberId = data.employeeId || data.memberId || data.userId || '';
+
+      return sanitizeWorkLogRecord({
+        id: docSnap.id,
+        employeeId: resolvedMemberId,
+        memberId: data.memberId || resolvedMemberId,
+        employeeName: rawEmployeeName,
+        projectId: data.projectId || '',
+        projectName: data.projectName || 'BIM Project',
+        date: data.date || (resolvedCreatedAt ? resolvedCreatedAt.slice(0, 10) : new Date().toISOString().slice(0, 10)),
+        hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
+        discipline: (data.discipline as Discipline) || 'BIM - ACS',
+        activityType: (data.activityType as ActivityType) || '3D Detailed Modeling',
+        taskName: data.taskName || '',
+        lodStage: (data.lodStage as LODLevel) || 'LOD 350',
+        notes: data.notes || '',
+        billable: data.billable !== undefined ? Boolean(data.billable) : true,
+        timestamp: data.timestamp || resolvedCreatedAt,
+        memberEmail: rawEmail,
+        userEmail: rawEmail,
+        userId: data.userId || resolvedMemberId,
+        isTestEntry: Boolean(data.isTestEntry ?? false),
+        loggedBy: data.loggedBy || rawEmail || rawEmployeeName || '',
+        createdAt: resolvedCreatedAt,
+      });
+    };
+
+    const syncCombinedLogs = () => {
+      const mergedMap = new Map<string, DailyWorkLog>();
+      workLogsMap.forEach((v, k) => mergedMap.set(k, v));
+      dailyLogsMap.forEach((v, k) => mergedMap.set(k, v));
+      setRealtimeFirestoreLogs(Array.from(mergedMap.values()));
+    };
+
+    try {
+      unsubWorkLogs = onSnapshot(
+        collection(db, 'work_logs'),
+        (snapshot) => {
+          workLogsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            workLogsMap.set(docSnap.id, parseLogSnapshot(docSnap));
+          });
+          syncCombinedLogs();
+        },
+        (err) => console.warn('DailyHourTracker work_logs snapshot notice:', err)
+      );
+
+      unsubDailyLogs = onSnapshot(
+        collection(db, 'daily_logs'),
+        (snapshot) => {
+          dailyLogsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            dailyLogsMap.set(docSnap.id, parseLogSnapshot(docSnap));
+          });
+          syncCombinedLogs();
+        },
+        (err) => console.warn('DailyHourTracker daily_logs snapshot notice:', err)
+      );
+    } catch (e) {
+      console.warn('DailyHourTracker Firestore logs setup notice:', e);
+    }
+
+    return () => {
+      if (unsubWorkLogs) unsubWorkLogs();
+      if (unsubDailyLogs) unsubDailyLogs();
+    };
+  }, []);
+
+  // Merged and deduplicated comprehensive logs from all available sources
+  const allAvailableLogs = useMemo(() => {
+    const logsMap = new Map<string, DailyWorkLog>();
+    (workLogs || []).forEach((l) => logsMap.set(l.id, sanitizeWorkLogRecord(l)));
+    (allWorkLogs || []).forEach((l) => logsMap.set(l.id, sanitizeWorkLogRecord(l)));
+    realtimeFirestoreLogs.forEach((l) => logsMap.set(l.id, sanitizeWorkLogRecord(l)));
+    const list = Array.from(logsMap.values());
+    list.sort((a, b) => {
+      const dateA = a.date || a.timestamp || '';
+      const dateB = b.date || b.timestamp || '';
+      const dateDiff = new Date(dateB).getTime() - new Date(dateA).getTime();
+      if (!isNaN(dateDiff) && dateDiff !== 0) return dateDiff;
+      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+    });
+    return list;
+  }, [workLogs, allWorkLogs, realtimeFirestoreLogs]);
+
+  // Active team members across the organization (including Super Admins Aditi Chakraborty & Sushoovan Das)
   const allTrackedEmployees = useMemo(() => {
     let deletedSet = new Set<string>();
     try {
@@ -716,6 +824,22 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       name: 'Aditi Chakraborty',
       email: 'modelatech2026@gmail.com',
       avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Aditi%20Chakraborty',
+      role: 'SUPER_ADMIN' as any,
+      primaryDiscipline: 'BIM - ACS',
+      discipline: 'BIM - ACS',
+      weeklyCapacityHours: 40,
+      experienceYears: 8,
+      status: 'Active',
+      activeProjectIds: [],
+      skills: ['BIM - ACS'],
+      phone: '',
+    };
+
+    const sushovanAdminMember: Employee = {
+      id: 'emp-sushoovan_das',
+      name: 'Sushoovan Das',
+      email: 'sushoovandas@gmail.com',
+      avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Sushoovan%20Das',
       role: 'SUPER_ADMIN' as any,
       primaryDiscipline: 'BIM - ACS',
       discipline: 'BIM - ACS',
@@ -745,7 +869,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       const strippedIdLower = strippedIdKey.toLowerCase();
       const detIdLower = emailKey ? generateRequestDocId(emailKey).toLowerCase() : '';
 
-      if (emailKey !== 'modelatech2026@gmail.com') {
+      if (
+        emailKey !== 'modelatech2026@gmail.com' &&
+        emailKey !== 'sushoovandas@gmail.com' &&
+        emailKey !== 'sushovandas@gmail.com'
+      ) {
         const isDeletedMember =
           deletedMatrixEmpIds.includes(emp.id) ||
           (idKeyLower && deletedSet.has(idKeyLower)) ||
@@ -774,10 +902,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
     };
 
-    // 1. Always include active team members from context & Firestore users collection & Super Admin
+    // 1. Always include active team members from context & Firestore users collection & Super Admins
     baseMembers.forEach(registerMember);
     firestoreUsers.forEach(registerMember);
     registerMember(superAdminMember);
+    registerMember(sushovanAdminMember);
 
     // 2. Include current authenticated user if not already in the list
     if (currentUser) {
@@ -804,7 +933,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       });
     }
 
-    // 3. Also include any active members referenced in resourceAllocations or workLogs
+    // 3. Also include any active members referenced in resourceAllocations or allAvailableLogs
     (resourceAllocations || []).forEach((alloc) => {
       const name = (alloc.assignedToName || alloc.employeeName || alloc.memberName || '').trim();
       const email = (alloc.assignedToEmail || alloc.memberEmail || '').toLowerCase().trim();
@@ -829,7 +958,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       });
     });
 
-    (allWorkLogs || workLogs || []).forEach((log) => {
+    allAvailableLogs.forEach((log) => {
       const name = (log.employeeName || '').trim();
       const email = ((log as any).memberEmail || (log as any).userEmail || '').toLowerCase().trim();
       const id = (log.employeeId || (log as any).userId || '').trim();
@@ -902,8 +1031,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   }, [
     employees,
     firestoreUsers,
-    allWorkLogs,
-    workLogs,
+    allAvailableLogs,
     resourceAllocations,
     currentUser,
     deletedMatrixEmpIds,
@@ -914,8 +1042,22 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   // performing an outer join with daily_logs for the selected week range so 0.0h members are always rendered.
   const fullWeeklyMatrix = useMemo(() => {
     const rawSourceLogs = isViewer
-      ? (workLogs || [])
-      : (allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || []);
+      ? allAvailableLogs.filter((w) => {
+          const userEmail = (currentUser?.email || '').trim().toLowerCase();
+          const userId = (currentUser?.id || '').trim();
+          const userIdStripped = userId.replace(/^emp-/, '');
+          const logEmpId = (w.employeeId || '').trim();
+          const logUserId = ((w as any).userId || (w as any).memberId || '').trim();
+          const logEmail = ((w.memberEmail || (w as any).userEmail || '').trim().toLowerCase());
+          const logName = (w.employeeName || '').toLowerCase().trim();
+          const currentName = (currentUser?.name || '').toLowerCase().trim();
+          return (
+            (userEmail && logEmail === userEmail) ||
+            (userId && (logUserId === userId || logEmpId === userId || logUserId.replace(/^emp-/, '') === userIdStripped || logEmpId.replace(/^emp-/, '') === userIdStripped)) ||
+            (currentName && logName && (logName === currentName || logName.includes(currentName) || currentName.includes(logName)))
+          );
+        })
+      : allAvailableLogs;
     const sourceLogs = rawSourceLogs.map((w) => sanitizeWorkLogRecord(w));
     const weeklyLogs = sourceLogs.filter((w) => {
       const matchesType =
@@ -973,7 +1115,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         weeklyTotals: computeWeeklyTotals(userLogs, user),
       };
     });
-  }, [allTrackedEmployees, allWorkLogs, workLogs, logTypeFilter, currentWeekRange, weekDays]);
+  }, [allTrackedEmployees, allAvailableLogs, logTypeFilter, currentWeekRange, weekDays, isViewer, currentUser]);
 
   useEffect(() => {
     if (
@@ -986,26 +1128,39 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
   // Base filtered logs (by role/ownership, search, project, employee, discipline) before logTypeFilter
   const baseFilteredLogs = useMemo(() => {
-    const rawLogs = isViewer ? (workLogs || []) : (allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || []);
-    return rawLogs.filter((log) => {
+    const scopedLogs = isViewer
+      ? allAvailableLogs.filter((log) => {
+          const userEmail = (currentUser?.email || '').trim().toLowerCase();
+          const userId = (currentUser?.id || '').trim();
+          const userIdStripped = userId.replace(/^emp-/, '');
+          const logEmpId = (log.employeeId || '').trim();
+          const logUserId = ((log as any).userId || (log as any).memberId || '').trim();
+          const logEmail = ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase());
+          const logName = (log.employeeName || '').toLowerCase().trim();
+          const currentName = (currentUser?.name || '').toLowerCase().trim();
+          const loggedBy = String((log as any).loggedBy || '').toLowerCase().trim();
+
+          return (
+            (userEmail && (logEmail === userEmail || loggedBy.includes(userEmail))) ||
+            (userId && (
+              logUserId === userId ||
+              logEmpId === userId ||
+              logUserId.replace(/^emp-/, '') === userIdStripped ||
+              logEmpId.replace(/^emp-/, '') === userIdStripped
+            )) ||
+            (currentName && logName && (
+              logName === currentName ||
+              logName.includes(currentName) ||
+              currentName.includes(logName)
+            ))
+          );
+        })
+      : allAvailableLogs;
+
+    return scopedLogs.filter((log) => {
       const selectedEmpObj = allTrackedEmployees.find((e) => e.id === selectedEmployeeFilter);
 
-      if (isViewer) {
-        const userEmail = (currentUser?.email || '').trim().toLowerCase();
-        const userId = (currentUser?.id || '').trim();
-        const userIdStripped = userId.replace(/^emp-/, '');
-        const logEmpId = (log.employeeId || '').trim();
-        const logUserId = ((log as any).userId || (log as any).memberId || '').trim();
-        const logEmail = ((log.memberEmail || (log as any).userEmail || '').trim().toLowerCase());
-        const logName = (log.employeeName || '').toLowerCase().trim();
-        const currentName = (currentUser?.name || '').toLowerCase().trim();
-
-        const isOwned =
-          (userEmail && logEmail && logEmail === userEmail) ||
-          (userId && (logUserId === userId || logEmpId === userId || logUserId.replace(/^emp-/, '') === userIdStripped || logEmpId.replace(/^emp-/, '') === userIdStripped)) ||
-          (currentName && logName && (logName === currentName || logName.includes(currentName) || currentName.includes(logName)));
-        if (!isOwned) return false;
-      } else if (!isSuperAdmin) {
+      if (!isViewer && !isSuperAdmin) {
         const userEmail = (currentUser?.email || '').trim().toLowerCase();
         const userId = (currentUser?.id || '').trim();
         const userIdStripped = userId.replace(/^emp-/, '');
@@ -1020,6 +1175,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
 
       const matchesSearch =
+        !searchQuery ||
         (log.notes || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (log.taskName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (log.employeeName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1037,7 +1193,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         selectedProjectFilter === 'all' || log.projectId === selectedProjectFilter;
       const matchesDisc =
         selectedDisciplineFilter === 'all' || log.discipline === selectedDisciplineFilter;
-      const logDateIso = (log.date || '').slice(0, 10);
+
+      const logDateIso = (log.date || log.timestamp || log.createdAt || '').slice(0, 10);
       const matchesStartDate =
         !startDateFilter || (Boolean(logDateIso) && logDateIso >= startDateFilter);
       const matchesEndDate =
@@ -1053,8 +1210,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       );
     });
   }, [
-    workLogs,
-    allWorkLogs,
+    allAvailableLogs,
     allTrackedEmployees,
     selectedEmployeeFilter,
     isSuperAdmin,
