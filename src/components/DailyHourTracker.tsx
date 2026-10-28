@@ -24,6 +24,7 @@ import {
   useBimData,
   getCurrentWeekRange,
   getEffectiveLogDate,
+  normalizeDateToIso,
   toLocalIsoDate,
   isUserSuperAdmin,
   isUserViewer,
@@ -219,7 +220,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const matchingDayLogs = preferredDate
       ? memberSpecificLogs.filter(
           (w) =>
-            getEffectiveLogDate(w, currentWeekRange) === preferredDate || w.date === preferredDate
+            getEffectiveLogDate(w, currentWeekRange) === preferredDate ||
+            normalizeDateToIso(w.date) === preferredDate ||
+            w.date === preferredDate
         )
       : [];
     const targetLog = preferredDate ? matchingDayLogs[0] : memberSpecificLogs[0];
@@ -566,49 +569,91 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   };
 
   // Helper to match a work log to an employee record across all identifiers without cross-user collision
-  const doesLogMatchEmployee = (log: DailyWorkLog, emp: { id: string; name?: string; email?: string }): boolean => {
+  const doesLogMatchEmployee = (
+    log: DailyWorkLog,
+    emp: { id: string; name?: string; email?: string }
+  ): boolean => {
     const cleanLog = sanitizeWorkLogRecord(log);
     const cleanEmp = sanitizeEmployeeRecord(emp as Employee);
 
-    const empName = (cleanEmp.name || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
-    const logName = (cleanLog.employeeName || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
-    // If both log and employee have explicit names and they differ, they are distinct team members
-    if (
-      empName &&
-      logName &&
-      logName !== 'bim modeler' &&
-      logName !== 'team member' &&
-      logName !== 'bim engineer' &&
-      empName !== logName
-    ) {
-      return false;
-    }
+    const empEmail = (cleanEmp.email || emp.email || '').toLowerCase().trim();
+    const logEmail = (
+      (cleanLog as any).memberEmail ||
+      (cleanLog as any).userEmail ||
+      cleanLog.memberEmail ||
+      ''
+    ).toLowerCase().trim();
 
-    const empEmail = (cleanEmp.email || '').toLowerCase().trim();
-    const logEmail = ((cleanLog as any).memberEmail || (cleanLog as any).userEmail || '').toLowerCase().trim();
-    // If both log and employee have explicit emails and they differ, they are distinct team members
-    if (empEmail && logEmail && empEmail !== logEmail) {
-      return false;
-    }
-
-    const empId = (cleanEmp.id || '').trim();
+    const empId = (cleanEmp.id || emp.id || '').trim();
     const empIdStripped = empId.replace(/^emp-/, '');
-    const logEmpId = (cleanLog.employeeId || '').trim();
+    const logEmpId = (cleanLog.employeeId || (cleanLog as any).memberId || '').trim();
     const logEmpIdStripped = logEmpId.replace(/^emp-/, '');
+    const logUserId = ((cleanLog as any).userId || '').trim();
+    const logUserIdStripped = logUserId.replace(/^emp-/, '');
 
-    if (
-      empId &&
-      (logEmpId === empId || (empIdStripped && logEmpIdStripped === empIdStripped))
-    ) {
-      return true;
-    }
-
+    // 1. Authoritative match by email
     if (empEmail && logEmail && empEmail === logEmail) {
       return true;
     }
 
-    if (empName && logName && empName === logName) {
+    // 2. Authoritative match by user / employee ID
+    if (
+      empId &&
+      (logEmpId === empId ||
+        logUserId === empId ||
+        (empIdStripped &&
+          (logEmpIdStripped === empIdStripped ||
+            logUserIdStripped === empIdStripped ||
+            logEmpId === empIdStripped ||
+            logUserId === empIdStripped)))
+    ) {
       return true;
+    }
+
+    // If both records have distinct explicit emails, they belong to different users
+    if (empEmail && logEmail && empEmail !== logEmail) {
+      return false;
+    }
+
+    // 3. Name matching
+    const empName = (cleanEmp.name || emp.name || '')
+      .toLowerCase()
+      .trim()
+      .replace(/sushoovan/g, 'sushovan');
+    const logName = (cleanLog.employeeName || '')
+      .toLowerCase()
+      .trim()
+      .replace(/sushoovan/g, 'sushovan');
+
+    if (empName && logName) {
+      if (
+        empName === logName ||
+        empName.includes(logName) ||
+        logName.includes(empName)
+      ) {
+        return true;
+      }
+    }
+
+    // 4. Viewer personal timesheet fallback
+    if (isViewer && currentUser) {
+      const curEmail = (currentUser.email || '').toLowerCase().trim();
+      const curId = (currentUser.id || '').trim();
+      const curIdStripped = curId.replace(/^emp-/, '');
+      const curName = (currentUser.name || '').toLowerCase().trim();
+      if (curEmail && logEmail === curEmail) return true;
+      if (
+        curId &&
+        (logUserId === curId ||
+          logEmpId === curId ||
+          logUserIdStripped === curIdStripped ||
+          logEmpIdStripped === curIdStripped)
+      ) {
+        return true;
+      }
+      if (curName && logName && (curName === logName || curName.includes(logName) || logName.includes(curName))) {
+        return true;
+      }
     }
 
     return false;
@@ -1068,19 +1113,41 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
           : true;
       if (!matchesType) return false;
       const effDate = getEffectiveLogDate(w, currentWeekRange);
-      return effDate >= currentWeekRange.startIso && effDate <= currentWeekRange.endIso;
+      const normDate = normalizeDateToIso(w.date);
+      const normTs = normalizeDateToIso(w.timestamp || (w as any).createdAt);
+      return (
+        (effDate >= currentWeekRange.startIso && effDate <= currentWeekRange.endIso) ||
+        (normDate >= currentWeekRange.startIso && normDate <= currentWeekRange.endIso) ||
+        (normTs >= currentWeekRange.startIso && normTs <= currentWeekRange.endIso)
+      );
     });
 
     const computeWeeklyTotals = (userLogs: DailyWorkLog[], user: Employee) => {
       let weekSum = 0;
       const dailyHours = weekDays.map((d) => {
         const dayLogs = sourceLogs
-          .filter(
-            (w) =>
-              (logTypeFilter === 'test' ? Boolean(w.isTestEntry) : !w.isTestEntry) &&
-              doesLogMatchEmployee(w, user) &&
-              getEffectiveLogDate(w, currentWeekRange) === d.date
-          )
+          .filter((w) => {
+            const matchesType =
+              logTypeFilter === 'test'
+                ? Boolean(w.isTestEntry)
+                : logTypeFilter === 'operational'
+                ? !w.isTestEntry
+                : true;
+            if (!matchesType) return false;
+
+            if (!doesLogMatchEmployee(w, user)) return false;
+
+            const effDate = getEffectiveLogDate(w, currentWeekRange);
+            const normDate = normalizeDateToIso(w.date);
+            const normTs = normalizeDateToIso(w.timestamp || (w as any).createdAt);
+
+            return (
+              effDate === d.date ||
+              normDate === d.date ||
+              normTs === d.date ||
+              w.date === d.date
+            );
+          })
           .map((l) => ({ ...l }));
         const hours = dayLogs.reduce((sum, l) => sum + (Number(l.hoursLogged) || 0), 0);
         weekSum += hours;
@@ -1092,15 +1159,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     return allTrackedEmployees.map((rawUser) => {
       const user = { ...sanitizeEmployeeRecord(rawUser) };
       const empAllLogs = sourceLogs
-        .filter(
-          (w) =>
-            (logTypeFilter === 'test'
+        .filter((w) => {
+          const matchesType =
+            logTypeFilter === 'test'
               ? Boolean(w.isTestEntry)
               : logTypeFilter === 'operational'
               ? !w.isTestEntry
-              : true) &&
-            doesLogMatchEmployee(w, user)
-        )
+              : true;
+          return matchesType && doesLogMatchEmployee(w, user);
+        })
         .map((l) => ({ ...l }));
       const userLogs = weeklyLogs
         .filter((log) => doesLogMatchEmployee(log, user))
@@ -2004,7 +2071,10 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <div className="grid grid-cols-7 gap-1.5">
                     {weekDays.map((wd) => {
                     const matchingLogForDay = editCandidateLogs.find(
-                      (l) => getEffectiveLogDate(l, currentWeekRange) === wd.date || l.date === wd.date
+                      (l) =>
+                        getEffectiveLogDate(l, currentWeekRange) === wd.date ||
+                        normalizeDateToIso(l.date) === wd.date ||
+                        l.date === wd.date
                     );
                     const isSelectedDay = editDate === wd.date;
                     return (
@@ -2070,7 +2140,10 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                           doesLogMatchEmployee(w, nextEmp)
                       );
                       const existingOnDate = nextEmpLogs.find(
-                        (w) => getEffectiveLogDate(w, currentWeekRange) === editDate || w.date === editDate
+                        (w) =>
+                          getEffectiveLogDate(w, currentWeekRange) === editDate ||
+                          normalizeDateToIso(w.date) === editDate ||
+                          w.date === editDate
                       );
                       if (existingOnDate) {
                         openEditLogModal(existingOnDate, nextEmpLogs);

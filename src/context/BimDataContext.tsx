@@ -317,24 +317,102 @@ export const getCurrentWeekRange = (referenceDate: Date = new Date()): WeekRange
   };
 };
 
+/**
+ * Normalizes any date representation (ISO YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, ISO UTC string, Firestore Timestamp)
+ * into a strict YYYY-MM-DD string without timezone-induced day shifts.
+ */
+export const normalizeDateToIso = (raw: any): string => {
+  if (!raw) return '';
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return '';
+    // 1. Matches YYYY-MM-DD, YYYY/MM/DD, or YYYY.MM.DD (e.g. 2026-10-28, 2026-10-28T00:00:00.000Z, 2026-10-28 14:30:00)
+    const ymdMatch = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (ymdMatch) {
+      const year = ymdMatch[1];
+      const month = ymdMatch[2].padStart(2, '0');
+      const day = ymdMatch[3].padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    // 2. Matches DD-MM-YYYY, DD/MM/YYYY, or DD.MM.YYYY (e.g. 28-10-2026, 28/10/2026)
+    const dmyMatch = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if (dmyMatch) {
+      const p1 = Number(dmyMatch[1]);
+      const p2 = Number(dmyMatch[2]);
+      const year = dmyMatch[3];
+      if (p1 > 12) {
+        // First part is day: DD-MM-YYYY
+        const day = String(p1).padStart(2, '0');
+        const month = String(p2).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      } else if (p2 > 12) {
+        // Second part is day: MM-DD-YYYY
+        const month = String(p1).padStart(2, '0');
+        const day = String(p2).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      } else {
+        // Default DD-MM-YYYY as standard display format
+        const day = String(p1).padStart(2, '0');
+        const month = String(p2).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+    }
+    // 3. Fallback date parse
+    const parsed = new Date(s);
+    if (!Number.isNaN(parsed.getTime())) {
+      const year = parsed.getUTCFullYear();
+      const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(parsed.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    return s.slice(0, 10);
+  }
+  if (raw instanceof Date) {
+    const year = raw.getFullYear();
+    const month = String(raw.getMonth() + 1).padStart(2, '0');
+    const day = String(raw.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  if (typeof raw?.toDate === 'function') {
+    try {
+      const d = raw.toDate();
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch {}
+  }
+  if (typeof raw?.seconds === 'number') {
+    const d = new Date(raw.seconds * 1000);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return '';
+};
+
 export const getEffectiveLogDate = (
   log: DailyWorkLog,
   weekRange: WeekRangeResult = getCurrentWeekRange()
 ): string => {
-  const rawDate = (log.date || '').trim();
-  if (rawDate >= weekRange.startIso && rawDate <= weekRange.endIso) {
-    return rawDate;
+  if (!log) return '';
+  const rawDate = (log.date || (log as any).workDate || (log as any).entryDate || '').trim();
+  const normalizedDate = normalizeDateToIso(rawDate);
+
+  if (normalizedDate && normalizedDate >= weekRange.startIso && normalizedDate <= weekRange.endIso) {
+    return normalizedDate;
   }
-  if ((!rawDate || rawDate === '2026-08-18') && log.timestamp) {
-    const tsDate = new Date(log.timestamp);
-    if (!Number.isNaN(tsDate.getTime())) {
-      const tsIso = toLocalIsoDate(tsDate);
-      if (tsIso >= weekRange.startIso && tsIso <= weekRange.endIso) {
-        return tsIso;
-      }
+
+  const fallbackRaw = log.timestamp || (log as any).createdAt || (log as any).updatedAt;
+  if (fallbackRaw) {
+    const normalizedFallback = normalizeDateToIso(fallbackRaw);
+    if (normalizedFallback && normalizedFallback >= weekRange.startIso && normalizedFallback <= weekRange.endIso) {
+      return normalizedFallback;
     }
   }
-  return rawDate;
+
+  return normalizedDate || rawDate;
 };
 
 export const getMemberLabel = (member: { name?: string; role?: string }): string =>
@@ -787,9 +865,16 @@ export const sanitizeWorkLogRecord = (log: DailyWorkLog): DailyWorkLog => {
         (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
           lowerEmpId.includes('modelatech2026'))));
 
+  const normalizedLogDate =
+    normalizeDateToIso(log.date) ||
+    normalizeDateToIso(log.timestamp) ||
+    normalizeDateToIso((log as any).createdAt) ||
+    log.date;
+
   if (isAditi) {
     return {
       ...log,
+      date: normalizedLogDate,
       employeeId: 'emp-modelatech2026_gmail_com',
       memberId: 'emp-modelatech2026_gmail_com',
       userId: 'emp-modelatech2026_gmail_com',
@@ -806,6 +891,7 @@ export const sanitizeWorkLogRecord = (log: DailyWorkLog): DailyWorkLog => {
         : 'sushoovandas@gmail.com';
     return {
       ...log,
+      date: normalizedLogDate,
       employeeId: 'emp-sushoovan_das',
       memberId: 'emp-sushoovan_das',
       userId: 'emp-sushoovan_das',
@@ -832,6 +918,7 @@ export const sanitizeWorkLogRecord = (log: DailyWorkLog): DailyWorkLog => {
 
   return {
     ...log,
+    date: normalizedLogDate,
     employeeId: cleanEmpId,
     memberId: cleanEmpId,
     userId: cleanEmpId,
