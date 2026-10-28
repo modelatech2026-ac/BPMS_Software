@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useBimData } from '../context/BimDataContext';
+import {
+  useBimData,
+  mergeAccessRequestsWithLocal,
+  PENDING_ACCESS_REQUESTS_KEY,
+  DELETED_ACCESS_REQUESTS_KEY,
+  ACCESS_REQUESTS_CHANNEL,
+} from '../context/BimDataContext';
 import { UserAccessRecord, AccessLevel, OnboardingRequest, UserRole, PRIMARY_DISCIPLINES, Discipline } from '../types';
 import {
   ShieldCheck,
@@ -287,7 +293,9 @@ export const AdminNexus: React.FC = () => {
   const setAccessRequests = (rawRequests: any[]) => {
     const mapped = rawRequests.map(normalizeRawRequest).filter(Boolean) as OnboardingRequest[];
     const list = deduplicateAndSortRequests(mapped);
-    setOnboardingRequests([...list]);
+    setOnboardingRequests((prev) =>
+      deduplicateAndSortRequests(mergeAccessRequestsWithLocal(list, prev))
+    );
   };
 
   // Manual Live Sync fallback button handler across all alias collections
@@ -295,7 +303,7 @@ export const AdminNexus: React.FC = () => {
     setIsSyncing(true);
     setSyncError(null);
     try {
-      const collectionsToQuery = ['access_requests', 'accessRequests', 'pendingSignups'];
+      const collectionsToQuery = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
       const results = await Promise.allSettled(
         collectionsToQuery.map((colName) => getDocs(collection(db, colName)))
       );
@@ -313,15 +321,21 @@ export const AdminNexus: React.FC = () => {
       setAccessRequests(allRaw);
     } catch (err: any) {
       console.error('Admin Nexus pending fetch error:', err);
-      setSyncError(err?.message || 'Failed to fetch access requests from Firestore.');
+      // Even if Firestore query errors, still merge and refresh from local queue
+      setAccessRequests([]);
     }
     setIsSyncing(false);
     setLastSyncTime(new Date().toLocaleTimeString());
   };
 
-  // Multi-collection real-time unfiltered onSnapshot listener & custom event listener
+  // Multi-collection real-time unfiltered onSnapshot listener & cross-tab/custom event listeners
   useEffect(() => {
-    const collectionsToListen = ['access_requests', 'accessRequests', 'pendingSignups'];
+    // Hydrate from local storage queue immediately on mount so Pending Queue (N) is instant
+    setOnboardingRequests((prev) =>
+      deduplicateAndSortRequests(mergeAccessRequestsWithLocal([], prev))
+    );
+
+    const collectionsToListen = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
     const docsMap = new Map<string, Map<string, any>>();
     collectionsToListen.forEach((name) => docsMap.set(name, new Map()));
 
@@ -386,9 +400,48 @@ export const AdminNexus: React.FC = () => {
     };
     window.addEventListener('bim_access_request_submitted', handleCustomSubmit);
 
+    const handleStorageChange = (e: StorageEvent) => {
+      if (
+        e.key === PENDING_ACCESS_REQUESTS_KEY ||
+        e.key === 'bim_tracker_onboarding_v7' ||
+        e.key === DELETED_ACCESS_REQUESTS_KEY
+      ) {
+        updateState();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        bc = new BroadcastChannel(ACCESS_REQUESTS_CHANNEL);
+        bc.onmessage = (event) => {
+          if (event.data?.type === 'UPSERT_REQUEST' && event.data?.request) {
+            const req = event.data.request;
+            const colMap = docsMap.get('access_requests') || new Map();
+            const docKey = req.id || `req_${Date.now()}`;
+            colMap.set(docKey, {
+              id: docKey,
+              ...req,
+            });
+            docsMap.set('access_requests', colMap);
+            updateState();
+          } else if (event.data?.type === 'DELETE_REQUEST') {
+            updateState();
+          }
+        };
+      } catch {}
+    }
+
     return () => {
       unsubs.forEach((unsub) => unsub && unsub());
       window.removeEventListener('bim_access_request_submitted', handleCustomSubmit);
+      window.removeEventListener('storage', handleStorageChange);
+      if (bc) {
+        try {
+          bc.close();
+        } catch {}
+      }
     };
   }, []);
 

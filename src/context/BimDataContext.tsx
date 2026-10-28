@@ -235,6 +235,258 @@ const DEFAULT_CURRENT_USER: AuthUser = {
 
 const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [];
 
+export const PENDING_ACCESS_REQUESTS_KEY = 'bim_pending_access_requests_v1';
+export const DELETED_ACCESS_REQUESTS_KEY = 'bim_deleted_access_requests_v1';
+export const ACCESS_REQUESTS_CHANNEL = 'bim_access_requests_channel';
+
+const getRequestTimeMs = (req: any): number => {
+  if (!req) return 0;
+  const candidates = [
+    req.updatedAt,
+    req.reviewedAt,
+    req.timestamp,
+    req.requestedAt,
+    req.createdAt,
+    req.requestTimestamp,
+  ];
+  for (const val of candidates) {
+    if (!val) continue;
+    if (typeof val === 'number' && !Number.isNaN(val)) return val;
+    if (typeof val?.toDate === 'function') {
+      try {
+        const ms = val.toDate().getTime();
+        if (!Number.isNaN(ms)) return ms;
+      } catch {}
+    }
+    if (typeof val?.seconds === 'number') {
+      return val.seconds * 1000;
+    }
+    if (typeof val === 'string') {
+      const ms = new Date(val).getTime();
+      if (!Number.isNaN(ms)) return ms;
+    }
+  }
+  return 0;
+};
+
+const isStatusPending = (status?: string): boolean => {
+  if (!status) return true;
+  const s = String(status).trim().toLowerCase();
+  return s === 'pending' || s === 'pending_approval' || s.includes('pending');
+};
+
+export const saveLocalAccessRequest = (req: OnboardingRequest): void => {
+  if (!req || !req.email) return;
+  const cleanEmail = req.email.trim().toLowerCase();
+  const cleanId = String(req.id || '').trim().toLowerCase();
+  try {
+    // 1. Clear from deleted requests tombstones
+    const delRaw = localStorage.getItem(DELETED_ACCESS_REQUESTS_KEY);
+    if (delRaw) {
+      const delArr = JSON.parse(delRaw);
+      if (Array.isArray(delArr)) {
+        const nextDel = delArr.filter((v: string) => {
+          const k = String(v).trim().toLowerCase();
+          return k !== cleanEmail && k !== cleanId;
+        });
+        localStorage.setItem(DELETED_ACCESS_REQUESTS_KEY, JSON.stringify(nextDel));
+      }
+    }
+
+    if (isStatusPending(req.status)) {
+      const delMemRaw = localStorage.getItem(STORAGE_KEYS.DELETED_MEMBERS);
+      if (delMemRaw) {
+        const delMemArr = JSON.parse(delMemRaw);
+        if (Array.isArray(delMemArr)) {
+          const nextMemDel = delMemArr.filter((v: string) => {
+            const k = String(v).trim().toLowerCase();
+            return k !== cleanEmail && k !== cleanId;
+          });
+          localStorage.setItem(STORAGE_KEYS.DELETED_MEMBERS, JSON.stringify(nextMemDel));
+        }
+      }
+    }
+
+    // 2. Upsert into PENDING_ACCESS_REQUESTS_KEY & STORAGE_KEYS.ONBOARDING
+    for (const storageKey of [PENDING_ACCESS_REQUESTS_KEY, STORAGE_KEYS.ONBOARDING]) {
+      const saved = localStorage.getItem(storageKey);
+      let list: OnboardingRequest[] = [];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) list = parsed;
+      }
+      const nextList = [
+        req,
+        ...list.filter(
+          (r) =>
+            (r?.email || '').trim().toLowerCase() !== cleanEmail &&
+            String(r?.id || '').trim() !== String(req.id || '').trim()
+        ),
+      ];
+      localStorage.setItem(storageKey, JSON.stringify(nextList));
+    }
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel(ACCESS_REQUESTS_CHANNEL);
+      bc.postMessage({ type: 'UPSERT_REQUEST', request: req });
+      bc.close();
+    }
+  } catch (e) {
+    console.warn('saveLocalAccessRequest notice:', e);
+  }
+};
+
+export const removeLocalAccessRequest = (idOrEmail: string, email?: string): void => {
+  const cleanId = String(idOrEmail || '').trim().toLowerCase();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  try {
+    const delRaw = localStorage.getItem(DELETED_ACCESS_REQUESTS_KEY);
+    const delSet = new Set<string>(
+      delRaw ? JSON.parse(delRaw).map((v: string) => String(v).trim().toLowerCase()) : []
+    );
+    if (cleanId) delSet.add(cleanId);
+    if (cleanEmail) delSet.add(cleanEmail);
+    localStorage.setItem(DELETED_ACCESS_REQUESTS_KEY, JSON.stringify(Array.from(delSet)));
+
+    for (const storageKey of [PENDING_ACCESS_REQUESTS_KEY, STORAGE_KEYS.ONBOARDING]) {
+      const saved = localStorage.getItem(storageKey);
+      if (!saved) continue;
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        const filtered = parsed.filter((r: any) => {
+          const rId = String(r?.id || '').trim().toLowerCase();
+          const rEmail = String(r?.email || '').trim().toLowerCase();
+          return (
+            (!cleanId || (rId !== cleanId && rEmail !== cleanId)) &&
+            (!cleanEmail || rEmail !== cleanEmail)
+          );
+        });
+        localStorage.setItem(storageKey, JSON.stringify(filtered));
+      }
+    }
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel(ACCESS_REQUESTS_CHANNEL);
+      bc.postMessage({ type: 'DELETE_REQUEST', id: idOrEmail, email: cleanEmail });
+      bc.close();
+    }
+  } catch (e) {
+    console.warn('removeLocalAccessRequest notice:', e);
+  }
+};
+
+export const mergeAccessRequestsWithLocal = (
+  remoteList: OnboardingRequest[],
+  currentList: OnboardingRequest[] = []
+): OnboardingRequest[] => {
+  const deletedSet = new Set<string>();
+  try {
+    const delRaw = localStorage.getItem(DELETED_ACCESS_REQUESTS_KEY);
+    if (delRaw) {
+      const parsed = JSON.parse(delRaw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((v: string) => deletedSet.add(String(v).trim().toLowerCase()));
+      }
+    }
+  } catch {}
+
+  let localPending: OnboardingRequest[] = [];
+  let localOnboarding: OnboardingRequest[] = [];
+  try {
+    const rawP = localStorage.getItem(PENDING_ACCESS_REQUESTS_KEY);
+    if (rawP) {
+      const parsed = JSON.parse(rawP);
+      if (Array.isArray(parsed)) localPending = parsed;
+    }
+  } catch {}
+  try {
+    const rawO = localStorage.getItem(STORAGE_KEYS.ONBOARDING);
+    if (rawO) {
+      const parsed = JSON.parse(rawO);
+      if (Array.isArray(parsed)) localOnboarding = parsed;
+    }
+  } catch {}
+
+  const combined = [
+    ...(currentList || []),
+    ...localPending,
+    ...localOnboarding,
+    ...(remoteList || []),
+  ];
+
+  const byEmail = new Map<string, OnboardingRequest>();
+
+  for (const item of combined) {
+    if (!item || item.isDeleted) continue;
+    const rawStatus = String(item.status || 'pending').trim().toLowerCase();
+    if (rawStatus === 'deleted') continue;
+
+    const cleanEmail = String(item.email || '').trim().toLowerCase();
+    if (!cleanEmail) continue;
+    const cleanId = String(item.id || '').trim().toLowerCase();
+
+    if (deletedSet.has(cleanEmail) || (cleanId && deletedSet.has(cleanId))) {
+      continue;
+    }
+
+    const normalizedStatus: UserApprovalStatus = isSuperAdminEmail(cleanEmail)
+      ? 'APPROVED'
+      : rawStatus === 'approved' || rawStatus === 'active'
+      ? 'APPROVED'
+      : rawStatus === 'rejected' || rawStatus === 'declined'
+      ? 'REJECTED'
+      : 'pending';
+
+    const normalizedItem: OnboardingRequest = {
+      ...item,
+      email: cleanEmail,
+      name: item.name || item.fullName || cleanEmail.split('@')[0],
+      fullName: item.fullName || item.name || cleanEmail.split('@')[0],
+      status: normalizedStatus,
+    };
+
+    const existing = byEmail.get(cleanEmail);
+    if (!existing) {
+      byEmail.set(cleanEmail, normalizedItem);
+      continue;
+    }
+
+    const tExisting = getRequestTimeMs(existing);
+    const tCandidate = getRequestTimeMs(normalizedItem);
+
+    // If one record has a strictly newer timestamp (> 1s difference), keep the newer one
+    if (Math.abs(tCandidate - tExisting) > 1000) {
+      if (tCandidate > tExisting) {
+        byEmail.set(cleanEmail, normalizedItem);
+      }
+      continue;
+    }
+
+    // If timestamps are within 1s or equal, prefer reviewed status if reviewedAt is present, otherwise pending
+    const existingReviewed = Boolean(existing.reviewedAt) && !isStatusPending(existing.status);
+    const candidateReviewed = Boolean(normalizedItem.reviewedAt) && !isStatusPending(normalizedItem.status);
+    if (candidateReviewed && !existingReviewed) {
+      byEmail.set(cleanEmail, normalizedItem);
+    } else if (!existingReviewed && !candidateReviewed && isStatusPending(normalizedItem.status)) {
+      byEmail.set(cleanEmail, normalizedItem);
+    }
+  }
+
+  const result = Array.from(byEmail.values()).sort((a, b) => {
+    const pA = isStatusPending(a.status) ? 1 : 0;
+    const pB = isStatusPending(b.status) ? 1 : 0;
+    if (pA !== pB) return pB - pA;
+    return getRequestTimeMs(b) - getRequestTimeMs(a);
+  });
+
+  try {
+    localStorage.setItem(STORAGE_KEYS.ONBOARDING, JSON.stringify(result));
+    localStorage.setItem(PENDING_ACCESS_REQUESTS_KEY, JSON.stringify(result));
+  } catch {}
+
+  return result;
+};
+
 const DEFAULT_AUDIT_LOGS: AdminAuditLog[] = [
   {
     id: 'audit-1',
@@ -1353,15 +1605,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const [onboardingRequests, setOnboardingRequests] = useState<OnboardingRequest[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ONBOARDING);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
+      return mergeAccessRequestsWithLocal([], DEFAULT_ONBOARDING_REQUESTS);
     } catch {
-      // ignore
+      return DEFAULT_ONBOARDING_REQUESTS;
     }
-    return DEFAULT_ONBOARDING_REQUESTS;
   });
 
   // Global filtered, deduplicated, and role-synchronized active team members list used by all dropdowns, filters, and selectors
@@ -1845,8 +2092,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         });
       };
 
-      // Multi-collection real-time listener on access_requests, accessRequests, and pendingSignups
-      const collectionsToListen = ['access_requests', 'accessRequests', 'pendingSignups'];
+      // Multi-collection real-time listener on access_requests, accessRequests, pendingUsers, and pendingSignups
+      const collectionsToListen = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
       const docsByCollection = new Map<string, Map<string, any>>();
       collectionsToListen.forEach((col) => docsByCollection.set(col, new Map()));
 
@@ -1857,8 +2104,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         });
         const rawList = allRaw.map(mapDocToRequest).filter(Boolean) as OnboardingRequest[];
         const list = deduplicateAndSortRequests(rawList);
-        setOnboardingRequests([...list]);
-        syncRequestsToEmployees(list);
+        setOnboardingRequests((prev) => {
+          const merged = deduplicateAndSortRequests(mergeAccessRequestsWithLocal(list, prev));
+          syncRequestsToEmployees(merged);
+          return merged;
+        });
       };
 
       collectionsToListen.forEach((colName) => {
@@ -1928,6 +2178,41 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       window.addEventListener('bim_access_request_submitted', handleCustomSubmit);
       unsubs.push(() => window.removeEventListener('bim_access_request_submitted', handleCustomSubmit));
+
+      const handleStorageEvent = (e: StorageEvent) => {
+        if (
+          e.key === PENDING_ACCESS_REQUESTS_KEY ||
+          e.key === STORAGE_KEYS.ONBOARDING ||
+          e.key === DELETED_ACCESS_REQUESTS_KEY
+        ) {
+          syncAllRequests();
+        }
+      };
+      window.addEventListener('storage', handleStorageEvent);
+      unsubs.push(() => window.removeEventListener('storage', handleStorageEvent));
+
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel(ACCESS_REQUESTS_CHANNEL);
+          bc.onmessage = (event) => {
+            if (event.data?.type === 'UPSERT_REQUEST' && event.data?.request) {
+              const req = event.data.request;
+              const colMap = docsByCollection.get('access_requests') || new Map();
+              const docKey = req.id || `req_${Date.now()}`;
+              colMap.set(docKey, {
+                id: docKey,
+                data: () => ({ ...req }),
+                ...req,
+              });
+              docsByCollection.set('access_requests', colMap);
+              syncAllRequests();
+            } else if (event.data?.type === 'DELETE_REQUEST') {
+              syncAllRequests();
+            }
+          };
+          unsubs.push(() => bc.close());
+        } catch {}
+      }
     } catch (e) {
       console.warn('Firestore onSnapshot listener error:', e);
     }
@@ -3335,7 +3620,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       reviewedAt: preservedStatus === 'pending' ? undefined : existingReq?.reviewedAt,
     };
 
-    // 1. Update in-memory React state immediately so Pending Queue (N) reflects the new request without manual refresh
+    // 1. Persist to local storage & broadcast channel immediately and update React state so Pending Queue (N) updates without manual refresh
+    saveLocalAccessRequest(newRequest);
     setOnboardingRequests((prev) => [
       newRequest,
       ...prev.filter((r) => (r.email || '').toLowerCase().trim() !== trimmedEmail && r.id !== effectiveDocId),
@@ -3353,7 +3639,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
     setAuditLogs((prev) => [newAudit, ...prev]);
 
-    // 3. Save to central database collection Firestore access_requests unless caller already wrote it
+    // 3. Save to central database collections in Firestore unless caller already wrote it
     if (!params.skipFirestoreWrite) {
       if (preservedStatus === 'APPROVED') {
         const reqDoc = doc(db, 'access_requests', effectiveDocId);
@@ -3370,9 +3656,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             updatedAt: isoTimestamp,
           },
           { merge: true }
-        );
+        ).catch((err) => console.warn('Firestore access_requests update notice:', err));
       } else {
-        const docRef = await addDoc(collection(db, 'access_requests'), {
+        const firestorePayload = {
+          id: effectiveDocId,
+          uid: effectiveDocId,
           name: formattedName,
           fullName: formattedName,
           email: trimmedEmail,
@@ -3390,8 +3678,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           timestamp: isoTimestamp,
           requestTimestamp: timestamp,
           updatedAt: isoTimestamp,
+        };
+        ['access_requests', 'accessRequests', 'pendingUsers'].forEach((colName) => {
+          setDoc(doc(db, colName, effectiveDocId), firestorePayload, { merge: true }).catch((err) =>
+            console.warn(`Firestore ${colName} write notice:`, err)
+          );
         });
-        newRequest.id = docRef.id;
       }
     }
 
@@ -3413,6 +3705,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       hour: '2-digit',
       minute: '2-digit',
     });
+    const nowIso = new Date().toISOString();
 
     const validatedRole: UserRole =
       assignedRole === 'SUPER_ADMIN' || assignedRole === 'DIRECTOR' || assignedRole === 'PROJECT_MANAGER' || assignedRole === 'EDITOR' || assignedRole === 'VIEWER'
@@ -3439,6 +3732,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             status: 'APPROVED',
             reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
             reviewedAt: actionTimestamp,
+            timestamp: nowIso,
             assignedRole: validatedRole,
             assignedAccessLevel: calculatedAccessLevel,
             requestedRole: displayRole,
@@ -3455,6 +3749,20 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const effectiveReq = approvedReq || reqTarget;
 
     if (effectiveReq) {
+      saveLocalAccessRequest({
+        ...effectiveReq,
+        status: 'APPROVED',
+        reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
+        reviewedAt: actionTimestamp,
+        timestamp: nowIso,
+        assignedRole: validatedRole,
+        assignedAccessLevel: calculatedAccessLevel,
+        requestedRole: displayRole,
+        role: displayRole,
+        discipline: targetDiscipline,
+        primaryDiscipline: targetDiscipline,
+      });
+
       // Identity Sync: strict field mapping between access request and member profile
       const applicantFullName = (effectiveReq.fullName || effectiveReq.name || effectiveReq.email.split('@')[0]).trim();
       const applicantEmail = effectiveReq.email.trim().toLowerCase();
@@ -3559,6 +3867,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       hour: '2-digit',
       minute: '2-digit',
     });
+    const nowIso = new Date().toISOString();
 
     const reqTarget = onboardingRequests.find((r) => r.id === requestId);
 
@@ -3570,6 +3879,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             status: 'REJECTED',
             reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
             reviewedAt: actionTimestamp,
+            timestamp: nowIso,
             notes: notes || 'Access request rejected by Super Admin.',
           };
           return rejectedReq;
@@ -3581,6 +3891,15 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const effectiveReq = rejectedReq || reqTarget;
 
     if (effectiveReq) {
+      saveLocalAccessRequest({
+        ...effectiveReq,
+        status: 'REJECTED',
+        reviewedBy: `${SUPER_ADMIN_NAME} (Super Admin)`,
+        reviewedAt: actionTimestamp,
+        timestamp: nowIso,
+        notes: notes || 'Access request rejected by Super Admin.',
+      });
+
       const applicantEmail = effectiveReq.email.trim().toLowerCase();
       const newAudit: AdminAuditLog = {
         id: `audit-${Date.now()}`,
@@ -3631,6 +3950,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       hour: '2-digit',
       minute: '2-digit',
     });
+    const nowIso = new Date().toISOString();
 
     const reqTarget = onboardingRequests.find((r) => r.id === requestId);
 
@@ -3639,9 +3959,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         if (r.id === requestId || (reqTarget && r.email.toLowerCase() === reqTarget.email.toLowerCase())) {
           reopenedReq = {
             ...r,
-            status: 'Pending',
+            status: 'pending',
             reviewedBy: undefined,
             reviewedAt: undefined,
+            timestamp: nowIso,
             notes: 'Re-opened and restored to Pending Queue by Super Admin.',
           };
           return reopenedReq;
@@ -3653,6 +3974,15 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const effectiveReq = reopenedReq || reqTarget;
 
     if (effectiveReq) {
+      saveLocalAccessRequest({
+        ...effectiveReq,
+        status: 'pending',
+        reviewedBy: undefined,
+        reviewedAt: undefined,
+        timestamp: nowIso,
+        notes: 'Re-opened and restored to Pending Queue by Super Admin.',
+      });
+
       const applicantEmail = effectiveReq.email.trim().toLowerCase();
       const newAudit: AdminAuditLog = {
         id: `audit-${Date.now()}`,
@@ -3697,6 +4027,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const targetName = (target?.name || matchedEmp?.name || targetEmail || '').trim();
     if (!target && !matchedEmp && !targetEmail) return;
 
+    removeLocalAccessRequest(requestId, targetEmail);
     registerDeletedMemberKeys({
       id: matchedEmp?.id || requestId,
       email: targetEmail,
@@ -3728,25 +4059,21 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         new Set([requestId, strippedReqId, `emp-${strippedReqId}`, detId, `emp-${detId}`].filter(Boolean))
       );
       candidateDocIds.forEach((cid) => {
-        deleteDoc(doc(db, 'access_requests', cid)).catch(() => {});
-        deleteDoc(doc(db, 'users', cid)).catch(() => {});
+        ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups', 'users'].forEach((colName) => {
+          deleteDoc(doc(db, colName, cid)).catch(() => {});
+        });
       });
 
       if (targetEmail) {
-        getDocs(query(collection(db, 'access_requests'), where('email', '==', targetEmail)))
-          .then((snap) => {
-            snap.docs.forEach((d) => {
-              deleteDoc(doc(db, 'access_requests', d.id)).catch(() => {});
-            });
-          })
-          .catch(() => {});
-        getDocs(query(collection(db, 'users'), where('email', '==', targetEmail)))
-          .then((snap) => {
-            snap.docs.forEach((d) => {
-              deleteDoc(doc(db, 'users', d.id)).catch(() => {});
-            });
-          })
-          .catch(() => {});
+        ['access_requests', 'accessRequests', 'pendingUsers', 'users'].forEach((colName) => {
+          getDocs(query(collection(db, colName), where('email', '==', targetEmail)))
+            .then((snap) => {
+              snap.docs.forEach((d) => {
+                deleteDoc(doc(db, colName, d.id)).catch(() => {});
+              });
+            })
+            .catch(() => {});
+        });
       }
     } catch {
       // ignore

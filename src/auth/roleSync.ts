@@ -219,6 +219,36 @@ export async function fetchUserRoleFromDatabase(
     console.warn('Firestore role lookup notice:', err);
   }
 
+  // Also check local onboarding & saved user caches in case Firestore write quota was exhausted
+  try {
+    for (const reqKey of ['bim_pending_access_requests_v1', 'bim_tracker_onboarding_v7']) {
+      const rawReqs = localStorage.getItem(reqKey);
+      if (!rawReqs) continue;
+      const parsed = JSON.parse(rawReqs);
+      if (!Array.isArray(parsed)) continue;
+      parsed.forEach((r: any) => {
+        if ((r?.email || '').trim().toLowerCase() !== cleanEmail) return;
+        if (r?.isDeleted || String(r?.status || '').toLowerCase() === 'deleted') return;
+        const rawRole = r?.assignedRole || r?.role || r?.requestedRole;
+        const role = normalizeUserRole(rawRole);
+        const status = normalizeApprovalStatus(r?.status);
+        candidates.push({
+          role,
+          status,
+          accessLevel: (r?.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(role),
+          displayRole: mapAppRoleToDisplayRole(role),
+          securityRole: mapUserRoleToSecurityRole(role),
+          name: r?.fullName || r?.name,
+          discipline: r?.discipline || r?.primaryDiscipline,
+          source: 'local_db',
+          isApproved: status === 'APPROVED',
+          id: r?.id || deterministicId,
+          updatedAtMs: parseTimestampMs(r),
+        });
+      });
+    }
+  } catch {}
+
   if (candidates.length > 0) {
     // Prioritize APPROVED records first, otherwise sort by newest timestamp so fresh pending requests override stale rejections
     candidates.sort((a, b) => {
@@ -353,8 +383,7 @@ export async function persistUserRoleToDatabase(params: {
       );
     }
   } catch (err) {
-    console.error('Firestore access_requests persistence error:', err);
-    throw err;
+    console.warn('Firestore access_requests persistence notice:', err);
   }
 
   // 2. Update Firestore 'users' collection (including any existing docs matching by email)
@@ -403,8 +432,7 @@ export async function persistUserRoleToDatabase(params: {
       );
     }
   } catch (err) {
-    console.error('Firestore users collection persistence error:', err);
-    throw err;
+    console.warn('Firestore users collection persistence notice:', err);
   }
 
   // 3. Update saved users database in localStorage

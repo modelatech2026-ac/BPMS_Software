@@ -94,6 +94,13 @@ service cloud.firestore {
       allow delete: if isValidId(requestId) && (isSuperAdmin() || request.time != null);
     }
 
+    match /pendingUsers/{requestId} {
+      allow get, list: if isSuperAdmin() || request.time != null;
+      allow create: if isValidId(requestId) && isValidAccessRequestCreate(incoming());
+      allow update: if isValidId(requestId) && isValidAccessRequestUpdate(incoming(), existing());
+      allow delete: if isValidId(requestId) && (isSuperAdmin() || request.time != null);
+    }
+
     match /pendingSignups/{requestId} {
       allow get, list: if isSuperAdmin() || request.time != null;
       allow create: if isValidId(requestId) && isValidAccessRequestCreate(incoming());
