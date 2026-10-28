@@ -702,16 +702,16 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   const [formEmployee, setFormEmployee] = useState(employees[0]?.id || 'emp-2');
 
   useEffect(() => {
-    if (projects.length > 0 && !projects.some((p) => p.id === formProject)) {
+    if (!editingId && projects.length > 0 && !projects.some((p) => p.id === formProject)) {
       setFormProject(projects[0].id);
     }
-  }, [projects, formProject]);
+  }, [projects, formProject, editingId]);
 
   useEffect(() => {
-    if (activeTeamMembers.length > 0 && !activeTeamMembers.some((e) => e.id === formEmployee)) {
+    if (!editingId && activeTeamMembers.length > 0 && !activeTeamMembers.some((e) => e.id === formEmployee)) {
       setFormEmployee(activeTeamMembers[0].id);
     }
-  }, [activeTeamMembers, formEmployee]);
+  }, [activeTeamMembers, formEmployee, editingId]);
 
   useEffect(() => {
     if (
@@ -1460,9 +1460,91 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     });
   }, [visibleAssignments, isFullAccessRole, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery, filterStartDate, filterEndDate, doesTaskTimelineOverlapFilter, doesAllocationMatchEmployee]);
 
-  // Handle Form Submission
+  // Open Modal in Create Mode
+  const handleOpenCreateModal = () => {
+    if (!canManageAllocations) return;
+    setEditingId(null);
+    setFormError(null);
+    setFormProject(projects[0]?.id || 'p1');
+    setFormEmployee(activeTeamMembers[0]?.id || employees[0]?.id || 'emp-2');
+    setFormDiscipline('BIM - ACS');
+    setFormLOD('LOD 350');
+    setFormPhase('Design Development');
+    setFormTaskType('3D Modeling');
+    setFormTargetZone('MOD-AR-LVL01-ZONE-A');
+    setFormHours(20);
+    setFormStartDate(getCurrentWeekRange().startIso);
+    setFormDueDate(getCurrentWeekRange().endIso);
+    setFormNotes('');
+    setShowAddModal(true);
+  };
+
+  // Open Modal in Edit Mode pre-populated with row details
+  const handleOpenEditModal = (
+    targetAlloc: ResourceAllocationItem,
+    resolvedProjId?: string,
+    resolvedEmpId?: string
+  ) => {
+    if (!canManageAllocations) return;
+    setEditingId(targetAlloc.id);
+    setFormError(null);
+
+    const matchedProj = projects.find(
+      (p) =>
+        p.id === (resolvedProjId || targetAlloc.projectId) ||
+        matchProjectId(p.id, resolvedProjId || targetAlloc.projectId)
+    );
+    setFormProject(matchedProj?.id || resolvedProjId || targetAlloc.projectId || projects[0]?.id || 'p1');
+
+    const rawEmpId = (
+      resolvedEmpId ||
+      targetAlloc.employeeId ||
+      targetAlloc.memberId ||
+      (targetAlloc as any).assignedTo ||
+      ''
+    ).trim();
+    const strippedEmpId = rawEmpId.replace(/^emp-/, '');
+    const matchedMember =
+      activeTeamMembers.find(
+        (m) =>
+          (rawEmpId && (m.id === rawEmpId || m.id.replace(/^emp-/, '') === strippedEmpId)) ||
+          (targetAlloc.memberEmail &&
+            normalizePersonEmail(m.email) === normalizePersonEmail(targetAlloc.memberEmail)) ||
+          (targetAlloc.employeeName &&
+            normalizePersonName(m.name) === normalizePersonName(targetAlloc.employeeName))
+      ) ||
+      employees.find(
+        (m) =>
+          (rawEmpId && (m.id === rawEmpId || m.id.replace(/^emp-/, '') === strippedEmpId)) ||
+          (targetAlloc.memberEmail &&
+            normalizePersonEmail(m.email) === normalizePersonEmail(targetAlloc.memberEmail)) ||
+          (targetAlloc.employeeName &&
+            normalizePersonName(m.name) === normalizePersonName(targetAlloc.employeeName))
+      );
+
+    setFormEmployee(matchedMember?.id || rawEmpId || activeTeamMembers[0]?.id || '');
+    setFormDiscipline((targetAlloc.discipline || 'BIM - ACS') as ResourceAllocationItem['discipline']);
+    setFormLOD((targetAlloc.lod || 'LOD 350') as ResourceAllocationItem['lod']);
+    setFormPhase(
+      (targetAlloc.projectPhase || 'Design Development') as ResourceAllocationItem['projectPhase']
+    );
+    setFormTaskType(((targetAlloc.taskType as BimTaskType) || '3D Modeling') as BimTaskType);
+    setFormTargetZone(targetAlloc.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A');
+    setFormHours(Number(targetAlloc.assignedHours) || 0);
+    setFormStartDate(
+      normalizeDateToIso(targetAlloc.startDate) || getCurrentWeekRange().startIso
+    );
+    setFormDueDate(
+      normalizeDateToIso(targetAlloc.dueDate) || getCurrentWeekRange().endIso
+    );
+    setFormNotes(targetAlloc.notes || '');
+    setShowAddModal(true);
+  };
+
+  // Handle Form Submission (Create or Update Allocation)
   const handleAddAllocation = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageAllocations) return;
     setFormError(null);
 
     // Validation Guards
@@ -1475,7 +1557,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       return;
     }
 
-    const proj = projects.find((p) => p.id === formProject || matchProjectId(p.id, formProject)) || projects[0];
+    const existingItem = editingId ? allocations.find((a) => a.id === editingId) : undefined;
+    const proj =
+      projects.find((p) => p.id === formProject || matchProjectId(p.id, formProject)) ||
+      (existingItem
+        ? { id: existingItem.projectId, name: existingItem.projectName }
+        : projects[0]);
     const targetEmpStripped = (formEmployee || '').trim().replace(/^emp-/, '');
     const emp =
       activeTeamMembers.find(
@@ -1504,6 +1591,67 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     const resolvedEmpId = sanitizedEmp.id || emp.id;
     const resolvedEmpName = sanitizedEmp.name || emp.name;
     const resolvedEmpEmail = normalizePersonEmail(sanitizedEmp.email || emp.email);
+    const nowIso = new Date().toISOString();
+
+    if (editingId && existingItem) {
+      const updatedItem: ResourceAllocationItem = {
+        ...existingItem,
+        id: existingItem.id,
+        projectId: proj.id,
+        projectName: proj.name,
+        employeeId: resolvedEmpId,
+        memberId: resolvedEmpId,
+        assignedTo: resolvedEmpId,
+        employeeName: resolvedEmpName,
+        assignedToName: resolvedEmpName,
+        memberName: resolvedEmpName,
+        employeeRole: emp.role || existingItem.employeeRole || 'Editor',
+        memberEmail: resolvedEmpEmail,
+        assignedToEmail: resolvedEmpEmail,
+        discipline: formDiscipline,
+        lod: formLOD,
+        projectPhase: formPhase,
+        taskType: formTaskType,
+        targetElementOrZone:
+          formTargetZone || existingItem.targetElementOrZone || 'MOD-AR-LVL01-ZONE-A',
+        assignedHours: Number(formHours),
+        viewFrequency: existingItem.viewFrequency || viewFrequency,
+        startDate: normalizeDateToIso(formStartDate) || formStartDate,
+        dueDate: normalizeDateToIso(formDueDate) || formDueDate,
+        status: existingItem.status || 'Allocated',
+        notes: formNotes,
+        updatedAt: nowIso,
+      };
+
+      if (selectedProjectId !== 'all' && !matchProjectId(proj.id, selectedProjectId)) {
+        setSelectedProjectId('all');
+      }
+      if (selectedEmployeeId !== 'all' && !doesAllocationMatchEmployee(updatedItem, selectedEmployeeId)) {
+        setSelectedEmployeeId('all');
+      }
+      if (
+        (filterStartDate || filterEndDate) &&
+        !doesTaskTimelineOverlapFilter(updatedItem, filterStartDate, filterEndDate)
+      ) {
+        setFilterStartDate('');
+        setFilterEndDate('');
+      }
+
+      const updatedAllocations = allocations.map((a) =>
+        a.id === editingId ? updatedItem : a
+      );
+      saveAllocations(updatedAllocations, updatedItem);
+      setEditingId(null);
+      setShowAddModal(false);
+      setFormNotes('');
+      setDeleteSuccessNotice('Record successfully updated');
+      window.setTimeout(() => {
+        setDeleteSuccessNotice((cur) =>
+          cur === 'Record successfully updated' ? null : cur
+        );
+      }, 4000);
+      return;
+    }
 
     const newItem: ResourceAllocationItem = {
       id: `alloc-${Date.now()}`,
@@ -1529,7 +1677,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       dueDate: normalizeDateToIso(formDueDate) || formDueDate,
       status: 'Allocated',
       notes: formNotes,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
     };
 
     // Ensure active filters do not hide the newly allocated work item
@@ -1548,6 +1696,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     }
 
     saveAllocations([newItem, ...allocations], newItem);
+    setEditingId(null);
     setShowAddModal(false);
     setFormNotes('');
   };
@@ -1735,7 +1884,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
             {canManageAllocations && (
               <button
-                onClick={() => setShowAddModal(true)}
+                onClick={handleOpenCreateModal}
                 className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-md transition"
               >
                 <Plus className="w-4 h-4" />
@@ -2390,13 +2539,28 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         </div>
                       </td>
 
-                      {/* Action (Status Label + Delete Allocation with Confirmation Prompt for Admins) */}
+                      {/* Action (Status Label + Edit & Delete Allocation for Admins) */}
                       <td className="py-3 px-3.5 text-right">
                         {canManageAllocations ? (
                           <div className="inline-flex items-center justify-end gap-2">
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30 whitespace-nowrap">
                               {badgeText}
                             </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleOpenEditModal(
+                                  row,
+                                  resolvedProjectId,
+                                  selectedMember?.id || row.employeeId
+                                )
+                              }
+                              className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 hover:border-blue-500/40 transition inline-flex items-center justify-center shrink-0"
+                              title={`Edit allocation for ${assignedName}`}
+                              aria-label={`Edit allocation for ${assignedName}`}
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               type="button"
                               onClick={() => setAllocationToDelete(row)}
@@ -2491,22 +2655,34 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         </div>
       )}
 
-      {/* ADD ALLOCATION MODAL */}
-      {showAddModal && (
+      {/* ADD / EDIT ALLOCATION MODAL */}
+      {showAddModal && canManageAllocations && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full text-slate-100 shadow-2xl overflow-hidden my-8">
             <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <SlidersHorizontal className="w-4 h-4 text-blue-400" />
-                  Assign BIM Task & Resource Hours
+                  {editingId ? (
+                    <Edit2 className="w-4 h-4 text-blue-400" />
+                  ) : (
+                    <SlidersHorizontal className="w-4 h-4 text-blue-400" />
+                  )}
+                  {editingId
+                    ? 'Edit BIM Task & Resource Hours'
+                    : 'Assign BIM Task & Resource Hours'}
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Allocate hours to team specialists with automatic capacity verification.
+                  {editingId
+                    ? 'Modify allocated hours, project, discipline, and timeline for this assignment.'
+                    : 'Allocate hours to team specialists with automatic capacity verification.'}
                 </p>
               </div>
               <button
-                onClick={() => setShowAddModal(false)}
+                type="button"
+                onClick={() => {
+                  setEditingId(null);
+                  setShowAddModal(false);
+                }}
                 className="p-1 text-slate-400 hover:text-white rounded-lg transition"
               >
                 <X className="w-5 h-5" />
@@ -2532,6 +2708,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     onChange={(e) => setFormProject(e.target.value)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
+                    {!projects.some((p) => p.id === formProject) && formProject && (
+                      <option value={formProject}>
+                        {cleanProjectName(
+                          allocations.find((a) => a.id === editingId)?.projectName || formProject
+                        )}
+                      </option>
+                    )}
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
                         {cleanProjectName(p.name)}
@@ -2549,6 +2732,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     onChange={(e) => handleMemberSelect(formDiscipline, e.target.value)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
+                    {!activeTeamMembers.some((e) => e.id === formEmployee) && formEmployee && (
+                      <option value={formEmployee}>
+                        {allocations.find((a) => a.id === editingId)?.employeeName || formEmployee}
+                      </option>
+                    )}
                     {activeTeamMembers.map((e) => (
                       <option key={e.id} value={e.id}>
                         {getMemberLabel(e)}
@@ -2676,7 +2864,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setEditingId(null);
+                    setShowAddModal(false);
+                  }}
                   className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
                 >
                   Cancel
@@ -2686,7 +2877,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold transition flex items-center gap-1.5"
                 >
                   <Check className="w-4 h-4" />
-                  <span>Allocate Hours</span>
+                  <span>{editingId ? 'Save Changes' : 'Allocate Hours'}</span>
                 </button>
               </div>
             </form>
