@@ -198,20 +198,49 @@ const STORAGE_KEYS = {
   USER_ACCESS: 'bim_tracker_user_access_v7',
   THEME: 'bim_tracker_theme_v7',
   CURRENT_USER: 'bim_tracker_current_user_v7',
-  ONBOARDING: 'bim_tracker_onboarding_v7',
+  ONBOARDING: 'bim_tracker_onboarding_v8',
   AUDIT_LOGS: 'bim_tracker_audit_logs_v7',
   DELETED_MEMBERS: 'bim_deleted_members_v1',
 };
 
-// Purge legacy storage caches on boot
+export const PENDING_ACCESS_REQUESTS_KEY = 'bim_pending_access_requests_v2';
+export const DELETED_ACCESS_REQUESTS_KEY = 'bim_deleted_access_requests_v2';
+export const ACCESS_REQUESTS_CHANNEL = 'bim_access_requests_channel';
+
+// Purge legacy storage caches on boot while rescuing any active pending sign-up requests
 if (typeof window !== 'undefined') {
   try {
+    const rescuedPending: OnboardingRequest[] = [];
+    for (const oldKey of ['bim_pending_access_requests_v1', 'bim_tracker_onboarding_v7']) {
+      const rawOld = localStorage.getItem(oldKey);
+      if (rawOld) {
+        try {
+          const parsed = JSON.parse(rawOld);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((item: any) => {
+              const st = String(item?.status || '').trim().toLowerCase();
+              if (item?.email && (st === 'pending' || st === 'pending_approval')) {
+                rescuedPending.push(item);
+              }
+            });
+          }
+        } catch {}
+      }
+    }
+    if (rescuedPending.length > 0) {
+      const existingV2Raw = localStorage.getItem(PENDING_ACCESS_REQUESTS_KEY);
+      const existingV2 = existingV2Raw ? JSON.parse(existingV2Raw) : [];
+      const mergedRescue = [...rescuedPending, ...(Array.isArray(existingV2) ? existingV2 : [])];
+      localStorage.setItem(PENDING_ACCESS_REQUESTS_KEY, JSON.stringify(mergedRescue));
+    }
+
     const legacyKeys = [
       'bim_tracker_projects_v1', 'bim_tracker_projects_v2', 'bim_tracker_projects_v3', 'bim_tracker_projects_v4', 'bim_tracker_projects_v5', 'bim_tracker_projects_v6',
       'bim_tracker_employees_v1', 'bim_tracker_employees_v2', 'bim_tracker_employees_v3', 'bim_tracker_employees_v4', 'bim_tracker_employees_v5', 'bim_tracker_employees_v6',
       'bim_tracker_worklogs_v1', 'bim_tracker_worklogs_v2', 'bim_tracker_worklogs_v3', 'bim_tracker_worklogs_v4', 'bim_tracker_worklogs_v5', 'bim_tracker_worklogs_v6',
       'bim_projects_v2', 'bim_employees_v2', 'bim_work_logs_v2',
-      'bim_resource_allocations_v1', 'bim_project_feedbacks_v1'
+      'bim_resource_allocations_v1', 'bim_project_feedbacks_v1',
+      'bim_tracker_onboarding_v7', 'bim_pending_access_requests_v1', 'bim_deleted_access_requests_v1'
     ];
     legacyKeys.forEach((k) => localStorage.removeItem(k));
   } catch {}
@@ -304,10 +333,6 @@ const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [
     notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
   },
 ];
-
-export const PENDING_ACCESS_REQUESTS_KEY = 'bim_pending_access_requests_v1';
-export const DELETED_ACCESS_REQUESTS_KEY = 'bim_deleted_access_requests_v1';
-export const ACCESS_REQUESTS_CHANNEL = 'bim_access_requests_channel';
 
 export const getRequestTimeMs = (req: any): number => {
   if (!req) return 0;
@@ -2326,6 +2351,66 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       };
 
       collectionsToListen.forEach((colName) => subscribeCollectionWithRetry(colName));
+
+      // Active getDocs() + backend API polling & window focus re-hydration fallback
+      const pollRemoteAndFirestore = async () => {
+        if (!listenerActive) return;
+        try {
+          const [firestoreSnaps, apiData] = await Promise.all([
+            Promise.allSettled(
+              collectionsToListen.map((colName) => getDocs(collection(db, colName)))
+            ),
+            fetch(`/api/access-requests?_t=${Date.now()}`, { cache: 'no-store' })
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null),
+          ]);
+
+          if (!listenerActive) return;
+
+          firestoreSnaps.forEach((res, idx) => {
+            const colName = collectionsToListen[idx];
+            if (res.status === 'fulfilled' && res.value?.docs) {
+              const colMap = docsByCollection.get(colName) || new Map();
+              res.value.docs.forEach((d) => {
+                const cData = d.data();
+                if (!cData?.isDeleted && String(cData?.status || '').toLowerCase() !== 'deleted') {
+                  colMap.set(d.id, d);
+                }
+              });
+              docsByCollection.set(colName, colMap);
+            }
+          });
+
+          if (Array.isArray(apiData?.requests)) {
+            const sseMap = docsByCollection.get('server_sse') || new Map();
+            apiData.requests.forEach((req: any) => {
+              const docKey = req?.id || req?.uid || req?.email;
+              if (docKey) {
+                sseMap.set(docKey, {
+                  id: docKey,
+                  data: () => ({ ...req }),
+                  ...req,
+                });
+              }
+            });
+            docsByCollection.set('server_sse', sseMap);
+          }
+
+          invalidateAccessRequestsCache();
+          syncAllRequests();
+        } catch {}
+      };
+
+      pollRemoteAndFirestore();
+      const contextPollTimer = setInterval(pollRemoteAndFirestore, 3500);
+      unsubs.push(() => clearInterval(contextPollTimer));
+
+      const handleWindowFocusSync = () => {
+        if (!listenerActive) return;
+        pollRemoteAndFirestore();
+      };
+      window.addEventListener('focus', handleWindowFocusSync);
+      unsubs.push(() => window.removeEventListener('focus', handleWindowFocusSync));
 
       // Subscribe to backend SSE stream and initial fetch for zero-latency cross-session sync
       if (typeof EventSource !== 'undefined') {

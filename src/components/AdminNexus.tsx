@@ -231,8 +231,8 @@ export const AdminNexus: React.FC = () => {
       name: fullName,
       fullName: fullName,
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
-      role: raw.role || mapAppRoleToDisplayRole(normalizedRole),
-      requestedRole: raw.requestedRole || raw.role || mapAppRoleToDisplayRole(normalizedRole),
+      role: raw.role || (mappedStatus === 'pending' ? 'Editor' : mapAppRoleToDisplayRole(normalizedRole)),
+      requestedRole: raw.requestedRole || raw.role || (mappedStatus === 'pending' ? 'Editor' : mapAppRoleToDisplayRole(normalizedRole)),
       assignedRole: normalizedRole,
       assignedAccessLevel: calculatedAccessLevel,
       primaryDiscipline: discipline,
@@ -322,26 +322,31 @@ export const AdminNexus: React.FC = () => {
   const setAccessRequestsRef = useRef(setAccessRequests);
   setAccessRequestsRef.current = setAccessRequests;
 
-  // Manual Live Sync & cache-busting getDocsFromServer() force fetch handler
-  const fetchPendingRequests = useCallback(async () => {
-    setIsSyncing(true);
-    setSyncError(null);
+  // Force-refresh & re-hydration handler (used by Live Sync button, window focus, and Pending Queue polling)
+  const fetchPendingRequests = useCallback(async (silent = false) => {
+    if (!silent) {
+      setIsSyncing(true);
+      setSyncError(null);
+    }
     invalidateAccessRequestsCache();
     try {
       const collectionsToQuery = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
-      const fetchCollectionFromServer = async (colName: string) => {
+      const fetchCollectionDocs = async (colName: string) => {
         try {
-          return await getDocsFromServer(collection(db, colName));
+          // Race getDocsFromServer with a short 1000ms timeout and always fallback to fast getDocs()
+          const serverOrFallback = await Promise.race([
+            getDocsFromServer(collection(db, colName)),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
+          ]);
+          if (serverOrFallback) return serverOrFallback;
+          return await getDocs(collection(db, colName));
         } catch {
           return await getDocs(collection(db, colName));
         }
       };
 
       const [firestoreResults, apiResponse] = await Promise.all([
-        Promise.race([
-          Promise.allSettled(collectionsToQuery.map((colName) => fetchCollectionFromServer(colName))),
-          new Promise<PromiseSettledResult<any>[]>((resolve) => setTimeout(() => resolve([]), 4500)),
-        ]),
+        Promise.allSettled(collectionsToQuery.map((colName) => fetchCollectionDocs(colName))),
         fetch(`/api/access-requests?_t=${Date.now()}`, { cache: 'no-store' })
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
@@ -380,14 +385,90 @@ export const AdminNexus: React.FC = () => {
       setAccessRequestsRef.current(allRaw, true);
     } catch (err: any) {
       console.error('Admin Nexus pending fetch error:', err);
-      setAccessRequestsRef.current([], true);
+      const allRaw: any[] = [];
+      docsMapRef.current.forEach((colDocs) => {
+        colDocs.forEach((docData) => allRaw.push(docData));
+      });
+      setAccessRequestsRef.current(allRaw, true);
     }
-    setIsSyncing(false);
+    if (!silent) {
+      setIsSyncing(false);
+    }
     setLastSyncTime(new Date().toLocaleTimeString());
   }, []);
 
   const fetchPendingRequestsRef = useRef(fetchPendingRequests);
   fetchPendingRequestsRef.current = fetchPendingRequests;
+
+  // Auto-polling fallback interval (every 3000ms) executing fresh getDocs() whenever active tab is set to Pending Queue,
+  // plus immediate force-refresh on tab switch
+  useEffect(() => {
+    if (activeSubTab !== 'pending-onboarding') return;
+
+    // Immediate force-refresh when switching to Access Review / Pending Queue tab
+    fetchPendingRequestsRef.current(true);
+
+    if (onboardingFilter !== 'pending') return;
+
+    let isPollingActive = true;
+    const collectionsToPoll = ['access_requests', 'accessRequests', 'pendingUsers', 'pendingSignups'];
+
+    const executeGetDocsPoll = async () => {
+      if (!isPollingActive) return;
+      try {
+        const [snapshots, apiData] = await Promise.all([
+          Promise.allSettled(collectionsToPoll.map((colName) => getDocs(collection(db, colName)))),
+          fetch(`/api/access-requests?_t=${Date.now()}`, { cache: 'no-store' })
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+        ]);
+
+        if (!isPollingActive) return;
+
+        const docsMap = docsMapRef.current;
+        snapshots.forEach((res, idx) => {
+          const colName = collectionsToPoll[idx] || 'access_requests';
+          if (res.status === 'fulfilled' && res.value?.docs) {
+            const colMap = docsMap.get(colName) || new Map();
+            res.value.docs.forEach((docSnap: any) => {
+              colMap.set(docSnap.id, {
+                id: docSnap.id,
+                ...docSnap.data({ serverTimestamps: 'estimate' }),
+              });
+            });
+            docsMap.set(colName, colMap);
+          }
+        });
+
+        if (Array.isArray(apiData?.requests)) {
+          const sseMap = docsMap.get('server_sse') || new Map();
+          apiData.requests.forEach((req: any) => {
+            const docKey = req?.id || req?.uid || req?.email;
+            if (docKey) {
+              sseMap.set(docKey, { id: docKey, ...req });
+            }
+          });
+          docsMap.set('server_sse', sseMap);
+        }
+
+        const allRaw: any[] = [];
+        docsMap.forEach((colDocs) => {
+          colDocs.forEach((docData) => allRaw.push(docData));
+        });
+        setAccessRequestsRef.current(allRaw, true);
+        setLastSyncTime(new Date().toLocaleTimeString());
+      } catch (err) {
+        console.warn('[AdminNexus] Auto-polling getDocs fallback diagnostic:', err);
+      }
+    };
+
+    const pollIntervalId = setInterval(executeGetDocsPoll, 3000);
+
+    return () => {
+      isPollingActive = false;
+      clearInterval(pollIntervalId);
+    };
+  }, [activeSubTab, onboardingFilter]);
 
   // Persistent multi-collection real-time onSnapshot listener + SSE stream + reconnect/resubscribe handler
   // Empty dependency array [] guarantees tab switches or re-renders NEVER detach or unbind the listener
@@ -536,33 +617,7 @@ export const AdminNexus: React.FC = () => {
     };
 
     connectEventSource();
-
-    // Fallback polling reconciliation interval (every 3000ms)
-    const pollBackendAndLocal = async (forceInvalidate = false) => {
-      if (!isMounted) return;
-      try {
-        const res = await fetch(`/api/access-requests?_t=${Date.now()}`, { cache: 'no-store' });
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data?.requests)) {
-            const sseMap = docsMap.get('server_sse') || new Map();
-            data.requests.forEach((req: any) => {
-              const docKey = req?.id || req?.uid || req?.email;
-              if (docKey) {
-                sseMap.set(docKey, { id: docKey, ...req });
-              }
-            });
-            docsMap.set('server_sse', sseMap);
-          }
-        }
-      } catch {}
-      if (isMounted) {
-        updateState(forceInvalidate);
-      }
-    };
-
-    fetchPendingRequestsRef.current();
-    const pollInterval = setInterval(() => pollBackendAndLocal(false), 3000);
+    fetchPendingRequestsRef.current(true);
 
     const handleCustomSubmit = (e: Event) => {
       const detail = (e as CustomEvent)?.detail;
@@ -582,6 +637,7 @@ export const AdminNexus: React.FC = () => {
     const handleStorageChange = (e: StorageEvent) => {
       if (
         e.key === PENDING_ACCESS_REQUESTS_KEY ||
+        e.key === 'bim_tracker_onboarding_v8' ||
         e.key === 'bim_tracker_onboarding_v7' ||
         e.key === DELETED_ACCESS_REQUESTS_KEY
       ) {
@@ -590,7 +646,7 @@ export const AdminNexus: React.FC = () => {
     };
     window.addEventListener('storage', handleStorageChange);
 
-    // Explicit reconnect / resubscribe handler on window focus, network online, or tab visibility restore
+    // Explicit reconnect / resubscribe & force-reload handler on window focus, network online, or tab visibility restore
     const handleReconnectAndResubscribe = () => {
       if (!isMounted) return;
       collectionsToListen.forEach((colName) => {
@@ -599,7 +655,7 @@ export const AdminNexus: React.FC = () => {
         }
       });
       connectEventSource();
-      fetchPendingRequestsRef.current();
+      fetchPendingRequestsRef.current(true);
     };
 
     const handleVisibilityChange = () => {
@@ -636,7 +692,6 @@ export const AdminNexus: React.FC = () => {
 
     return () => {
       isMounted = false;
-      clearInterval(pollInterval);
       activeUnsubs.forEach((unsub) => {
         try {
           unsub();
