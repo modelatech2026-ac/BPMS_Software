@@ -94,6 +94,21 @@ export const toUtcMidnightTimestamp = (dateInput: any): number | null => {
   return null;
 };
 
+const normalizePersonName = (name?: string): string =>
+  (name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/sushoovan|sushovon/g, 'sushovan')
+    .replace(/abhinandn/g, 'abhinandan')
+    .replace(/\s+/g, ' ');
+
+const normalizePersonEmail = (email?: string): string =>
+  (email || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^abhinandnb@/, 'abhinandanb@')
+    .replace(/^sushovandas@/, 'sushoovandas@');
+
 const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [];
 
 export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectProject }) => {
@@ -150,11 +165,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       .map((member) => sanitizeEmployeeRecord({ ...member }));
     const seen = new Set<string>();
     return raw.filter((member) => {
-      const emailKey = (member.email || '').trim().toLowerCase();
+      const emailKey = normalizePersonEmail(member.email);
       const idKey = (member.id || '').trim();
       const strippedId = idKey.replace(/^emp-/, '');
       const detId = emailKey ? generateRequestDocId(emailKey) : '';
-      const nameKey = (member.name || '').trim().toLowerCase().replace(/sushoovan/g, 'sushovan');
+      const nameKey = normalizePersonName(member.name);
       if (
         (emailKey && seen.has(emailKey)) ||
         (idKey && seen.has(idKey)) ||
@@ -174,26 +189,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   }, [employees]);
   const activeMembers = activeTeamMembers;
 
-  // Exclude allocations belonging to deleted members while keeping active allocations visible in real time
+  // Exclude allocations explicitly marked as deleted while keeping all live active allocations visible
   const isLiveActiveMember = (item: ResourceAllocationItem) => {
-    try {
-      const saved = localStorage.getItem('bim_deleted_members_v1');
-      if (saved) {
-        const deletedSet = new Set<string>(JSON.parse(saved));
-        const empId = (item.employeeId || item.memberId || '').trim().toLowerCase();
-        const empIdStripped = empId.replace(/^emp-/, '');
-        const email = (item.memberEmail || item.assignedToEmail || '').trim().toLowerCase();
-        const name = (item.employeeName || '').trim().toLowerCase();
-        if (
-          (empId && deletedSet.has(empId)) ||
-          (empIdStripped && deletedSet.has(empIdStripped)) ||
-          (email && deletedSet.has(email)) ||
-          (name && deletedSet.has(name))
-        ) {
-          return false;
-        }
-      }
-    } catch {}
+    if (!item) return false;
+    if ((item as any).isDeleted === true) return false;
+    if (String(item.status || '').trim().toLowerCase() === 'deleted') return false;
     return true;
   };
 
@@ -263,18 +263,20 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       const lowerDocName = rawDocName.toLowerCase();
 
       const sanitizedEmployees = employees.map((e) => sanitizeEmployeeRecord(e));
-      const matchedEmpByName = lowerDocName
-        ? sanitizedEmployees.find((e) => (e.name || '').trim().toLowerCase() === lowerDocName)
+      const normDocName = normalizePersonName(rawDocName);
+      const normDocEmail = normalizePersonEmail(resolvedEmail);
+      const matchedEmpByName = normDocName
+        ? sanitizedEmployees.find((e) => normalizePersonName(e.name) === normDocName)
         : undefined;
       const matchedEmpByIdOrEmail = sanitizedEmployees.find((e) => {
-        if (lowerDocName && (e.name || '').trim().toLowerCase() !== lowerDocName) {
+        if (normDocName && normalizePersonName(e.name) !== normDocName) {
           return false;
         }
         return (
           (resolvedEmpId &&
             (e.id === resolvedEmpId ||
               e.id.replace(/^emp-/, '') === resolvedEmpId.replace(/^emp-/, ''))) ||
-          (resolvedEmail && (e.email || '').trim().toLowerCase() === resolvedEmail)
+          (normDocEmail && normalizePersonEmail(e.email) === normDocEmail)
         );
       });
       const matchedEmp = matchedEmpByName || matchedEmpByIdOrEmail;
@@ -556,17 +558,15 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         .trim()
         .toLowerCase();
 
-      const matchedByName = rawRowName
-        ? activeTeamMembers.find(
-            (emp) =>
-              (emp.name || '').trim().toLowerCase().replace(/sushoovan/g, 'sushovan') ===
-              rawRowName.replace(/sushoovan/g, 'sushovan')
-          )
+      const normRowName = normalizePersonName(rawRowName);
+      const normRowEmail = normalizePersonEmail(rawRowEmail);
+      const matchedByName = normRowName
+        ? activeTeamMembers.find((emp) => normalizePersonName(emp.name) === normRowName)
         : undefined;
       const matchedById =
         !matchedByName && rawRowMemberId
           ? activeTeamMembers.find((emp) => {
-              if (rawRowName && (emp.name || '').trim().toLowerCase() !== rawRowName) {
+              if (normRowName && normalizePersonName(emp.name) !== normRowName) {
                 return false;
               }
               return (
@@ -575,12 +575,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             })
           : undefined;
       const matchedByEmail =
-        !matchedByName && !matchedById && rawRowEmail
+        !matchedByName && !matchedById && normRowEmail
           ? activeTeamMembers.find((emp) => {
-              if (rawRowName && (emp.name || '').trim().toLowerCase() !== rawRowName) {
+              if (normRowName && normalizePersonName(emp.name) !== normRowName) {
                 return false;
               }
-              return (emp.email || '').trim().toLowerCase() === rawRowEmail;
+              return normalizePersonEmail(emp.email) === normRowEmail;
             })
           : undefined;
 
@@ -893,13 +893,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     if (!currentUser) return undefined;
     const userId = (currentUser.id || '').trim();
     const userIdStripped = userId.replace(/^emp-/, '');
-    const userEmail = (currentUser.email || '').toLowerCase().trim();
-    const userName = (currentUser.name || '').toLowerCase().trim();
+    const userEmail = normalizePersonEmail(currentUser.email);
+    const userName = normalizePersonName(currentUser.name);
     return employees.find(
       (e) =>
         (userId && (e.id === userId || e.id.replace(/^emp-/, '') === userIdStripped)) ||
-        (userEmail && (e.email || '').toLowerCase().trim() === userEmail) ||
-        (userName && (e.name || '').toLowerCase().trim() === userName)
+        (userEmail && normalizePersonEmail(e.email) === userEmail) ||
+        (userName && normalizePersonName(e.name) === userName)
     );
   }, [currentUser, employees]);
 
@@ -916,8 +916,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     const userId = (currentUser.id || '').trim();
     const userIdStripped = userId.replace(/^emp-/, '');
-    const userEmail = (currentUser.email || '').toLowerCase().trim();
-    const userName = (currentUser.name || '').toLowerCase().trim();
+    const userEmail = normalizePersonEmail(currentUser.email);
+    const userName = normalizePersonName(currentUser.name);
     const matchedEmpId = (viewerMatchedEmployee?.id || '').trim();
     const matchedEmpIdStripped = matchedEmpId.replace(/^emp-/, '');
 
@@ -925,7 +925,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       const rawItem = item as any;
       if (
         (userId && (rawItem.memberId === userId || item.employeeId === userId)) ||
-        (userEmail && rawItem.assignedToEmail === currentUser.email)
+        (userEmail && normalizePersonEmail(rawItem.assignedToEmail) === userEmail)
       ) {
         return true;
       }
@@ -939,12 +939,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         return true;
       }
 
-      const itemEmail = (item.memberEmail || rawItem.assignedToEmail || '').toLowerCase().trim();
+      const itemEmail = normalizePersonEmail(item.memberEmail || rawItem.assignedToEmail);
       if (userEmail && itemEmail && itemEmail === userEmail) {
         return true;
       }
 
-      const itemName = (item.employeeName || '').toLowerCase().trim();
+      const itemName = normalizePersonName(item.employeeName || rawItem.memberName || rawItem.assignedToName);
       if (userName && itemName && itemName === userName) {
         return true;
       }
@@ -991,19 +991,19 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         (e) =>
           (assignmentMemberId && (e.id === assignmentMemberId || e.id.replace(/^emp-/, '') === assignmentIdStripped)) ||
           (assignmentEmpId && (e.id === assignmentEmpId || e.id.replace(/^emp-/, '') === assignmentEmpIdStripped)) ||
-          (assignment.memberEmail && (e.email || '').trim().toLowerCase() === assignment.memberEmail.trim().toLowerCase()) ||
-          (assignment.employeeName && (e.name || '').trim().toLowerCase() === assignment.employeeName.trim().toLowerCase())
+          (assignment.memberEmail && normalizePersonEmail(e.email) === normalizePersonEmail(assignment.memberEmail)) ||
+          (assignment.employeeName && normalizePersonName(e.name) === normalizePersonName(assignment.employeeName))
       );
 
-      const targetEmail = (
+      const targetEmail = normalizePersonEmail(
         assignment.memberEmail ||
         rawAlloc.assignedToEmail ||
         matchedEmp?.email ||
         ''
-      ).trim().toLowerCase();
+      );
       const detEmailId = targetEmail ? generateRequestDocId(targetEmail) : '';
       const targetName = (assignment.employeeName || matchedEmp?.name || '').trim().toLowerCase();
-      const normTargetName = targetName.replace(/sushoovan|sushovon/g, 'sushovan');
+      const normTargetName = normalizePersonName(targetName);
 
       // 2. Resolve Project Identifiers
       const matchedProj = projects.find((p) => matchProjectId(p.id, assignment.projectId));
@@ -1089,11 +1089,11 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             (logEmpId === matchedEmp.id ||
               logEmpIdStripped === matchedEmp.id.replace(/^emp-/, '')));
 
-        const logEmail = (log.memberEmail || (log as any).userEmail || '').trim().toLowerCase();
+        const logEmail = normalizePersonEmail(log.memberEmail || (log as any).userEmail || '');
         const emailMatch = Boolean(targetEmail) && Boolean(logEmail) && logEmail === targetEmail;
 
         const logName = (log.employeeName || '').trim().toLowerCase();
-        const normLogName = logName.replace(/sushoovan|sushovon/g, 'sushovan');
+        const normLogName = normalizePersonName(logName);
         const nameMatch =
           Boolean(targetName) &&
           Boolean(logName) &&
@@ -1225,6 +1225,40 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     []
   );
 
+  // Helper to match an allocation against a selected employee ID across duplicate Firestore user IDs, emails, and names
+  const doesAllocationMatchEmployee = React.useCallback(
+    (alloc: ResourceAllocationItem, targetEmpId: string): boolean => {
+      if (!targetEmpId || targetEmpId === 'all') return true;
+      const rawAlloc = alloc as any;
+      const allocEmpId = (alloc.employeeId || alloc.memberId || rawAlloc.assignedTo || '').trim();
+      const allocStripped = allocEmpId.replace(/^emp-/, '');
+      const targetStripped = targetEmpId.replace(/^emp-/, '');
+      if (allocEmpId === targetEmpId || (allocStripped && allocStripped === targetStripped)) {
+        return true;
+      }
+      const targetEmp =
+        activeTeamMembers.find(
+          (e) => e.id === targetEmpId || e.id.replace(/^emp-/, '') === targetStripped
+        ) ||
+        employees.find(
+          (e) => e.id === targetEmpId || e.id.replace(/^emp-/, '') === targetStripped
+        );
+      if (targetEmp) {
+        const targetEmail = normalizePersonEmail(targetEmp.email);
+        const allocEmail = normalizePersonEmail(alloc.memberEmail || rawAlloc.assignedToEmail);
+        if (targetEmail && allocEmail && targetEmail === allocEmail) return true;
+
+        const targetName = normalizePersonName(targetEmp.name);
+        const allocName = normalizePersonName(
+          alloc.employeeName || rawAlloc.memberName || rawAlloc.assignedToName
+        );
+        if (targetName && allocName && targetName === allocName) return true;
+      }
+      return false;
+    },
+    [activeTeamMembers, employees]
+  );
+
   // Overall Workspace Metrics & Efficiency Dashboard based on table parameters and date range
   const workspaceMetrics = useMemo(() => {
     let budgetHours = 0;
@@ -1246,7 +1280,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
     const filteredByEmployee = !isFullAccessRole || selectedEmployeeId === 'all'
       ? relevantAllocations
-      : relevantAllocations.filter((a) => a.employeeId === selectedEmployeeId);
+      : relevantAllocations.filter((a) => doesAllocationMatchEmployee(a, selectedEmployeeId));
 
     // Apply date range filter to metrics calculations using overlap rule: (task.startDate <= filterEnd) AND (task.dueDate >= filterStart)
     const filteredForMetrics = filteredByEmployee.filter((a) =>
@@ -1320,13 +1354,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       completionRate,
       priorityBreakdown
     };
-  }, [projects, employees, liveActiveAllocations, activeWorkLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours, getLoggedHoursForAssignment, isFullAccessRole, filterStartDate, filterEndDate, doesTaskTimelineOverlapFilter]);
+  }, [projects, employees, liveActiveAllocations, activeWorkLogs, selectedProjectId, selectedEmployeeId, getEmployeeWeeklyHours, getLoggedHoursForAssignment, isFullAccessRole, filterStartDate, filterEndDate, doesTaskTimelineOverlapFilter, doesAllocationMatchEmployee]);
 
   // Filtered Allocations based on Dropdowns (Project + Team Member + Date Range) and Search
   const filteredAllocations = useMemo(() => {
     return visibleAssignments.filter((a) => {
       const matchesProj = selectedProjectId === 'all' || matchProjectId(a.projectId, selectedProjectId);
-      const matchesEmp = !isFullAccessRole || selectedEmployeeId === 'all' || a.employeeId === selectedEmployeeId;
+      const matchesEmp = !isFullAccessRole || selectedEmployeeId === 'all' || doesAllocationMatchEmployee(a, selectedEmployeeId);
       const matchesDisc = filterDiscipline === 'all' || a.discipline === filterDiscipline;
       const matchesStatus = filterStatus === 'all' || a.status === filterStatus;
       const matchesPriority = filterPriority === 'all' || a.priority === filterPriority;
@@ -1345,7 +1379,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
       return matchesProj && matchesEmp && matchesDisc && matchesStatus && matchesPriority && matchesSearch && matchesDateRange;
     });
-  }, [visibleAssignments, isFullAccessRole, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery, filterStartDate, filterEndDate, doesTaskTimelineOverlapFilter]);
+  }, [visibleAssignments, isFullAccessRole, selectedProjectId, selectedEmployeeId, filterDiscipline, filterStatus, filterPriority, searchQuery, filterStartDate, filterEndDate, doesTaskTimelineOverlapFilter, doesAllocationMatchEmployee]);
 
   // Handle Form Submission
   const handleAddAllocation = (e: React.FormEvent) => {
@@ -1989,15 +2023,13 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
                   const rawRowMemberId = (alloc.memberId || alloc.employeeId || alloc.assignedTo || '').trim();
                   const strippedRowMemberId = rawRowMemberId.replace(/^emp-/, '');
-                  const rawRowEmail = (alloc.assignedToEmail || alloc.memberEmail || '').trim().toLowerCase();
-                  const rawRowName = (
+                  const rawRowEmail = normalizePersonEmail(alloc.assignedToEmail || alloc.memberEmail || '');
+                  const rawRowName = normalizePersonName(
                     alloc.assignedToName ||
                     alloc.memberName ||
                     alloc.employeeName ||
                     ''
-                  )
-                    .trim()
-                    .toLowerCase();
+                  );
 
                   const matchedById = rawRowMemberId
                     ? activeTeamMembers.find(
@@ -2015,37 +2047,50 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   const matchedByEmail =
                     !matchedById && rawRowEmail
                       ? activeTeamMembers.find(
-                          (emp) => (emp.email || '').trim().toLowerCase() === rawRowEmail
+                          (emp) => normalizePersonEmail(emp.email) === rawRowEmail
                         ) ||
                         employees.find(
-                          (emp) => (emp.email || '').trim().toLowerCase() === rawRowEmail
+                          (emp) => normalizePersonEmail(emp.email) === rawRowEmail
                         )
                       : undefined;
 
                   const matchedByName =
                     !matchedById && !matchedByEmail && rawRowName
                       ? activeTeamMembers.find(
-                          (emp) => (emp.name || '').trim().toLowerCase() === rawRowName
+                          (emp) => normalizePersonName(emp.name) === rawRowName
                         ) ||
                         employees.find(
-                          (emp) => (emp.name || '').trim().toLowerCase() === rawRowName
+                          (emp) => normalizePersonName(emp.name) === rawRowName
                         )
                       : undefined;
 
                   const directRowMember = matchedById || matchedByEmail || matchedByName;
-                  const isDirectMemberActive =
-                    directRowMember && activeTeamMembers.some((emp) => emp.id === directRowMember.id);
-
-                  const selectedMember = isDirectMemberActive
-                    ? directRowMember
-                    : activeTeamMembers.find(
+                  // Canonicalize directRowMember to the corresponding deduplicated entry in activeTeamMembers if available
+                  const canonicalActiveMember = directRowMember
+                    ? activeTeamMembers.find(
                         (emp) =>
-                          emp.id ===
-                            disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
-                          emp.id === disciplineAssignments[alloc.discipline]
-                      ) ||
-                      activeTeamMembers[0] ||
-                      directRowMember;
+                          emp.id === directRowMember.id ||
+                          (emp.email &&
+                            directRowMember.email &&
+                            normalizePersonEmail(emp.email) ===
+                              normalizePersonEmail(directRowMember.email)) ||
+                          (emp.name &&
+                            directRowMember.name &&
+                            normalizePersonName(emp.name) ===
+                              normalizePersonName(directRowMember.name))
+                      ) || directRowMember
+                    : undefined;
+
+                  const selectedMember =
+                    canonicalActiveMember ||
+                    (!rawRowName && !rawRowMemberId
+                      ? activeTeamMembers.find(
+                          (emp) =>
+                            emp.id ===
+                              disciplineAssignments[`${resolvedProjectId}__${alloc.discipline}`] ||
+                            emp.id === disciplineAssignments[alloc.discipline]
+                        ) || activeTeamMembers[0]
+                      : undefined);
 
                   const row =
                     selectedMember && alloc.assignedToName !== selectedMember.name

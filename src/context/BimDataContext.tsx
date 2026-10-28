@@ -1966,33 +1966,57 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               data.isDeleted === true ||
               String(data.status || '').toLowerCase() === 'deleted'
             ) {
-              registerDeletedMemberKeys({ id: empId || docId, email, name });
-              setEmployees((prev) =>
-                prev.filter(
-                  (e) =>
-                    e.id !== docId &&
-                    e.id !== empId &&
-                    e.id.replace(/^emp-/, '') !== docId.replace(/^emp-/, '') &&
-                    (!email || (e.email || '').toLowerCase().trim() !== email) &&
-                    (!name || (e.name || '').toLowerCase().trim() !== name.toLowerCase())
-                )
-              );
-              setOnboardingRequests((prev) =>
-                prev.filter(
-                  (r) =>
-                    r.id !== docId &&
-                    (!email || (r.email || '').toLowerCase().trim() !== email)
-                )
-              );
-              setResourceAllocations((prev) =>
-                prev.filter(
-                  (a) =>
-                    a.employeeId !== empId &&
-                    a.employeeId !== docId &&
-                    (!email || (a.memberEmail || '').toLowerCase().trim() !== email) &&
-                    (!name || (a.employeeName || '').toLowerCase().trim() !== name.toLowerCase())
-                )
-              );
+              // Check if another active document for the same user still exists in the snapshot
+              const normName = name.toLowerCase().replace(/abhinandn/g, 'abhinandan').replace(/sushoovan|sushovon/g, 'sushovan');
+              const normEmail = email.replace(/^abhinandnb@/, 'abhinandanb@').replace(/^sushovandas@/, 'sushoovandas@');
+              const hasOtherActiveDoc = snapshot.docs.some((otherDoc) => {
+                if (otherDoc.id === docId) return false;
+                const oData = otherDoc.data() || {};
+                if (oData.isDeleted === true || String(oData.status || '').toLowerCase() === 'deleted') {
+                  return false;
+                }
+                const oEmail = String(oData.email || oData.userEmail || '')
+                  .trim()
+                  .toLowerCase()
+                  .replace(/^abhinandnb@/, 'abhinandanb@')
+                  .replace(/^sushovandas@/, 'sushoovandas@');
+                const oName = String(oData.fullName || oData.name || '')
+                  .trim()
+                  .toLowerCase()
+                  .replace(/abhinandn/g, 'abhinandan')
+                  .replace(/sushoovan|sushovon/g, 'sushovan');
+                return (normEmail && oEmail === normEmail) || (normName && oName === normName);
+              });
+
+              if (!hasOtherActiveDoc) {
+                registerDeletedMemberKeys({ id: empId || docId, email, name });
+                setEmployees((prev) =>
+                  prev.filter(
+                    (e) =>
+                      e.id !== docId &&
+                      e.id !== empId &&
+                      e.id.replace(/^emp-/, '') !== docId.replace(/^emp-/, '') &&
+                      (!email || (e.email || '').toLowerCase().trim() !== email) &&
+                      (!name || (e.name || '').toLowerCase().trim() !== name.toLowerCase())
+                  )
+                );
+                setOnboardingRequests((prev) =>
+                  prev.filter(
+                    (r) =>
+                      r.id !== docId &&
+                      (!email || (r.email || '').toLowerCase().trim() !== email)
+                  )
+                );
+                setResourceAllocations((prev) =>
+                  prev.filter(
+                    (a) =>
+                      a.employeeId !== empId &&
+                      a.employeeId !== docId &&
+                      (!email || (a.memberEmail || '').toLowerCase().trim() !== email) &&
+                      (!name || (a.employeeName || '').toLowerCase().trim() !== name.toLowerCase())
+                  )
+                );
+              }
             }
           });
 
@@ -2006,6 +2030,27 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               const email = String(data.email || data.userEmail || '').trim().toLowerCase();
               if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
                 return false;
+              }
+              const statusUpper = String(data.status || '').trim().toUpperCase();
+              if (statusUpper === 'REJECTED') {
+                return false;
+              }
+              // If the user document is explicitly active/approved in Firestore, clear any stale localStorage deletion keys
+              if (statusUpper === 'APPROVED' || statusUpper === 'ACTIVE' || !data.isDeleted) {
+                const rawName = String(data.fullName || data.name || '').trim();
+                unregisterDeletedMemberKeys({
+                  id: data.id || docId,
+                  email,
+                  name: rawName,
+                });
+                if (rawName.toLowerCase().includes('abhinand')) {
+                  unregisterDeletedMemberKeys({
+                    id: 'emp-kI4hemIRFk1NQkeIhVb3',
+                    email: 'abhinandanb@modelatech.com',
+                    name: 'Abhinandan Baitalik',
+                  });
+                }
+                return true;
               }
               if (email === 'modelatech2026@gmail.com') return true;
               return !isMemberDeleted({
