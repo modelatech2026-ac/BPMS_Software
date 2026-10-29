@@ -407,10 +407,13 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         const requestPayload = {
           id: finalDocId,
           uid: finalDocId,
+          applicantName: cleanName,
           fullName: cleanName,
           name: cleanName,
           email: cleanEmail,
           status: 'pending',
+          submittedAt: isoTimestamp,
+          createdAt: isoTimestamp,
           requestedAt: isoTimestamp,
           timestamp: isoTimestamp,
           requestTimestamp: isoTimestamp,

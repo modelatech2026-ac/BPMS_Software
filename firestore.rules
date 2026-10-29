@@ -51,7 +51,8 @@ service cloud.firestore {
 
     function isValidAccessRequestCreate(data) {
       return isValidEmailString(data.email)
-        && (('fullName' in data && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 150) ||
+        && (('applicantName' in data && data.applicantName is string && data.applicantName.size() >= 1 && data.applicantName.size() <= 150) ||
+            ('fullName' in data && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 150) ||
             ('name' in data && data.name is string && data.name.size() >= 1 && data.name.size() <= 150))
         && (!('status' in data) ||
             data.status in ['Pending', 'pending', 'PENDING'] ||
