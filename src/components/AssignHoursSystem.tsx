@@ -907,6 +907,22 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     );
   }, [currentUser, isSuperAdmin]);
 
+  const isViewer = useMemo(() => {
+    if (isSuperAdmin || isFullAccessRole) return false;
+    if (!currentUser) return false;
+    const role = (currentUser.role || '').toUpperCase();
+    const appRole = (currentUser.appRole || '').toUpperCase();
+    const accessLevel = (currentUser.accessLevel || '').toUpperCase();
+    const securityRole = (currentUser.securityRole || '').toUpperCase();
+    return (
+      role === 'VIEWER' ||
+      role === 'VIEWER' ||
+      appRole === 'VIEWER' ||
+      accessLevel === 'VIEWER' ||
+      securityRole === 'VIEWER'
+    );
+  }, [currentUser, isSuperAdmin, isFullAccessRole]);
+
   const viewerMatchedEmployees = useMemo(() => {
     if (!currentUser) return [];
     const userId = (currentUser.id || '').trim();
@@ -1894,72 +1910,74 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           </div>
         </div>
 
-        {/* Primary Top Metrics */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-5 pt-5 border-t border-slate-800">
-          <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                Assigned / Allocated Hours
-              </span>
-              {workspaceMetrics.allocatedHours > 0 && (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30">
-                  {canManageAllocations ? 'Work Assigned to Team' : 'Work Assigned to You'}
+        {/* Primary Top Metrics (Hidden for Viewer Role) */}
+        {!isViewer && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-5 pt-5 border-t border-slate-800">
+            <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                  Assigned / Allocated Hours
                 </span>
-              )}
-            </div>
-            <div className="flex items-baseline justify-between mt-1">
-              <div className="text-xl font-bold text-blue-400 font-mono">
-                {workspaceMetrics.allocatedHours.toFixed(1)} <span className="text-xs font-normal text-slate-400">hrs</span>
+                {workspaceMetrics.allocatedHours > 0 && (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                    {canManageAllocations ? 'Work Assigned to Team' : 'Work Assigned to You'}
+                  </span>
+                )}
               </div>
-              <Clock className="w-4 h-4 text-blue-400" />
+              <div className="flex items-baseline justify-between mt-1">
+                <div className="text-xl font-bold text-blue-400 font-mono">
+                  {workspaceMetrics.allocatedHours.toFixed(1)} <span className="text-xs font-normal text-slate-400">hrs</span>
+                </div>
+                <Clock className="w-4 h-4 text-blue-400" />
+              </div>
+              <div className="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden mt-1.5">
+                <div
+                  className="bg-blue-500 h-full rounded-full"
+                  style={{ width: `${Math.min(100, workspaceMetrics.utilizationPct)}%` }}
+                />
+              </div>
             </div>
-            <div className="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden mt-1.5">
-              <div
-                className="bg-blue-500 h-full rounded-full"
-                style={{ width: `${Math.min(100, workspaceMetrics.utilizationPct)}%` }}
-              />
-            </div>
-          </div>
 
-          <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                Available Remaining Hours
-              </span>
-              <span className="text-[10px] font-semibold font-mono bg-emerald-500/15 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30">
-                {workspaceMetrics.loggedHours > 0
-                  ? `Daily Hours Logged • Hours Logged: ${workspaceMetrics.loggedHours.toFixed(1)}h`
-                  : `Hours Logged: 0.0h`}
-              </span>
-            </div>
-            <div className="flex items-baseline justify-between mt-1">
-              <div className={`text-xl font-bold font-mono ${
-                workspaceMetrics.remainingHours < 0
-                  ? 'text-rose-400'
-                  : workspaceMetrics.remainingHours < 20
-                  ? 'text-amber-400'
-                  : 'text-emerald-400'
-              }`}>
-                {workspaceMetrics.remainingHours.toFixed(1)} <span className="text-xs font-normal text-slate-400">hrs</span>
+            <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                  Available Remaining Hours
+                </span>
+                <span className="text-[10px] font-semibold font-mono bg-emerald-500/15 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30">
+                  {workspaceMetrics.loggedHours > 0
+                    ? `Daily Hours Logged • Hours Logged: ${workspaceMetrics.loggedHours.toFixed(1)}h`
+                    : `Hours Logged: 0.0h`}
+                </span>
               </div>
-              <CheckCircle2 className={`w-4 h-4 ${
-                workspaceMetrics.remainingHours < 0
-                  ? 'text-rose-400'
-                  : workspaceMetrics.remainingHours < 20
-                  ? 'text-amber-400'
-                  : 'text-emerald-400'
-              }`} />
+              <div className="flex items-baseline justify-between mt-1">
+                <div className={`text-xl font-bold font-mono ${
+                  workspaceMetrics.remainingHours < 0
+                    ? 'text-rose-400'
+                    : workspaceMetrics.remainingHours < 20
+                    ? 'text-amber-400'
+                    : 'text-emerald-400'
+                }`}>
+                  {workspaceMetrics.remainingHours.toFixed(1)} <span className="text-xs font-normal text-slate-400">hrs</span>
+                </div>
+                <CheckCircle2 className={`w-4 h-4 ${
+                  workspaceMetrics.remainingHours < 0
+                    ? 'text-rose-400'
+                    : workspaceMetrics.remainingHours < 20
+                    ? 'text-amber-400'
+                    : 'text-emerald-400'
+                }`} />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1 flex items-center justify-between">
+                <span>{workspaceMetrics.allocatedHours.toFixed(1)}h assigned − {workspaceMetrics.loggedHours.toFixed(1)}h logged</span>
+                <span className="font-mono text-slate-500">
+                  {workspaceMetrics.allocatedHours > 0
+                    ? `${Math.round((workspaceMetrics.loggedHours / workspaceMetrics.allocatedHours) * 100)}% logged`
+                    : '0% logged'}
+                </span>
+              </p>
             </div>
-            <p className="text-[10px] text-slate-400 mt-1 flex items-center justify-between">
-              <span>{workspaceMetrics.allocatedHours.toFixed(1)}h assigned − {workspaceMetrics.loggedHours.toFixed(1)}h logged</span>
-              <span className="font-mono text-slate-500">
-                {workspaceMetrics.allocatedHours > 0
-                  ? `${Math.round((workspaceMetrics.loggedHours / workspaceMetrics.allocatedHours) * 100)}% logged`
-                  : '0% logged'}
-              </span>
-            </p>
           </div>
-        </div>
+        )}
       </div>
 
       {/* REDESIGNED SEARCH & 2-DROPDOWN FILTER SYSTEM */}
@@ -2229,7 +2247,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <tr>
                 <th className="py-3 px-3.5 min-w-[200px]">Team Member</th>
                 <th className="py-3 px-3 min-w-[180px]">Project</th>
-                <th className="py-3 px-3 min-w-[130px]">Assigned Hours</th>
+                {!isViewer && <th className="py-3 px-3 min-w-[130px]">Assigned Hours</th>}
                 <th className="py-3 px-3 min-w-[130px]">Logged Hours</th>
                 <th className="py-3 px-3 min-w-[160px]">Timeline (Start - Due)</th>
                 <th className="py-3 px-3.5 text-right min-w-[90px]">Action</th>
@@ -2238,7 +2256,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             <tbody className="divide-y divide-slate-800 font-normal">
               {filteredAllocations.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-500">
+                  <td colSpan={!isViewer ? 6 : 5} className="py-12 text-center text-slate-500">
                     <p className="text-sm font-semibold text-slate-400">No resource hour allocations found.</p>
                     <p className="text-xs text-slate-500 mt-1">
                       {filterStartDate || filterEndDate
@@ -2472,27 +2490,29 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         </div>
                       </td>
 
-                      {/* Assigned Hours (Inline Editable for Admins, Read-Only for Viewers) */}
-                      <td className="py-3 px-3">
-                        {canManageAllocations ? (
-                          <div className="flex items-center gap-1.5">
-                            <input
-                              type="number"
-                              min={0.5}
-                              step={0.5}
-                              value={alloc.assignedHours}
-                              onChange={(e) => handleInlineHoursChange(alloc.id, parseFloat(e.target.value) || 0)}
-                              className="w-16 px-2 py-1 text-xs font-mono font-bold rounded bg-slate-800 border border-slate-700 text-white text-center focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            />
-                            <span className="text-[10px] text-slate-400">hrs</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-white">
-                            <span>{Number(alloc.assignedHours || 0).toFixed(1)}</span>
-                            <span className="text-[10px] font-normal text-slate-400">hrs</span>
-                          </div>
-                        )}
-                      </td>
+                      {/* Assigned Hours (Hidden for Viewer Role) */}
+                      {!isViewer && (
+                        <td className="py-3 px-3">
+                          {canManageAllocations ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                min={0.5}
+                                step={0.5}
+                                value={alloc.assignedHours}
+                                onChange={(e) => handleInlineHoursChange(alloc.id, parseFloat(e.target.value) || 0)}
+                                className="w-16 px-2 py-1 text-xs font-mono font-bold rounded bg-slate-800 border border-slate-700 text-white text-center focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              />
+                              <span className="text-[10px] text-slate-400">hrs</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-white">
+                              <span>{Number(alloc.assignedHours || 0).toFixed(1)}</span>
+                              <span className="text-[10px] font-normal text-slate-400">hrs</span>
+                            </div>
+                          )}
+                        </td>
+                      )}
 
                       {/* Logged Hours */}
                       <td className="py-3 px-3">
