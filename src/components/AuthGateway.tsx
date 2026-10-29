@@ -29,7 +29,7 @@ import {
   mapAppRoleToDisplayRole,
   mapUserRoleToSecurityRole,
 } from '../auth/googleAuth';
-import { generateRequestDocId } from '../auth/roleSync';
+import { generateRequestDocId, fetchUserRoleFromDatabase } from '../auth/roleSync';
 import { AccessLevel } from '../types';
 
 interface AuthGatewayProps {
@@ -337,41 +337,67 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
         const alreadyApprovedReq = onboardingRequests.find(
           (r) =>
             (r.email || '').trim().toLowerCase() === cleanEmail &&
-            (r.status || '').toUpperCase() === 'APPROVED'
+            ((r.status || '').toUpperCase() === 'APPROVED' || (r.status || '').toLowerCase() === 'active' || r.isApproved === true)
         );
 
-        if (isSuperAdminEmail(cleanEmail) || alreadyApprovedReq) {
+        const dbRecord = await fetchUserRoleFromDatabase(cleanEmail);
+        const isDbApproved =
+          dbRecord.isApproved ||
+          dbRecord.status === 'APPROVED' ||
+          dbRecord.status === 'active' ||
+          dbRecord.source === 'super_admin';
+
+        if (isSuperAdminEmail(cleanEmail) || alreadyApprovedReq || isDbApproved) {
+          // Clear stale pending request local storage caches upon login attempt
+          try {
+            ['bim_pending_access_requests_v1', 'bim_tracker_onboarding_v7'].forEach((reqKey) => {
+              const pendingCache = localStorage.getItem(reqKey);
+              if (pendingCache) {
+                const reqs = JSON.parse(pendingCache);
+                if (Array.isArray(reqs)) {
+                  const cleaned = reqs.map((r: any) => {
+                    if ((r?.email || '').trim().toLowerCase() === cleanEmail) {
+                      return { ...r, status: 'APPROVED', isApproved: true };
+                    }
+                    return r;
+                  });
+                  localStorage.setItem(reqKey, JSON.stringify(cleaned));
+                }
+              }
+            });
+          } catch {}
+
           const resolvedRole = normalizeUserRole(
-            alreadyApprovedReq?.assignedRole || alreadyApprovedReq?.role,
+            dbRecord.role || alreadyApprovedReq?.assignedRole || alreadyApprovedReq?.role,
             isSuperAdminEmail(cleanEmail)
           );
-          const preloadedRecord = alreadyApprovedReq
-            ? {
-                role: resolvedRole,
-                status: 'APPROVED' as const,
-                accessLevel:
-                  (alreadyApprovedReq.assignedAccessLevel as AccessLevel) ||
-                  mapAppRoleToAccessLevel(resolvedRole),
-                displayRole: mapAppRoleToDisplayRole(resolvedRole),
-                securityRole: mapUserRoleToSecurityRole(resolvedRole),
-                name: alreadyApprovedReq.name || cleanName,
-                discipline: alreadyApprovedReq.discipline || userDiscipline,
-                source: 'local_db' as const,
-                isApproved: true,
-                id: alreadyApprovedReq.id || generatedUid,
-              }
-            : undefined;
+
+          const preloadedRecord = {
+            role: resolvedRole,
+            status: 'APPROVED' as const,
+            accessLevel:
+              dbRecord.accessLevel ||
+              (alreadyApprovedReq?.assignedAccessLevel as AccessLevel) ||
+              mapAppRoleToAccessLevel(resolvedRole),
+            displayRole: dbRecord.displayRole || mapAppRoleToDisplayRole(resolvedRole),
+            securityRole: dbRecord.securityRole || mapUserRoleToSecurityRole(resolvedRole),
+            name: dbRecord.name || alreadyApprovedReq?.name || cleanName,
+            discipline: dbRecord.discipline || alreadyApprovedReq?.discipline || userDiscipline,
+            source: dbRecord.source || ('local_db' as const),
+            isApproved: true,
+            id: dbRecord.id || alreadyApprovedReq?.id || generatedUid,
+          };
 
           const result = await submitAccessRequest({
-            name: cleanName,
+            name: preloadedRecord.name || cleanName,
             email: cleanEmail,
-            uid: alreadyApprovedReq?.id || generatedUid,
+            uid: preloadedRecord.id || generatedUid,
             existingDbRecord: preloadedRecord,
             skipFirestoreWrite: true,
           });
 
           // Sync login activity in background without blocking navigation
-          const targetId = alreadyApprovedReq?.id || generatedUid;
+          const targetId = preloadedRecord.id || generatedUid;
           setDoc(
             doc(db, 'access_requests', targetId),
             {
@@ -380,6 +406,8 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
               name: cleanName,
               fullName: cleanName,
               email: cleanEmail,
+              status: 'APPROVED',
+              isApproved: true,
               lastLoginAt: isoTimestamp,
               lastActive: isoTimestamp,
               updatedAt: isoTimestamp,
@@ -387,9 +415,28 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({
             { merge: true }
           ).catch(() => {});
 
-          if (result.status === 'APPROVED') {
+          setDoc(
+            doc(db, 'users', targetId),
+            {
+              id: targetId.startsWith('emp-') ? targetId : `emp-${targetId}`,
+              email: cleanEmail,
+              name: cleanName,
+              fullName: cleanName,
+              role: resolvedRole,
+              appRole: resolvedRole,
+              assignedRole: resolvedRole,
+              status: 'active',
+              isApproved: true,
+              accessLevel: preloadedRecord.accessLevel,
+              discipline: preloadedRecord.discipline || 'BIM - ACS',
+              updatedAt: isoTimestamp,
+            },
+            { merge: true }
+          ).catch(() => {});
+
+          if (result.status === 'APPROVED' || isDbApproved) {
             const targetRoute =
-              result.user?.appRole === 'VIEWER'
+              result.user?.appRole === 'VIEWER' || resolvedRole === 'VIEWER'
                 ? '/daily-tracker'
                 : attemptedRoute || '/dashboard';
             if (onLoginSuccess) {

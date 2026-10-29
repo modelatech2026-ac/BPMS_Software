@@ -448,6 +448,7 @@ export async function persistUserRoleToDatabase(params: {
   }
 
   // 4. Persist to Firestore 'access_requests', 'accessRequests', and 'users' + server SSE store
+  const isApprovedFlag = normalizedStatus === 'APPROVED';
   const updatePayload: Record<string, any> = {
     email: cleanEmail,
     name: params.name || cleanEmail.split('@')[0],
@@ -458,7 +459,8 @@ export async function persistUserRoleToDatabase(params: {
     assignedAccessLevel: calculatedAccessLevel,
     discipline: params.discipline || 'BIM - ACS',
     primaryDiscipline: params.discipline || 'BIM - ACS',
-    status: firestoreRequestStatus,
+    status: isApprovedFlag ? 'approved' : firestoreRequestStatus,
+    isApproved: isApprovedFlag,
     reviewedBy:
       normalizedStatus === 'PENDING'
         ? null
@@ -490,7 +492,8 @@ export async function persistUserRoleToDatabase(params: {
     role: validatedRole,
     appRole: validatedRole,
     assignedRole: validatedRole,
-    status: normalizedStatus,
+    status: isApprovedFlag ? 'active' : normalizedStatus,
+    isApproved: isApprovedFlag,
     accessLevel: calculatedAccessLevel,
     assignedAccessLevel: calculatedAccessLevel,
     discipline: params.discipline || 'BIM - ACS',
