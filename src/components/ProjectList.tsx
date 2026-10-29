@@ -310,8 +310,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       (p.disciplines || []).some(
         (d) =>
           d === disciplineFilter ||
+          d.toLowerCase() === disciplineFilter.toLowerCase() ||
           (disciplineFilter === 'BIM - ACS' && (d === 'BIM - ACS' || d === ('Architecture' as any)))
-      );
+      ) ||
+      (p.typology || '').toLowerCase().includes(disciplineFilter.toLowerCase());
     return matchesScope && matchesSearch && matchesStatus && matchesDiscipline;
   });
 
@@ -421,6 +423,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
             >
               <option value="all" className="bg-slate-900">All Disciplines</option>
               <option value="BIM - ACS" className="bg-slate-900">BIM - ACS</option>
+              <option value="SCAN TO BIM" className="bg-slate-900">SCAN TO BIM</option>
+              <option value="CAD" className="bg-slate-900">CAD</option>
               <option value="Structure" className="bg-slate-900">Structure</option>
               <option value="MEP - HVAC" className="bg-slate-900">MEP - HVAC</option>
               <option value="MEP - Electrical" className="bg-slate-900">MEP - Electrical</option>
@@ -484,14 +488,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                     </div>
                   </th>
                   <th className="py-3 px-3 min-w-[120px]">Difference</th>
-                  <th className="py-3 px-3 min-w-[110px]">Hours Burn</th>
                   <th className="py-3 px-3 text-right min-w-[110px]">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {filteredProjects.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-12 text-center text-slate-500">
+                    <td colSpan={8} className="py-12 text-center text-slate-500">
                       <p className="text-sm font-semibold text-slate-400">No projects found.</p>
                       <p className="text-xs text-slate-500 mt-1">Click "Add Project" to get started.</p>
                     </td>
@@ -783,50 +786,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                           </span>
                         </td>
 
-                        {/* Hours Burn % & Remaining Hours */}
-                        <td className="py-2.5 px-3">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <div className="w-14 bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full ${isOver || isZeroEstOver ? 'bg-amber-500' : 'bg-blue-500'}`}
-                                  style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-                                />
-                              </div>
-                              <span className={`text-[11px] font-bold ${isOver || isZeroEstOver ? 'text-amber-400' : 'text-slate-300'}`}>
-                                {pct}%
-                              </span>
-                            </div>
-                            <div className="text-[10px] font-mono text-slate-400 whitespace-nowrap">
-                              {remainingHours < 0 ? (
-                                <>
-                                  Over:{' '}
-                                  <span className="text-amber-400 font-semibold">
-                                    {Math.abs(remainingHours).toFixed(1)}h
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  Rem:{' '}
-                                  <span className="text-slate-300 font-semibold">
-                                    {remainingHours.toFixed(1)}h
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-
                         {/* Action */}
                         <td className="py-2.5 px-3 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => onOpenReportModalWithProject(project.id)}
-                              className="p-1.5 text-purple-400 hover:text-purple-300 hover:bg-purple-950/40 rounded transition"
-                              title="Generate Stakeholder Report"
-                            >
-                              <Sparkles className="w-3.5 h-3.5" />
-                            </button>
                             <button
                               onClick={() => onSelectProject(project)}
                               className="px-2.5 py-1 rounded bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white transition font-medium text-[11px]"
