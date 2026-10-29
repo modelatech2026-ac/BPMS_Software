@@ -680,9 +680,39 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     return false;
   };
 
-  // Dynamic current week range (Monday - Sunday) based on new Date()
-  const currentWeekRange = useMemo(() => getCurrentWeekRange(new Date()), []);
+  const [matrixSelectedDate, setMatrixSelectedDate] = useState<string>(() => toLocalIsoDate(new Date()));
+  const [matrixCustomStartDate, setMatrixCustomStartDate] = useState('');
+  const [matrixCustomEndDate, setMatrixCustomEndDate] = useState('');
+
+  // Dynamic current week range based on matrixSelectedDate
+  const currentWeekRange = useMemo(() => {
+    if (!matrixSelectedDate) return getCurrentWeekRange(new Date());
+    const [y, m, d] = matrixSelectedDate.split('-').map(Number);
+    if (y && m && d) {
+      return getCurrentWeekRange(new Date(y, m - 1, d));
+    }
+    return getCurrentWeekRange(new Date());
+  }, [matrixSelectedDate]);
+
   const weekDays = useMemo(() => currentWeekRange.days, [currentWeekRange]);
+
+  const handlePrevWeek = () => {
+    const [y, m, d] = (matrixSelectedDate || toLocalIsoDate(new Date())).split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    date.setDate(date.getDate() - 7);
+    setMatrixSelectedDate(toLocalIsoDate(date));
+  };
+
+  const handleNextWeek = () => {
+    const [y, m, d] = (matrixSelectedDate || toLocalIsoDate(new Date())).split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    date.setDate(date.getDate() + 7);
+    setMatrixSelectedDate(toLocalIsoDate(date));
+  };
+
+  const handleResetToCurrentWeek = () => {
+    setMatrixSelectedDate(toLocalIsoDate(new Date()));
+  };
 
   // Real-time onSnapshot listener on Firestore 'users' collection for instant matrix synchronization
   const [firestoreUsers, setFirestoreUsers] = useState<Employee[]>([]);
@@ -1168,8 +1198,16 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       // When user is a Viewer, unifiedSourceLogs is already isolated strictly to this single user's records.
       // Otherwise, match using doesLogMatchEmployee and authoritative ownership validation.
       const empAllLogs = matrixLogs.filter((w) => {
-        if (isViewer) return true;
-        return doesLogMatchEmployee(w, user) || isRecordOwnedByMember(w, user as any, employees);
+        const matchesMember = isViewer
+          ? true
+          : doesLogMatchEmployee(w, user) || isRecordOwnedByMember(w, user as any, employees);
+        if (!matchesMember) return false;
+
+        const logDateIso = getLogNormalizedDateKey(w);
+        if (matrixCustomStartDate && logDateIso < matrixCustomStartDate) return false;
+        if (matrixCustomEndDate && logDateIso > matrixCustomEndDate) return false;
+
+        return true;
       });
 
       // Aggregate daily hours across the Monday-Sunday week columns
@@ -1216,6 +1254,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     weekDays,
     isViewer,
     employees,
+    matrixCustomStartDate,
+    matrixCustomEndDate,
   ]);
 
   useEffect(() => {
@@ -1425,7 +1465,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       </div>
 
       {/* View Switcher & Quick Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -1456,30 +1496,6 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
           </div>
           <div className="w-10 h-10 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
             <Clock className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400 font-semibold uppercase">Logged Entries</span>
-              {filteredLogs.length > 0 && (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  Daily Hours Logged
-                </span>
-              )}
-            </div>
-            <div className="flex items-baseline gap-2 mt-1">
-              <p className="text-2xl font-bold text-white">{filteredLogs.length} Records</p>
-              {testCount > 0 && logTypeFilter === 'all' && (
-                <span className="text-[11px] font-semibold text-amber-300">
-                  ({testCount} Test)
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-            <FileSpreadsheet className="w-5 h-5" />
           </div>
         </div>
 
@@ -1577,8 +1593,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       {/* Matrix View: Employee rows across days of the week */}
       {activeView === 'matrix' && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-          <div className="p-4 border-b border-slate-800 flex items-center justify-between text-xs text-slate-300 bg-slate-800/40">
-            <div className="flex items-center gap-2">
+          <div className="p-4 border-b border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between text-xs text-slate-300 bg-slate-800/40 gap-3">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold text-white">
                 {isViewer
                   ? `My Weekly Timesheet Matrix (${currentWeekRange.label})`
@@ -1590,7 +1606,89 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 </span>
               )}
             </div>
-            <span className="text-slate-400">Standard Target: 40.0 hrs / week</span>
+
+            {/* Calendar & Date Range Filter Control Bar */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Previous / Next Week Navigation */}
+              <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg p-1">
+                <button
+                  type="button"
+                  onClick={handlePrevWeek}
+                  className="p-1 hover:bg-slate-700 text-slate-300 rounded transition"
+                  title="Previous Week"
+                  aria-label="Previous Week"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetToCurrentWeek}
+                  className="px-2 py-0.5 text-[11px] font-medium hover:bg-slate-700 text-slate-200 rounded transition"
+                  title="Reset to Current Week"
+                >
+                  This Week
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNextWeek}
+                  className="p-1 hover:bg-slate-700 text-slate-300 rounded transition"
+                  title="Next Week"
+                  aria-label="Next Week"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Target Week Calendar Picker */}
+              <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg text-xs">
+                <Calendar className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                <span className="text-slate-400 font-medium hidden sm:inline">Week Of:</span>
+                <input
+                  type="date"
+                  aria-label="Select target week date"
+                  value={matrixSelectedDate}
+                  onChange={(e) => setMatrixSelectedDate(e.target.value)}
+                  className="bg-transparent text-slate-200 font-medium text-xs focus:outline-none cursor-pointer"
+                  title="Select date to filter weekly timesheet matrix"
+                />
+              </div>
+
+              {/* Range Filter Controls (Start / End Date) */}
+              <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 px-2 py-1 rounded-lg text-xs">
+                <span className="text-slate-400 font-medium">Range:</span>
+                <input
+                  type="date"
+                  aria-label="Filter matrix start date"
+                  value={matrixCustomStartDate}
+                  onChange={(e) => setMatrixCustomStartDate(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 text-slate-200 text-[11px] rounded px-1.5 py-0.5 focus:outline-none w-28 cursor-pointer"
+                  title="Filter matrix entries starting from this date"
+                />
+                <span className="text-slate-500">-</span>
+                <input
+                  type="date"
+                  aria-label="Filter matrix end date"
+                  value={matrixCustomEndDate}
+                  onChange={(e) => setMatrixCustomEndDate(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 text-slate-200 text-[11px] rounded px-1.5 py-0.5 focus:outline-none w-28 cursor-pointer"
+                  title="Filter matrix entries up to this date"
+                />
+                {(matrixCustomStartDate || matrixCustomEndDate) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMatrixCustomStartDate('');
+                      setMatrixCustomEndDate('');
+                    }}
+                    className="p-0.5 text-slate-400 hover:text-white rounded hover:bg-slate-700 transition"
+                    title="Clear Date Range Filter"
+                    aria-label="Clear date range filter"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
