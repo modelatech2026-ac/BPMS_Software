@@ -6,6 +6,8 @@ export type Discipline =
   | 'MEP - HVAC'
   | 'MEP - Electrical'
   | 'MEP - Plumbing'
+  | 'CAD'
+  | 'SES'
   | 'Fire Protection'
   | 'Façade / Envelope'
   | 'Coordination & QA'
@@ -19,6 +21,9 @@ export const PRIMARY_DISCIPLINES = [
   "MEP - HVAC",
   "MEP - Electrical",
   "MEP - Plumbing",
+  "CAD",
+  "SES",
+  "MEP",
   "Fire Protection",
   "Façade / Envelope",
   "Coordination & QA",

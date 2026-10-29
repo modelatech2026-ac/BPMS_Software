@@ -150,6 +150,8 @@ export const DisciplineDistributionChart: React.FC<{
     'MEP - HVAC': 'bg-cyan-500 text-cyan-400',
     'MEP - Electrical': 'bg-amber-500 text-amber-400',
     'MEP - Plumbing': 'bg-indigo-500 text-indigo-400',
+    'CAD': 'bg-amber-500 text-amber-400',
+    'SES': 'bg-fuchsia-500 text-fuchsia-400',
     'Fire Protection': 'bg-rose-500 text-rose-400',
     'Façade / Envelope': 'bg-purple-500 text-purple-400',
     'Coordination & QA': 'bg-orange-500 text-orange-400',

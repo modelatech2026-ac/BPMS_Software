@@ -613,8 +613,8 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
         </div>
       </div>
 
-      {/* 1. TOP METRICS BAR (Active Projects, Revenue/Hours, Team Members, Utilization) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* 1. TOP METRICS BAR (Active Projects, Revenue/Hours, Team Members) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Metric 1: Active Projects */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 text-slate-100 shadow-sm relative overflow-hidden">
           <div className="flex items-center justify-between">
@@ -695,36 +695,6 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
               <span className="text-xs text-emerald-400 font-medium">
                 {scopedEmployees.length > 0 ? '100% Assigned' : 'No Specialists Assigned'}
               </span>
-            </div>
-            <div className="flex items-center justify-between mt-2 text-xs text-slate-400">
-              <span>{totalTeamCapacity}h / week total cap</span>
-              <span className="text-blue-400 font-medium">6 Trade Disciplines</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Metric 4: Utilization Rate */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 text-slate-100 shadow-sm relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Fleet Utilization Rate
-            </span>
-            <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/20">
-              <Gauge className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-amber-400">
-                {fleetUtilizationRate}%
-              </span>
-              <span className="text-xs text-slate-400">Target &ge; 85%</span>
-            </div>
-            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden mt-2">
-              <div
-                className="h-full bg-amber-500 rounded-full transition-all duration-700"
-                style={{ width: `${fleetUtilizationRate}%` }}
-              />
             </div>
           </div>
         </div>
