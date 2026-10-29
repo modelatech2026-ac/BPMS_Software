@@ -27,8 +27,8 @@ import {
 } from 'lucide-react';
 import { collection, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
-import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS, ResourceAllocationItem } from '../types';
+import { useBimData, isUserSuperAdmin, sanitizeWorkLogRecord, doesLogBelongToProject } from '../context/BimDataContext';
+import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS, ResourceAllocationItem, DailyWorkLog } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 
 interface ProjectListProps {
@@ -60,6 +60,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const {
     projects,
     workLogs,
+    allWorkLogs,
     resourceAllocations,
     getProjectCompletedHours,
     employees,
@@ -195,6 +196,90 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       )
       .reduce((sum, alloc) => sum + (Number(alloc.assignedHours) || 0), 0);
   };
+
+  // Direct real-time Firestore onSnapshot subscription for work_logs & daily_logs
+  const [liveWorkLogs, setLiveWorkLogs] = useState<DailyWorkLog[]>([]);
+
+  useEffect(() => {
+    let unsubWorkLogs: (() => void) | undefined;
+    let unsubDailyLogs: (() => void) | undefined;
+
+    const workLogsMap = new Map<string, DailyWorkLog>();
+    const dailyLogsMap = new Map<string, DailyWorkLog>();
+
+    const parseLogDoc = (docSnap: any): DailyWorkLog => {
+      const data = docSnap.data() || {};
+      return sanitizeWorkLogRecord({
+        id: docSnap.id,
+        employeeId: data.employeeId || data.memberId || '',
+        memberId: data.memberId || data.employeeId || '',
+        employeeName: data.employeeName || 'BIM Modeler',
+        projectId: data.projectId || '',
+        projectName: data.projectName || '',
+        discipline: data.discipline || 'BIM - ACS',
+        activityType: data.activityType || '3D Detailed Modeling',
+        taskName: data.taskName || '',
+        lodStage: data.lodStage || 'LOD 350',
+        hoursLogged: Number(data.hoursLogged !== undefined ? data.hoursLogged : data.hours) || 0,
+        notes: data.notes || '',
+        billable: data.billable !== undefined ? Boolean(data.billable) : true,
+        isTestEntry: Boolean(data.isTestEntry ?? false),
+        date: data.date || '',
+        timestamp: data.timestamp || '',
+      });
+    };
+
+    const syncLogsSnapshots = () => {
+      const merged = new Map<string, DailyWorkLog>();
+      workLogsMap.forEach((v, k) => merged.set(k, v));
+      dailyLogsMap.forEach((v, k) => merged.set(k, v));
+      setLiveWorkLogs(Array.from(merged.values()));
+    };
+
+    try {
+      unsubWorkLogs = onSnapshot(
+        collection(db, 'work_logs'),
+        (snap) => {
+          workLogsMap.clear();
+          snap.docs.forEach((docSnap) => workLogsMap.set(docSnap.id, parseLogDoc(docSnap)));
+          syncLogsSnapshots();
+        },
+        (err) => console.warn('ProjectList work_logs listener notice:', err)
+      );
+
+      unsubDailyLogs = onSnapshot(
+        collection(db, 'daily_logs'),
+        (snap) => {
+          dailyLogsMap.clear();
+          snap.docs.forEach((docSnap) => dailyLogsMap.set(docSnap.id, parseLogDoc(docSnap)));
+          syncLogsSnapshots();
+        },
+        (err) => console.warn('ProjectList daily_logs listener notice:', err)
+      );
+    } catch (e) {
+      console.warn('ProjectList work_logs setup notice:', e);
+    }
+
+    return () => {
+      if (unsubWorkLogs) unsubWorkLogs();
+      if (unsubDailyLogs) unsubDailyLogs();
+    };
+  }, []);
+
+  const combinedWorkLogs = useMemo(() => {
+    const map = new Map<string, DailyWorkLog>();
+    (allWorkLogs || []).forEach((w) => map.set(w.id, w));
+    (workLogs || []).forEach((w) => map.set(w.id, w));
+    liveWorkLogs.forEach((w) => map.set(w.id, w));
+    return Array.from(map.values());
+  }, [allWorkLogs, workLogs, liveWorkLogs]);
+
+  // Aggregate total Logged Hours for a target project dynamically
+  const getProjectDynamicLoggedHours = (project: BimProject): number => {
+    return combinedWorkLogs
+      .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, project))
+      .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+  };
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [disciplineFilter, setDisciplineFilter] = useState<string>('all');
@@ -318,7 +403,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   });
 
   // Calculate total portfolio stats
-  const totalLoggedHours = activePortfolioProjects.reduce((sum, p) => sum + getProjectCompletedHours(p.id), 0);
+  const totalLoggedHours = activePortfolioProjects.reduce((sum, p) => sum + getProjectDynamicLoggedHours(p), 0);
   const totalEstimatedHours = activePortfolioProjects.reduce((sum, p) => sum + p.totalEstimatedHours, 0);
 
   return (
@@ -501,7 +586,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   </tr>
                 ) : (
                   filteredProjects.map((project) => {
-                    const completed = getProjectCompletedHours(project.id);
+                    const completed = getProjectDynamicLoggedHours(project);
                     const assignedHours = getProjectAssignedHours(project);
                     const estimated = Number(project.totalEstimatedHours) || 0;
                     const remainingHours = estimated - assignedHours;

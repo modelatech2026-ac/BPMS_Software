@@ -719,6 +719,85 @@ export const getCurrentWeekRange = (referenceDate: Date = new Date()): WeekRange
   };
 };
 
+export const matchProjectId = (idA?: string, idB?: string): boolean => {
+  if (!idA || !idB) return false;
+  if (idA === idB) return true;
+  const normA = idA.startsWith('proj-') ? idA : idA.replace(/^p(\d+)$/, 'proj-$1');
+  const normB = idB.startsWith('proj-') ? idB : idB.replace(/^p(\d+)$/, 'proj-$1');
+  return normA === normB;
+};
+
+export const doesLogBelongToProject = (
+  log: {
+    projectId?: string;
+    projectName?: string;
+    projectCode?: string;
+  },
+  project: {
+    id: string;
+    name?: string;
+    code?: string;
+  }
+): boolean => {
+  if (!log || !project) return false;
+
+  const logProjId = (log.projectId || '').trim();
+  const projId = (project.id || '').trim();
+
+  // 1. Direct ID match or normalized ID match (e.g. p1 vs proj-1)
+  if (logProjId && projId) {
+    if (logProjId === projId) return true;
+    if (matchProjectId(logProjId, projId)) return true;
+    const strippedLogId = logProjId.replace(/^proj-/, '').replace(/^p/, '');
+    const strippedProjId = projId.replace(/^proj-/, '').replace(/^p/, '');
+    if (strippedLogId && strippedProjId && strippedLogId === strippedProjId) return true;
+  }
+
+  // 2. Project Code match
+  const logCode = (log.projectCode || '').trim().toLowerCase();
+  const projCode = (project.code || '').trim().toLowerCase();
+  if (logCode && projCode) {
+    if (logCode === projCode || logCode.includes(projCode) || projCode.includes(logCode)) {
+      return true;
+    }
+  }
+
+  // 3. Project Name / Substring match
+  const logNameKey = (log.projectName || '')
+    .trim()
+    .replace(/^BIM[\s-_]+/i, '')
+    .trim()
+    .toLowerCase();
+  const projNameKey = (project.name || '')
+    .trim()
+    .replace(/^BIM[\s-_]+/i, '')
+    .trim()
+    .toLowerCase();
+
+  if (logNameKey && projNameKey) {
+    if (logNameKey === projNameKey) return true;
+    if (logNameKey.length >= 2 && projNameKey.length >= 2) {
+      if (projNameKey.includes(logNameKey) || logNameKey.includes(projNameKey)) {
+        return true;
+      }
+    }
+  }
+
+  // 4. Raw lowercased string check
+  const rawLogName = (log.projectName || '').trim().toLowerCase();
+  const rawProjName = (project.name || '').trim().toLowerCase();
+  if (rawLogName && rawProjName) {
+    if (rawLogName === rawProjName) return true;
+    if (rawLogName.length >= 2 && rawProjName.length >= 2) {
+      if (rawProjName.includes(rawLogName) || rawLogName.includes(rawProjName)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
+
 /**
  * Normalizes any date representation (ISO YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, ISO UTC string, Firestore Timestamp)
  * into a strict YYYY-MM-DD string without timezone-induced day shifts.
@@ -4464,41 +4543,20 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       window.dispatchEvent(new Event('popstate'));
     }
   };
-
   // Project Helpers
   const getProjectById = (id: string) => projects.find((p) => p.id === id);
   const getEmployeeById = (id: string) => employees.find((e) => e.id === id);
 
   const getProjectCompletedHours = (projectId: string): number => {
     const project = getProjectById(projectId);
-    const normProjName = project ? normalizeProjectNameKey(project.name) : '';
+    if (!project) return 0;
+
+    const sourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
 
     // Sum operational hours (excluding test entries) from all organizational workLogs for this project
-    const logged = (allWorkLogs || [])
-      .filter(
-        (w) =>
-          !w.isTestEntry &&
-          (w.projectId === projectId ||
-            (normProjName && normalizeProjectNameKey(w.projectName) === normProjName))
-      )
+    return sourceLogs
+      .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, project))
       .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
-
-    if (
-      project &&
-      project.manualHoursOverride !== undefined &&
-      project.manualHoursOverride !== null &&
-      !Number.isNaN(Number(project.manualHoursOverride))
-    ) {
-      const baseLogged =
-        project.manualHoursBaseLogged !== undefined && project.manualHoursBaseLogged !== null
-          ? Number(project.manualHoursBaseLogged)
-          : logged;
-      const deltaLogged = logged - baseLogged;
-      return Math.max(0, Number(project.manualHoursOverride) + deltaLogged);
-    }
-
-    const baseHours = project?.totalCompletedHours ?? 0;
-    return Math.max(logged, baseHours);
   };
 
   const getEmployeeLoggedHours = (

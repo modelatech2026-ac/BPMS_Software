@@ -1465,7 +1465,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       </div>
 
       {/* View Switcher & Quick Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className={`grid grid-cols-1 ${activeView === 'logs' ? 'md:grid-cols-3' : 'sm:grid-cols-2'} gap-4`}>
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -1498,6 +1498,31 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
             <Clock className="w-5 h-5" />
           </div>
         </div>
+
+        {/* IT Failure KPI Summary Card (Only shown in Detailed Log Records view) */}
+        {activeView === 'logs' && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400 font-semibold uppercase">
+                  IT FAILURE
+                </span>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                  IT Downtime Logged
+                </span>
+              </div>
+              <div className="flex items-baseline gap-2 mt-1">
+                <p className="text-2xl font-bold text-white">0.0 hrs</p>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  (0 Incidents Reported)
+                </span>
+              </div>
+            </div>
+            <div className="w-10 h-10 rounded-lg bg-rose-500/10 text-rose-400 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+          </div>
+        )}
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-100 flex items-center justify-between">
           <div>
@@ -1703,18 +1728,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                     </th>
                   ))}
                   <th className="p-3.5 text-right font-bold min-w-[100px]">Weekly Total</th>
-                  <th className="p-3.5 text-center min-w-[100px]">Capacity</th>
                   {!isViewer && <th className="p-3.5 text-right min-w-[90px]">Action</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {fullWeeklyMatrix.map(({ user: emp, empAllLogs, empWeekLogs, empActionLogs, weeklyTotals }) => {
                   const { weekSum, dailyHours } = weeklyTotals;
-
-                  const effectiveWeeklyLoad = weekSum;
-                  const capHours = emp.weeklyCapacityHours || 40;
-                  const capPct = Math.round((effectiveWeeklyLoad / capHours) * 100);
-                  const isOver = effectiveWeeklyLoad > capHours;
 
                   return (
                     <tr key={emp.id} className="hover:bg-slate-800/40 transition">
@@ -1777,20 +1796,6 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                             </span>
                           )}
                         </div>
-                      </td>
-
-                      <td className="p-3.5 text-center">
-                        <span
-                          className={`inline-block text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                            isOver
-                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                              : capPct >= 80
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}
-                        >
-                          {capPct}% {isOver && '⚡'}
-                        </span>
                       </td>
 
                       {!isViewer && (
