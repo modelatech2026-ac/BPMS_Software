@@ -1895,7 +1895,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         </div>
 
         {/* Primary Top Metrics */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 mt-5 pt-5 border-t border-slate-800">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-5 pt-5 border-t border-slate-800">
           <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
@@ -1957,21 +1957,6 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   ? `${Math.round((workspaceMetrics.loggedHours / workspaceMetrics.allocatedHours) * 100)}% logged`
                   : '0% logged'}
               </span>
-            </p>
-          </div>
-
-          <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-              Efficiency & Completion
-            </span>
-            <div className="flex items-baseline justify-between mt-1">
-              <div className="text-xl font-bold text-purple-400 font-mono">
-                {workspaceMetrics.completionRate}%
-              </div>
-              <TrendingUp className="w-4 h-4 text-purple-400" />
-            </div>
-            <p className="text-[10px] text-slate-400 mt-1">
-              {workspaceMetrics.completedHours}h completed / {workspaceMetrics.inProgressHours}h in progress
             </p>
           </div>
         </div>
