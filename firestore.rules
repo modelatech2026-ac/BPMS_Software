@@ -14,7 +14,9 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && request.auth.token.email != null && (
         request.auth.token.email.lower() == 'modelatech2026@gmail.com' ||
-        request.auth.token.email.lower() == 'sushoovandas@gmail.com'
+        request.auth.token.email.lower() == 'sushoovandas@gmail.com' ||
+        request.auth.token.email.lower() == 'sushovandas@gmail.com' ||
+        request.auth.token.email.lower() == 'sushovondas@gmail.com'
       );
     }
 
@@ -59,6 +61,8 @@ service cloud.firestore {
             isSuperAdmin() ||
             data.email.lower() == 'modelatech2026@gmail.com' ||
             data.email.lower() == 'sushoovandas@gmail.com' ||
+            data.email.lower() == 'sushovandas@gmail.com' ||
+            data.email.lower() == 'sushovondas@gmail.com' ||
             ('reviewedBy' in data && data.reviewedBy is string && data.reviewedBy.size() > 0));
     }
 
@@ -69,6 +73,8 @@ service cloud.firestore {
           isSuperAdmin() ||
           next.email.lower() == 'modelatech2026@gmail.com' ||
           next.email.lower() == 'sushoovandas@gmail.com' ||
+          next.email.lower() == 'sushovandas@gmail.com' ||
+          next.email.lower() == 'sushovondas@gmail.com' ||
           !('status' in next) ||
           next.status in ['Pending', 'pending', 'PENDING', 'Approved', 'approved', 'APPROVED', 'Rejected', 'rejected', 'REJECTED']
         );

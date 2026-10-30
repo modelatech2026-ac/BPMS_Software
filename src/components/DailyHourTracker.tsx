@@ -712,6 +712,16 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
   const [matrixCustomStartDate, setMatrixCustomStartDate] = useState('');
   const [matrixCustomEndDate, setMatrixCustomEndDate] = useState('');
 
+  // Ensure initial and per-session date range filter state defaults consistently to Current Week (full weekly scope)
+  // for all logged-in users, including both Super Admins (Aditi Chakraborty and Sushoovan Das)
+  useEffect(() => {
+    setMatrixSelectedDate(toLocalIsoDate(new Date()));
+    setMatrixCustomStartDate('');
+    setMatrixCustomEndDate('');
+    setStartDateFilter('');
+    setEndDateFilter('');
+  }, [currentUser?.email, currentUser?.id]);
+
   // Dynamic current week range based on matrixSelectedDate
   const currentWeekRange = useMemo(() => {
     if (!matrixSelectedDate) return getCurrentWeekRange(new Date());
@@ -729,6 +739,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const date = new Date(y, m - 1, d);
     date.setDate(date.getDate() - 7);
     setMatrixSelectedDate(toLocalIsoDate(date));
+    setMatrixCustomStartDate('');
+    setMatrixCustomEndDate('');
   };
 
   const handleNextWeek = () => {
@@ -736,10 +748,14 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const date = new Date(y, m - 1, d);
     date.setDate(date.getDate() + 7);
     setMatrixSelectedDate(toLocalIsoDate(date));
+    setMatrixCustomStartDate('');
+    setMatrixCustomEndDate('');
   };
 
   const handleResetToCurrentWeek = () => {
     setMatrixSelectedDate(toLocalIsoDate(new Date()));
+    setMatrixCustomStartDate('');
+    setMatrixCustomEndDate('');
   };
 
   // Real-time onSnapshot listener on Firestore 'users' & 'team_members' collections + SSOT for instant matrix synchronization
@@ -767,7 +783,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         lowerRawName.includes('sushoovan') ||
         lowerRawName.includes('sushovon') ||
         rawEmail === 'sushoovandas@gmail.com' ||
-        rawEmail === 'sushovandas@gmail.com';
+        rawEmail === 'sushovandas@gmail.com' ||
+        rawEmail === 'sushovondas@gmail.com';
       const isAditiSuper =
         !isSushovan &&
         (rawEmail === 'modelatech2026@gmail.com' ||
@@ -782,7 +799,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         : rawEmail;
       if (!name && !email) return null;
       const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
-      const resolvedRole = isAditiSuper
+      const resolvedRole = isAditiSuper || isSushovan
         ? 'SUPER_ADMIN'
         : normalizeUserRole(data.assignedRole || data.appRole || data.role || 'VIEWER', false);
       return sanitizeEmployeeRecord({
@@ -1001,8 +1018,75 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         (err) => console.warn('DailyHourTracker timesheets snapshot notice:', err)
       );
 
+      let sseSource: EventSource | undefined;
+      if (typeof EventSource !== 'undefined') {
+        sseSource = new EventSource('/api/ssot/stream');
+        sseSource.onmessage = (ev) => {
+          try {
+            const payload = JSON.parse(ev.data);
+            if (payload?.type === 'INIT_SSOT' && Array.isArray(payload.timesheets)) {
+              if (Array.isArray(payload.deletedLogIds)) {
+                payload.deletedLogIds.forEach((id: string) => deletedIds.add(String(id)));
+              }
+              ssotLogsMap.clear();
+              payload.timesheets.forEach((item: any) => {
+                if (item?.id) {
+                  const parsed = parseRawData(String(item.id), item);
+                  if (parsed) ssotLogsMap.set(parsed.id, parsed);
+                }
+              });
+              syncCombinedLogs();
+            } else if (payload?.type === 'UPSERT_TIMESHEETS' && Array.isArray(payload.timesheets)) {
+              payload.timesheets.forEach((item: any) => {
+                if (item?.id) {
+                  deletedIds.delete(String(item.id));
+                  const parsed = parseRawData(String(item.id), item);
+                  if (parsed) ssotLogsMap.set(parsed.id, parsed);
+                }
+              });
+              syncCombinedLogs();
+            } else if (payload?.type === 'DELETE_TIMESHEET' && payload?.id) {
+              const delId = String(payload.id);
+              deletedIds.add(delId);
+              ssotLogsMap.delete(delId);
+              workLogsMap.delete(delId);
+              dailyLogsMap.delete(delId);
+              timesheetsMap.delete(delId);
+              syncCombinedLogs();
+            }
+          } catch {}
+        };
+      }
+
+      let bcChannel: BroadcastChannel | undefined;
+      if (typeof BroadcastChannel !== 'undefined') {
+        bcChannel = new BroadcastChannel('bim_ssot_realtime_channel');
+        bcChannel.onmessage = (event) => {
+          const msg = event?.data;
+          if (!msg) return;
+          if (msg.type === 'UPSERT_LOG' && msg.log && msg.log.id) {
+            deletedIds.delete(String(msg.log.id));
+            const parsed = parseRawData(String(msg.log.id), msg.log);
+            if (parsed) {
+              ssotLogsMap.set(parsed.id, parsed);
+              syncCombinedLogs();
+            }
+          } else if (msg.type === 'DELETE_LOG' && msg.id) {
+            const delId = String(msg.id);
+            deletedIds.add(delId);
+            ssotLogsMap.delete(delId);
+            workLogsMap.delete(delId);
+            dailyLogsMap.delete(delId);
+            timesheetsMap.delete(delId);
+            syncCombinedLogs();
+          } else if (msg.type === 'REFRESH_SSOT') {
+            pollSsotState();
+          }
+        };
+      }
+
       pollSsotState();
-      pollTimer = setInterval(pollSsotState, 5000);
+      pollTimer = setInterval(pollSsotState, 3000);
     } catch (e) {
       console.warn('DailyHourTracker Firestore logs setup notice:', e);
     }
@@ -1326,6 +1410,12 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       // Determine matching logs for this matrix row:
       // When user is a Viewer, unifiedSourceLogs is already isolated strictly to this single user's records.
       // Otherwise, match using doesLogMatchEmployee and authoritative ownership validation.
+      // Prevent any single-day default window (e.g., 2026-10-29 - 2026-10-29) from hiding Mon-Wed entries in the Weekly Matrix
+      const isSingleDayClamp =
+        Boolean(matrixCustomStartDate && matrixCustomEndDate && matrixCustomStartDate === matrixCustomEndDate);
+      const effectiveStartFilter = isSingleDayClamp ? '' : matrixCustomStartDate;
+      const effectiveEndFilter = isSingleDayClamp ? '' : matrixCustomEndDate;
+
       const empAllLogs = matrixLogs.filter((w) => {
         const matchesMember = isViewer
           ? true
@@ -1333,8 +1423,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         if (!matchesMember) return false;
 
         const logDateIso = getLogNormalizedDateKey(w);
-        if (matrixCustomStartDate && logDateIso < matrixCustomStartDate) return false;
-        if (matrixCustomEndDate && logDateIso > matrixCustomEndDate) return false;
+        if (effectiveStartFilter && logDateIso < effectiveStartFilter) return false;
+        if (effectiveEndFilter && logDateIso > effectiveEndFilter) return false;
 
         return true;
       });
@@ -1801,7 +1891,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                   type="date"
                   aria-label="Select target week date"
                   value={matrixSelectedDate}
-                  onChange={(e) => setMatrixSelectedDate(e.target.value)}
+                  onChange={(e) => {
+                    setMatrixSelectedDate(e.target.value);
+                    setMatrixCustomStartDate('');
+                    setMatrixCustomEndDate('');
+                  }}
                   className="bg-transparent text-slate-200 font-medium text-xs focus:outline-none cursor-pointer"
                   title="Select date to filter weekly timesheet matrix"
                 />
@@ -1813,7 +1907,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <input
                   type="date"
                   aria-label="Filter matrix start date"
-                  value={matrixCustomStartDate}
+                  value={matrixCustomStartDate || currentWeekRange.startIso}
                   onChange={(e) => setMatrixCustomStartDate(e.target.value)}
                   className="bg-slate-900 border border-slate-700 text-slate-200 text-[11px] rounded px-1.5 py-0.5 focus:outline-none w-28 cursor-pointer"
                   title="Filter matrix entries starting from this date"
@@ -1822,7 +1916,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
                 <input
                   type="date"
                   aria-label="Filter matrix end date"
-                  value={matrixCustomEndDate}
+                  value={matrixCustomEndDate || currentWeekRange.endIso}
                   onChange={(e) => setMatrixCustomEndDate(e.target.value)}
                   className="bg-slate-900 border border-slate-700 text-slate-200 text-[11px] rounded px-1.5 py-0.5 focus:outline-none w-28 cursor-pointer"
                   title="Filter matrix entries up to this date"
