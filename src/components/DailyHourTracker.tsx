@@ -587,6 +587,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const empEmail = (cleanEmp.email || emp.email || '')
       .toLowerCase()
       .trim()
+      .replace(/^abhinandnb@/, 'abhinandanb@')
       .replace(/sushoovandas@gmail\.com/g, 'sushovandas@gmail.com');
     const logEmail = (
       (cleanLog as any).memberEmail ||
@@ -596,7 +597,41 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     )
       .toLowerCase()
       .trim()
+      .replace(/^abhinandnb@/, 'abhinandanb@')
       .replace(/sushoovandas@gmail\.com/g, 'sushovandas@gmail.com');
+
+    const empName = (cleanEmp.name || emp.name || '')
+      .toLowerCase()
+      .trim()
+      .replace(/abhinandn/g, 'abhinandan')
+      .replace(/sushoovan|sushovon/g, 'sushovan');
+    const logName = (cleanLog.employeeName || '')
+      .toLowerCase()
+      .trim()
+      .replace(/abhinandn/g, 'abhinandan')
+      .replace(/sushoovan|sushovon/g, 'sushovan');
+
+    const isGenericLogName =
+      !logName ||
+      logName === 'bim modeler' ||
+      logName === 'team member' ||
+      logName === 'bim engineer';
+
+    // Strict guard: If both employee and log have non-generic names and they clearly belong to different people, never match
+    if (
+      empName &&
+      !isGenericLogName &&
+      empName !== logName &&
+      !empName.includes(logName) &&
+      !logName.includes(empName)
+    ) {
+      return false;
+    }
+
+    // Strict guard: If both employee and log have emails and they differ (and names don't match), never match
+    if (empEmail && logEmail && empEmail !== logEmail && (!empName || isGenericLogName || empName !== logName)) {
+      return false;
+    }
 
     const empId = (cleanEmp.id || emp.id || '').trim();
     const empIdStripped = empId.replace(/^emp-/, '');
@@ -625,16 +660,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     }
 
     // 3. Name matching
-    const empName = (cleanEmp.name || emp.name || '')
-      .toLowerCase()
-      .trim()
-      .replace(/sushoovan/g, 'sushovan');
-    const logName = (cleanLog.employeeName || '')
-      .toLowerCase()
-      .trim()
-      .replace(/sushoovan/g, 'sushovan');
-
-    if (empName && logName) {
+    if (empName && !isGenericLogName) {
       if (
         empName === logName ||
         empName.includes(logName) ||
@@ -644,13 +670,15 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
     }
 
-    // 4. Logged-by matching
+    // 4. Logged-by fallback ONLY when the log has a generic/missing employeeName and no conflicting memberEmail
     const loggedBy = String((cleanLog as any).loggedBy || '').toLowerCase().trim();
-    if (empEmail && loggedBy.includes(empEmail)) {
-      return true;
-    }
-    if (empName && loggedBy.includes(empName)) {
-      return true;
+    if (isGenericLogName && !logEmail) {
+      if (empEmail && loggedBy === empEmail) {
+        return true;
+      }
+      if (empName && loggedBy === empName) {
+        return true;
+      }
     }
 
     // 5. Viewer personal timesheet fallback
@@ -661,8 +689,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         .replace(/sushoovandas@gmail\.com/g, 'sushovandas@gmail.com');
       const curId = (currentUser.id || '').trim();
       const curIdStripped = curId.replace(/^emp-/, '');
-      const curName = (currentUser.name || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
-      if (curEmail && (logEmail === curEmail || loggedBy.includes(curEmail))) return true;
+      const curName = (currentUser.name || '').toLowerCase().trim().replace(/sushoovan|sushovon/g, 'sushovan');
+      if (curEmail && logEmail === curEmail) return true;
       if (
         curId &&
         (logUserId === curId ||
@@ -672,7 +700,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       ) {
         return true;
       }
-      if (curName && logName && (curName === logName || curName.includes(logName) || logName.includes(curName))) {
+      if (curName && !isGenericLogName && (curName === logName || curName.includes(logName) || logName.includes(curName))) {
         return true;
       }
     }
@@ -714,99 +742,132 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     setMatrixSelectedDate(toLocalIsoDate(new Date()));
   };
 
-  // Real-time onSnapshot listener on Firestore 'users' collection for instant matrix synchronization
+  // Real-time onSnapshot listener on Firestore 'users' & 'team_members' collections + SSOT for instant matrix synchronization
   const [firestoreUsers, setFirestoreUsers] = useState<Employee[]>([]);
   useEffect(() => {
-    let unsub: (() => void) | undefined;
+    let unsubUsers: (() => void) | undefined;
+    let unsubTeamMembers: (() => void) | undefined;
+
+    const usersMap = new Map<string, Employee>();
+    const teamMembersMap = new Map<string, Employee>();
+    const ssotMembersMap = new Map<string, Employee>();
+
+    const parseMemberData = (docId: string, data: any): Employee | null => {
+      if (!data || data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
+        return null;
+      }
+      const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
+      if (rawEmail === 'sushovan.das@bimworkspace.com' || rawEmail === 'aditi@bimworkspace.com') {
+        return null;
+      }
+      const rawName = String(data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')).trim();
+      const lowerRawName = rawName.toLowerCase();
+      const isSushovan =
+        lowerRawName.includes('sushovan') ||
+        lowerRawName.includes('sushoovan') ||
+        lowerRawName.includes('sushovon') ||
+        rawEmail === 'sushoovandas@gmail.com' ||
+        rawEmail === 'sushovandas@gmail.com';
+      const isAditiSuper =
+        !isSushovan &&
+        (rawEmail === 'modelatech2026@gmail.com' ||
+          lowerRawName === 'aditi chakraborty');
+      const name = isAditiSuper ? 'Aditi Chakraborty' : rawName;
+      const email = isSushovan
+        ? rawEmail && rawEmail !== 'modelatech2026@gmail.com'
+          ? rawEmail
+          : 'sushoovandas@gmail.com'
+        : isAditiSuper
+        ? 'modelatech2026@gmail.com'
+        : rawEmail;
+      if (!name && !email) return null;
+      const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
+      const resolvedRole = isAditiSuper
+        ? 'SUPER_ADMIN'
+        : normalizeUserRole(data.assignedRole || data.appRole || data.role || 'VIEWER', false);
+      return sanitizeEmployeeRecord({
+        id: isAditiSuper
+          ? 'emp-modelatech2026_gmail_com'
+          : isSushovan
+          ? 'emp-sushoovan_das'
+          : String(data.id || (docId.startsWith('emp-') ? docId : `emp-${docId}`)).trim(),
+        name,
+        email,
+        role: resolvedRole as any,
+        primaryDiscipline: disc,
+        discipline: disc,
+        avatar:
+          data.avatar ||
+          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+        weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
+        experienceYears: Number(data.experienceYears) || 4,
+        status: 'Active',
+        activeProjectIds: Array.isArray(data.activeProjectIds) ? data.activeProjectIds : [],
+        skills: [disc],
+        phone: data.phone || '',
+      });
+    };
+
+    const syncUsers = () => {
+      const merged = new Map<string, Employee>();
+      usersMap.forEach((v, k) => merged.set(k, v));
+      teamMembersMap.forEach((v, k) => merged.set(k, v));
+      ssotMembersMap.forEach((v, k) => merged.set(k, v));
+      setFirestoreUsers(Array.from(merged.values()));
+    };
+
     try {
-      unsub = onSnapshot(
+      unsubUsers = onSnapshot(
         collection(db, 'users'),
         (snapshot) => {
-          const usersList: Employee[] = [];
+          usersMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            const data = docSnap.data() || {};
-            if (data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
-              return;
-            }
-            const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
-            if (rawEmail === 'sushovan.das@bimworkspace.com' || rawEmail === 'aditi@bimworkspace.com') {
-              return;
-            }
-            const rawName = String(data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')).trim();
-            const lowerRawName = rawName.toLowerCase();
-            const isSushovan =
-              lowerRawName.includes('sushovan') ||
-              lowerRawName.includes('sushoovan') ||
-              rawEmail === 'sushoovandas@gmail.com' ||
-              rawEmail === 'sushovandas@gmail.com';
-            const isAditiSuper =
-              !isSushovan &&
-              (rawEmail === 'modelatech2026@gmail.com' ||
-                lowerRawName === 'aditi chakraborty');
-            const name = isAditiSuper ? 'Aditi Chakraborty' : rawName;
-            const email = isSushovan
-              ? rawEmail && rawEmail !== 'modelatech2026@gmail.com'
-                ? rawEmail
-                : 'sushoovandas@gmail.com'
-              : isAditiSuper
-              ? 'modelatech2026@gmail.com'
-              : rawEmail;
-            if (!name && !email) return;
-            const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
-            const resolvedRole = isAditiSuper
-              ? 'SUPER_ADMIN'
-              : normalizeUserRole(data.assignedRole || data.appRole || data.role || 'VIEWER', false);
-            usersList.push(
-              sanitizeEmployeeRecord({
-                id: isAditiSuper
-                  ? 'emp-modelatech2026_gmail_com'
-                  : isSushovan
-                  ? 'emp-sushoovan_das'
-                  : String(data.id || (docSnap.id.startsWith('emp-') ? docSnap.id : `emp-${docSnap.id}`)).trim(),
-                name,
-                email,
-                role: resolvedRole as any,
-                primaryDiscipline: disc,
-                discipline: disc,
-                avatar:
-                  data.avatar ||
-                  `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
-                weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
-                experienceYears: Number(data.experienceYears) || 4,
-                status: 'Active',
-                activeProjectIds: Array.isArray(data.activeProjectIds) ? data.activeProjectIds : [],
-                skills: [disc],
-                phone: data.phone || '',
-              })
-            );
+            const parsed = parseMemberData(docSnap.id, docSnap.data());
+            if (parsed) usersMap.set(docSnap.id, parsed);
           });
-          setFirestoreUsers(usersList);
+          syncUsers();
         },
-        (err) => {
-          console.warn('DailyHourTracker users listener notice:', err);
-        }
+        (err) => console.warn('DailyHourTracker users listener notice:', err)
+      );
+
+      unsubTeamMembers = onSnapshot(
+        collection(db, 'team_members'),
+        (snapshot) => {
+          teamMembersMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            const parsed = parseMemberData(docSnap.id, docSnap.data());
+            if (parsed) teamMembersMap.set(docSnap.id, parsed);
+          });
+          syncUsers();
+        },
+        (err) => console.warn('DailyHourTracker team_members listener notice:', err)
       );
     } catch (e) {
       console.warn('DailyHourTracker users setup notice:', e);
     }
     return () => {
-      if (unsub) unsub();
+      if (unsubUsers) unsubUsers();
+      if (unsubTeamMembers) unsubTeamMembers();
     };
   }, []);
 
-  // Direct real-time onSnapshot listeners on both 'work_logs' and 'daily_logs' collections in Firestore
-  // to ensure historical backfill from inception and instant real-time synchronization for Detailed Log Records
+  // Direct real-time onSnapshot listeners on 'work_logs', 'daily_logs', and 'timesheets' + 5-second SSOT polling fallback
   const [realtimeFirestoreLogs, setRealtimeFirestoreLogs] = useState<DailyWorkLog[]>([]);
 
   useEffect(() => {
     let unsubWorkLogs: (() => void) | undefined;
     let unsubDailyLogs: (() => void) | undefined;
+    let unsubTimesheets: (() => void) | undefined;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
 
     const workLogsMap = new Map<string, DailyWorkLog>();
     const dailyLogsMap = new Map<string, DailyWorkLog>();
+    const timesheetsMap = new Map<string, DailyWorkLog>();
+    const ssotLogsMap = new Map<string, DailyWorkLog>();
+    const deletedIds = new Set<string>();
 
-    const parseLogSnapshot = (docSnap: any): DailyWorkLog => {
-      const data = docSnap.data() || {};
+    const parseRawData = (docId: string, data: any): DailyWorkLog | null => {
+      if (!data || data.isDeleted === true || deletedIds.has(docId)) return null;
       const rawEmployeeName = String(data.employeeName || 'BIM Modeler').trim();
       const rawEmail = String(data.memberEmail || data.userEmail || '').trim().toLowerCase();
       const resolvedCreatedAt =
@@ -820,7 +881,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       const resolvedMemberId = data.employeeId || data.memberId || data.userId || '';
 
       return sanitizeWorkLogRecord({
-        id: docSnap.id,
+        id: docId,
         employeeId: resolvedMemberId,
         memberId: data.memberId || resolvedMemberId,
         employeeName: rawEmployeeName,
@@ -844,11 +905,60 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       });
     };
 
+    const parseLogSnapshot = (docSnap: any): DailyWorkLog | null => {
+      return parseRawData(docSnap.id, docSnap.data() || {});
+    };
+
+    const pickLatest = (existing: DailyWorkLog | undefined, incoming: DailyWorkLog): DailyWorkLog => {
+      if (!existing) return incoming;
+      const existingTs = new Date((existing as any).updatedAt || existing.timestamp || existing.createdAt || 0).getTime() || 0;
+      const incomingTs = new Date((incoming as any).updatedAt || incoming.timestamp || incoming.createdAt || 0).getTime() || 0;
+      return incomingTs >= existingTs ? incoming : existing;
+    };
+
     const syncCombinedLogs = () => {
       const mergedMap = new Map<string, DailyWorkLog>();
-      workLogsMap.forEach((v, k) => mergedMap.set(k, v));
-      dailyLogsMap.forEach((v, k) => mergedMap.set(k, v));
+      workLogsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) mergedMap.set(k, pickLatest(mergedMap.get(k), v));
+      });
+      dailyLogsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) mergedMap.set(k, pickLatest(mergedMap.get(k), v));
+      });
+      timesheetsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) mergedMap.set(k, pickLatest(mergedMap.get(k), v));
+      });
+      ssotLogsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) mergedMap.set(k, pickLatest(mergedMap.get(k), v));
+      });
       setRealtimeFirestoreLogs(Array.from(mergedMap.values()));
+    };
+
+    const pollSsotState = async () => {
+      try {
+        const res = await fetch('/api/ssot/state', { cache: 'no-store' });
+        if (res.ok) {
+          const payload = await res.json();
+          if (Array.isArray(payload?.deletedLogIds)) {
+            payload.deletedLogIds.forEach((id: string) => {
+              deletedIds.add(String(id));
+              ssotLogsMap.delete(String(id));
+              workLogsMap.delete(String(id));
+              dailyLogsMap.delete(String(id));
+              timesheetsMap.delete(String(id));
+            });
+          }
+          if (Array.isArray(payload?.timesheets)) {
+            ssotLogsMap.clear();
+            payload.timesheets.forEach((item: any) => {
+              if (item?.id) {
+                const parsed = parseRawData(String(item.id), item);
+                if (parsed) ssotLogsMap.set(parsed.id, parsed);
+              }
+            });
+            syncCombinedLogs();
+          }
+        }
+      } catch {}
     };
 
     try {
@@ -857,7 +967,8 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         (snapshot) => {
           workLogsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            workLogsMap.set(docSnap.id, parseLogSnapshot(docSnap));
+            const p = parseLogSnapshot(docSnap);
+            if (p) workLogsMap.set(docSnap.id, p);
           });
           syncCombinedLogs();
         },
@@ -869,12 +980,29 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         (snapshot) => {
           dailyLogsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            dailyLogsMap.set(docSnap.id, parseLogSnapshot(docSnap));
+            const p = parseLogSnapshot(docSnap);
+            if (p) dailyLogsMap.set(docSnap.id, p);
           });
           syncCombinedLogs();
         },
         (err) => console.warn('DailyHourTracker daily_logs snapshot notice:', err)
       );
+
+      unsubTimesheets = onSnapshot(
+        collection(db, 'timesheets'),
+        (snapshot) => {
+          timesheetsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            const p = parseLogSnapshot(docSnap);
+            if (p) timesheetsMap.set(docSnap.id, p);
+          });
+          syncCombinedLogs();
+        },
+        (err) => console.warn('DailyHourTracker timesheets snapshot notice:', err)
+      );
+
+      pollSsotState();
+      pollTimer = setInterval(pollSsotState, 5000);
     } catch (e) {
       console.warn('DailyHourTracker Firestore logs setup notice:', e);
     }
@@ -882,15 +1010,31 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     return () => {
       if (unsubWorkLogs) unsubWorkLogs();
       if (unsubDailyLogs) unsubDailyLogs();
+      if (unsubTimesheets) unsubTimesheets();
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, []);
 
-  // Merged and deduplicated comprehensive logs from all available sources
+  // Merged and deduplicated comprehensive logs from all available sources (preferring latest timestamp)
   const allAvailableLogs = useMemo(() => {
     const logsMap = new Map<string, DailyWorkLog>();
-    (workLogs || []).forEach((l) => logsMap.set(l.id, sanitizeWorkLogRecord(l)));
-    (allWorkLogs || []).forEach((l) => logsMap.set(l.id, sanitizeWorkLogRecord(l)));
-    realtimeFirestoreLogs.forEach((l) => logsMap.set(l.id, sanitizeWorkLogRecord(l)));
+    const upsertLog = (raw: DailyWorkLog) => {
+      if (!raw || !raw.id) return;
+      const sanitized = sanitizeWorkLogRecord(raw);
+      const existing = logsMap.get(sanitized.id);
+      if (!existing) {
+        logsMap.set(sanitized.id, sanitized);
+        return;
+      }
+      const existingTs = new Date((existing as any).updatedAt || existing.timestamp || existing.createdAt || 0).getTime() || 0;
+      const incomingTs = new Date((sanitized as any).updatedAt || sanitized.timestamp || sanitized.createdAt || 0).getTime() || 0;
+      if (incomingTs >= existingTs) {
+        logsMap.set(sanitized.id, sanitized);
+      }
+    };
+    (workLogs || []).forEach(upsertLog);
+    (allWorkLogs || []).forEach(upsertLog);
+    realtimeFirestoreLogs.forEach(upsertLog);
     const list = Array.from(logsMap.values());
     list.sort((a, b) => {
       const dateA = a.date || a.timestamp || '';
@@ -904,17 +1048,6 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
 
   // Active team members across the organization (including Super Admins Aditi Chakraborty & Sushoovan Das)
   const allTrackedEmployees = useMemo(() => {
-    let deletedSet = new Set<string>();
-    try {
-      const saved = localStorage.getItem('bim_deleted_members_v1');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          deletedSet = new Set(parsed.map((v: string) => String(v).trim().toLowerCase()));
-        }
-      }
-    } catch {}
-
     const superAdminMember: Employee = {
       id: 'emp-modelatech2026_gmail_com',
       name: 'Aditi Chakraborty',
@@ -958,7 +1091,11 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       if (!rawEmp || rawEmp.isDeleted || rawEmp.status === 'deleted') return;
       const emp = sanitizeEmployeeRecord(rawEmp);
       const emailKey = (emp.email || '').toLowerCase().trim();
-      const nameKey = (emp.name || '').toLowerCase().trim().replace(/sushoovan/g, 'sushovan');
+      const nameKey = (emp.name || '')
+        .toLowerCase()
+        .trim()
+        .replace(/abhinandn/g, 'abhinandan')
+        .replace(/sushoovan|sushovon/g, 'sushovan');
       const idKey = (emp.id || '').trim();
       const idKeyLower = idKey.toLowerCase();
       const strippedIdKey = idKey.replace(/^emp-/, '');
@@ -970,15 +1107,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
         emailKey !== 'sushoovandas@gmail.com' &&
         emailKey !== 'sushovandas@gmail.com'
       ) {
-        const isDeletedMember =
-          deletedMatrixEmpIds.includes(emp.id) ||
-          (idKeyLower && deletedSet.has(idKeyLower)) ||
-          (strippedIdLower && deletedSet.has(strippedIdLower)) ||
-          (detIdLower && deletedSet.has(detIdLower)) ||
-          (nameKey && deletedSet.has(nameKey)) ||
-          (nameKey && deletedSet.has(`name:${nameKey}`)) ||
-          (emailKey && deletedSet.has(emailKey));
-        if (isDeletedMember) return;
+        if (deletedMatrixEmpIds.includes(emp.id)) return;
       }
 
       const alreadyExists =
@@ -998,7 +1127,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       }
     };
 
-    // 1. Always include active team members from context & Firestore users collection & Super Admins
+    // 1. Always include active team members from context & Firestore users/team_members collections & Super Admins
     baseMembers.forEach(registerMember);
     firestoreUsers.forEach(registerMember);
     registerMember(superAdminMember);

@@ -920,25 +920,24 @@ export const normalizeDateToIso = (raw: any): string => {
 
 export const getEffectiveLogDate = (
   log: DailyWorkLog,
-  weekRange: WeekRangeResult = getCurrentWeekRange()
+  _weekRange: WeekRangeResult = getCurrentWeekRange()
 ): string => {
   if (!log) return '';
   const rawDate = (log.date || (log as any).workDate || (log as any).entryDate || '').trim();
   const normalizedDate = normalizeDateToIso(rawDate);
-
-  if (normalizedDate && normalizedDate >= weekRange.startIso && normalizedDate <= weekRange.endIso) {
+  if (normalizedDate) {
     return normalizedDate;
   }
 
   const fallbackRaw = log.timestamp || (log as any).createdAt || (log as any).updatedAt;
   if (fallbackRaw) {
     const normalizedFallback = normalizeDateToIso(fallbackRaw);
-    if (normalizedFallback && normalizedFallback >= weekRange.startIso && normalizedFallback <= weekRange.endIso) {
+    if (normalizedFallback) {
       return normalizedFallback;
     }
   }
 
-  return normalizedDate || rawDate;
+  return rawDate;
 };
 
 export const getMemberLabel = (member: { name?: string; role?: string }): string =>
@@ -1299,15 +1298,16 @@ export const sanitizeEmployeeRecord = (emp: Employee): Employee => {
   const isSushovan =
     lowerName.includes('sushovan') ||
     lowerName.includes('sushoovan') ||
+    lowerName.includes('sushovon') ||
     lowerEmail === 'sushoovandas@gmail.com' ||
     lowerEmail === 'sushovandas@gmail.com' ||
-    (isGenericName && (lowerId.includes('sushovan') || lowerId.includes('sushoovan')));
+    (isGenericName && (lowerId.includes('sushovan') || lowerId.includes('sushoovan') || lowerId.includes('sushovon')));
 
   const isAditi =
     !isSushovan &&
     (lowerName === SUPER_ADMIN_NAME.toLowerCase() ||
       lowerName.includes('aditi chakraborty') ||
-      lowerName.includes('aditi') ||
+      lowerName === 'aditi' ||
       (isGenericName &&
         (lowerEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
           lowerId.includes('modelatech2026'))));
@@ -1448,15 +1448,16 @@ export const sanitizeWorkLogRecord = (log: DailyWorkLog): DailyWorkLog => {
   const isSushovan =
     lowerName.includes('sushovan') ||
     lowerName.includes('sushoovan') ||
+    lowerName.includes('sushovon') ||
     rawEmail === 'sushoovandas@gmail.com' ||
     rawEmail === 'sushovandas@gmail.com' ||
-    (isGenericName && (lowerEmpId.includes('sushovan') || lowerEmpId.includes('sushoovan')));
+    (isGenericName && (lowerEmpId.includes('sushovan') || lowerEmpId.includes('sushoovan') || lowerEmpId.includes('sushovon')));
 
   const isAditi =
     !isSushovan &&
     (lowerName === SUPER_ADMIN_NAME.toLowerCase() ||
       lowerName.includes('aditi chakraborty') ||
-      lowerName.includes('aditi') ||
+      lowerName === 'aditi' ||
       (isGenericName &&
         (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
           lowerEmpId.includes('modelatech2026'))));
@@ -1541,11 +1542,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const [deletedMemberKeys, setDeletedMemberKeys] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.DELETED_MEMBERS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
+      // Clear isolated local-storage deletion overrides so parallel Super Admin sessions never hide active roster members
+      localStorage.removeItem(STORAGE_KEYS.DELETED_MEMBERS);
     } catch {}
     return [];
   });
@@ -1704,10 +1702,6 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       phone: '+1 (555) 019-2834',
     };
     try {
-      const savedDeleted = localStorage.getItem(STORAGE_KEYS.DELETED_MEMBERS);
-      const initialDeletedSet = new Set<string>(
-        savedDeleted ? JSON.parse(savedDeleted) : []
-      );
       const saved = localStorage.getItem(STORAGE_KEYS.EMPLOYEES);
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -1717,17 +1711,6 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               if (!e || e.isDeleted || String(e.status || '').toLowerCase() === 'deleted') return false;
               const email = (e.email || '').toLowerCase().trim();
               if (email === 'modelatech2026@gmail.com') return true;
-              const name = (e.name || '').toLowerCase().trim();
-              const rawId = (e.id || '').trim();
-              const strippedId = rawId.replace(/^emp-/, '');
-              if (
-                (rawId && initialDeletedSet.has(rawId)) ||
-                (strippedId && initialDeletedSet.has(strippedId)) ||
-                (email && initialDeletedSet.has(email)) ||
-                (name && initialDeletedSet.has(`name:${name}`))
-              ) {
-                return false;
-              }
               return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
             })
             .map((e) => sanitizeEmployeeRecord(e));
@@ -2668,287 +2651,283 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Real-time onSnapshot listener on Firestore 'users' collection so active, added, updated, or deleted user docs sync immediately
+  // Real-time onSnapshot listener on Firestore 'users' & 'team_members' collections + SSOT SSE/Polling
   useEffect(() => {
     let unsubUsers: (() => void) | undefined;
-    try {
-      unsubUsers = onSnapshot(
-        collection(db, 'users'),
-        (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            const data = change.doc.data() || {};
-            const email = String(data.email || data.userEmail || '').trim().toLowerCase();
-            if (email === 'modelatech2026@gmail.com') return;
-            const name = String(data.fullName || data.name || '').trim();
-            const docId = change.doc.id;
-            const empId = String(data.id || data.assignedTo || `emp-${docId}`).trim();
+    let unsubTeamMembers: (() => void) | undefined;
 
-            if (
-              change.type === 'removed' ||
-              data.isDeleted === true ||
-              String(data.status || '').toLowerCase() === 'deleted'
-            ) {
-              // Check if another active document for the same user still exists in the snapshot
-              const normName = name.toLowerCase().replace(/abhinandn/g, 'abhinandan').replace(/sushoovan|sushovon/g, 'sushovan');
-              const normEmail = email.replace(/^abhinandnb@/, 'abhinandanb@').replace(/^sushovandas@/, 'sushoovandas@');
-              const hasOtherActiveDoc = snapshot.docs.some((otherDoc) => {
-                if (otherDoc.id === docId) return false;
-                const oData = otherDoc.data() || {};
-                if (oData.isDeleted === true || String(oData.status || '').toLowerCase() === 'deleted') {
-                  return false;
-                }
-                const oEmail = String(oData.email || oData.userEmail || '')
-                  .trim()
-                  .toLowerCase()
-                  .replace(/^abhinandnb@/, 'abhinandanb@')
-                  .replace(/^sushovandas@/, 'sushoovandas@');
-                const oName = String(oData.fullName || oData.name || '')
-                  .trim()
-                  .toLowerCase()
-                  .replace(/abhinandn/g, 'abhinandan')
-                  .replace(/sushoovan|sushovon/g, 'sushovan');
-                return (normEmail && oEmail === normEmail) || (normName && oName === normName);
-              });
+    const usersDocsMap = new Map<string, any>();
+    const teamMembersDocsMap = new Map<string, any>();
+    const ssotMembersMap = new Map<string, any>();
 
-              if (!hasOtherActiveDoc) {
-                registerDeletedMemberKeys({ id: empId || docId, email, name });
-                setEmployees((prev) =>
-                  prev.filter(
-                    (e) =>
-                      e.id !== docId &&
-                      e.id !== empId &&
-                      e.id.replace(/^emp-/, '') !== docId.replace(/^emp-/, '') &&
-                      (!email || (e.email || '').toLowerCase().trim() !== email) &&
-                      (!name || (e.name || '').toLowerCase().trim() !== name.toLowerCase())
-                  )
+    const syncAllRosterDocs = () => {
+      const combinedDocs: Array<{ docId: string; data: any }> = [];
+      usersDocsMap.forEach((data, docId) => combinedDocs.push({ docId, data }));
+      teamMembersDocsMap.forEach((data, docId) => combinedDocs.push({ docId, data }));
+      ssotMembersMap.forEach((data, docId) => combinedDocs.push({ docId, data }));
+
+      const activeUserDocs = combinedDocs.filter(({ docId, data }) => {
+        if (!data || data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
+          return false;
+        }
+        const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+        if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
+          return false;
+        }
+        const statusUpper = String(data.status || '').trim().toUpperCase();
+        if (statusUpper === 'REJECTED') {
+          return false;
+        }
+        const rawName = String(data.fullName || data.name || '').trim();
+        unregisterDeletedMemberKeys({
+          id: data.id || docId,
+          email,
+          name: rawName,
+        });
+        return true;
+      });
+
+      if (activeUserDocs.length > 0) {
+        const sortedUserDocs = [...activeUserDocs].sort((a, b) => {
+          const aRole = normalizeUserRole(
+            a.data.assignedRole || a.data.appRole || a.data.role,
+            isSuperAdminEmail(a.data.email)
+          );
+          const bRole = normalizeUserRole(
+            b.data.assignedRole || b.data.appRole || b.data.role,
+            isSuperAdminEmail(b.data.email)
+          );
+          if ((aRole === 'SUPER_ADMIN') !== (bRole === 'SUPER_ADMIN')) {
+            return aRole === 'SUPER_ADMIN' ? -1 : 1;
+          }
+          const aTime = new Date(a.data.updatedAt || a.data.createdAt || 0).getTime() || 0;
+          const bTime = new Date(b.data.updatedAt || b.data.createdAt || 0).getTime() || 0;
+          return bTime - aTime;
+        });
+
+        const dedupedUserDocs: Array<{ docId: string; data: any }> = [];
+        const seenUserKeys = new Set<string>();
+        for (const item of sortedUserDocs) {
+          const rawEmail = String(item.data.email || item.data.userEmail || '').trim().toLowerCase();
+          const name = String(item.data.fullName || item.data.name || '').trim().toLowerCase();
+          const isSushovan =
+            name.includes('sushovan') ||
+            name.includes('sushoovan') ||
+            name.includes('sushovon') ||
+            rawEmail === 'sushoovandas@gmail.com' ||
+            rawEmail === 'sushovandas@gmail.com';
+          const isAditi =
+            !isSushovan &&
+            (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+              name === SUPER_ADMIN_NAME.toLowerCase());
+          const keyEmail = isSushovan
+            ? 'sushoovandas@gmail.com'
+            : isAditi
+            ? SUPER_ADMIN_EMAIL.toLowerCase()
+            : rawEmail;
+          const keyName = isSushovan
+            ? 'sushovan das'
+            : isAditi
+            ? SUPER_ADMIN_NAME.toLowerCase()
+            : name;
+          if ((keyEmail && seenUserKeys.has(keyEmail)) || (keyName && seenUserKeys.has(`name:${keyName}`))) {
+            continue;
+          }
+          if (keyEmail) seenUserKeys.add(keyEmail);
+          if (keyName) seenUserKeys.add(`name:${keyName}`);
+          dedupedUserDocs.push(item);
+        }
+
+        setEmployees((currentEmployees) => {
+          let changed = false;
+          const updated = currentEmployees.map((e) => sanitizeEmployeeRecord(e));
+
+          dedupedUserDocs.forEach(({ docId, data }) => {
+            const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
+            const name = String(
+              data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')
+            ).trim();
+            if (!name && !rawEmail) return;
+
+            const lowerDocName = name.toLowerCase();
+            const isSushovan =
+              lowerDocName.includes('sushovan') ||
+              lowerDocName.includes('sushoovan') ||
+              lowerDocName.includes('sushovon') ||
+              rawEmail === 'sushoovandas@gmail.com' ||
+              rawEmail === 'sushovandas@gmail.com';
+            const isAditiSuper =
+              !isSushovan &&
+              (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
+                lowerDocName === SUPER_ADMIN_NAME.toLowerCase());
+            const email = isSushovan
+              ? rawEmail && rawEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
+                ? rawEmail
+                : 'sushoovandas@gmail.com'
+              : isAditiSuper
+              ? SUPER_ADMIN_EMAIL
+              : rawEmail;
+            const empId = isAditiSuper
+              ? 'emp-modelatech2026_gmail_com'
+              : isSushovan
+              ? 'emp-sushoovan_das'
+              : String(data.id || (docId.startsWith('emp-') ? docId : `emp-${docId}`)).trim();
+            const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
+            const resolvedRole: UserRole = isAditiSuper
+              ? 'SUPER_ADMIN'
+              : normalizeUserRole(
+                  data.assignedRole || data.appRole || data.role || 'VIEWER',
+                  isSuperAdminEmail(email)
                 );
-                setOnboardingRequests((prev) =>
-                  prev.filter(
-                    (r) =>
-                      r.id !== docId &&
-                      (!email || (r.email || '').toLowerCase().trim() !== email)
-                  )
-                );
-                setResourceAllocations((prev) =>
-                  prev.filter(
-                    (a) =>
-                      a.employeeId !== empId &&
-                      a.employeeId !== docId &&
-                      (!email || (a.memberEmail || '').toLowerCase().trim() !== email) &&
-                      (!name || (a.employeeName || '').toLowerCase().trim() !== name.toLowerCase())
-                  )
-                );
+
+            const sanitizedCandidate = sanitizeEmployeeRecord({
+              id: empId,
+              name: isAditiSuper ? SUPER_ADMIN_NAME : name,
+              email,
+              role: resolvedRole,
+              primaryDiscipline: disc,
+              discipline: disc,
+              avatar:
+                data.avatar ||
+                `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                  isAditiSuper ? SUPER_ADMIN_NAME : name
+                )}`,
+              weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
+              experienceYears: Number(data.experienceYears) || 4,
+              status: 'Active',
+              activeProjectIds: Array.isArray(data.activeProjectIds)
+                ? data.activeProjectIds
+                : ['proj-1'],
+              skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
+              phone: data.phone || '+1 (555) 019-2834',
+            });
+
+            const idx = updated.findIndex(
+              (e) =>
+                e.id === sanitizedCandidate.id ||
+                (sanitizedCandidate.email &&
+                  (e.email || '').toLowerCase().trim() ===
+                    sanitizedCandidate.email.toLowerCase().trim()) ||
+                (sanitizedCandidate.name &&
+                  (e.name || '').toLowerCase().trim() ===
+                    sanitizedCandidate.name.toLowerCase().trim())
+            );
+
+            if (idx === -1) {
+              changed = true;
+              updated.push(sanitizedCandidate);
+            } else {
+              const currentEmp = updated[idx];
+              const nextName = sanitizedCandidate.name || currentEmp.name;
+              const nextRole = sanitizedCandidate.role || currentEmp.role;
+              const nextId = sanitizedCandidate.id || currentEmp.id;
+              const nextEmail = sanitizedCandidate.email || currentEmp.email;
+              const nextDisc = sanitizedCandidate.discipline || currentEmp.discipline;
+              if (
+                currentEmp.name !== nextName ||
+                currentEmp.role !== nextRole ||
+                currentEmp.id !== nextId ||
+                currentEmp.email !== nextEmail ||
+                currentEmp.discipline !== nextDisc
+              ) {
+                changed = true;
+                updated[idx] = {
+                  ...currentEmp,
+                  id: nextId,
+                  name: nextName,
+                  email: nextEmail,
+                  role: nextRole,
+                  discipline: nextDisc,
+                  primaryDiscipline: nextDisc,
+                };
               }
             }
           });
 
-          // Synchronize all active user documents from 'users' collection into employees state
-          const activeUserDocs = snapshot.docs
-            .map((docSnap) => ({ docId: docSnap.id, data: docSnap.data() || {} }))
-            .filter(({ docId, data }) => {
-              if (data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
-                return false;
-              }
-              const email = String(data.email || data.userEmail || '').trim().toLowerCase();
-              if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
-                return false;
-              }
-              const statusUpper = String(data.status || '').trim().toUpperCase();
-              if (statusUpper === 'REJECTED') {
-                return false;
-              }
-              // If the user document is explicitly active/approved in Firestore, clear any stale localStorage deletion keys
-              if (statusUpper === 'APPROVED' || statusUpper === 'ACTIVE' || !data.isDeleted) {
-                const rawName = String(data.fullName || data.name || '').trim();
-                unregisterDeletedMemberKeys({
-                  id: data.id || docId,
-                  email,
-                  name: rawName,
-                });
-                if (rawName.toLowerCase().includes('abhinand')) {
-                  unregisterDeletedMemberKeys({
-                    id: 'emp-kI4hemIRFk1NQkeIhVb3',
-                    email: 'abhinandanb@modelatech.com',
-                    name: 'Abhinandan Baitalik',
-                  });
-                }
-                return true;
-              }
-              if (email === 'modelatech2026@gmail.com') return true;
-              return !isMemberDeleted({
-                id: data.id || docId,
-                email,
-                name: data.fullName || data.name,
-                status: data.status,
-                isDeleted: data.isDeleted,
-              });
-            });
+          return changed ? updated : currentEmployees;
+        });
+      }
+    };
 
-          if (activeUserDocs.length > 0) {
-            // Sort user docs so SUPER_ADMIN / newest updatedAt docs take precedence over stale duplicate docs
-            const sortedUserDocs = [...activeUserDocs].sort((a, b) => {
-              const aRole = normalizeUserRole(
-                a.data.assignedRole || a.data.appRole || a.data.role,
-                isSuperAdminEmail(a.data.email)
-              );
-              const bRole = normalizeUserRole(
-                b.data.assignedRole || b.data.appRole || b.data.role,
-                isSuperAdminEmail(b.data.email)
-              );
-              if ((aRole === 'SUPER_ADMIN') !== (bRole === 'SUPER_ADMIN')) {
-                return aRole === 'SUPER_ADMIN' ? -1 : 1;
-              }
-              const aTime = new Date(a.data.updatedAt || a.data.createdAt || 0).getTime() || 0;
-              const bTime = new Date(b.data.updatedAt || b.data.createdAt || 0).getTime() || 0;
-              return bTime - aTime;
-            });
+    const handleSnapshotRemoval = (snapshot: any, change: any) => {
+      const data = change.doc.data() || {};
+      const email = String(data.email || data.userEmail || '').trim().toLowerCase();
+      if (email === 'modelatech2026@gmail.com') return;
+      const name = String(data.fullName || data.name || '').trim();
+      const docId = change.doc.id;
+      const empId = String(data.id || data.assignedTo || `emp-${docId}`).trim();
 
-            const dedupedUserDocs: Array<{ docId: string; data: any }> = [];
-            const seenUserKeys = new Set<string>();
-            for (const item of sortedUserDocs) {
-              const rawEmail = String(item.data.email || item.data.userEmail || '').trim().toLowerCase();
-              const name = String(item.data.fullName || item.data.name || '').trim().toLowerCase();
-              const isSushovan =
-                name.includes('sushovan') ||
-                name.includes('sushoovan') ||
-                rawEmail === 'sushoovandas@gmail.com' ||
-                rawEmail === 'sushovandas@gmail.com';
-              const isAditi =
-                !isSushovan &&
-                (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
-                  name === SUPER_ADMIN_NAME.toLowerCase());
-              const keyEmail = isSushovan
-                ? 'sushoovandas@gmail.com'
-                : isAditi
-                ? SUPER_ADMIN_EMAIL.toLowerCase()
-                : rawEmail;
-              const keyName = isSushovan
-                ? 'sushovan das'
-                : isAditi
-                ? SUPER_ADMIN_NAME.toLowerCase()
-                : name;
-              if ((keyEmail && seenUserKeys.has(keyEmail)) || (keyName && seenUserKeys.has(`name:${keyName}`))) {
-                continue;
-              }
-              if (keyEmail) seenUserKeys.add(keyEmail);
-              if (keyName) seenUserKeys.add(`name:${keyName}`);
-              dedupedUserDocs.push(item);
-            }
-
-            setEmployees((currentEmployees) => {
-              let changed = false;
-              const updated = currentEmployees.map((e) => sanitizeEmployeeRecord(e));
-
-              dedupedUserDocs.forEach(({ docId, data }) => {
-                const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
-                const name = String(
-                  data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')
-                ).trim();
-                if (!name && !rawEmail) return;
-
-                const lowerDocName = name.toLowerCase();
-                const isSushovan =
-                  lowerDocName.includes('sushovan') ||
-                  lowerDocName.includes('sushoovan') ||
-                  rawEmail === 'sushoovandas@gmail.com' ||
-                  rawEmail === 'sushovandas@gmail.com';
-                const isAditiSuper =
-                  !isSushovan &&
-                  (rawEmail === SUPER_ADMIN_EMAIL.toLowerCase() ||
-                    lowerDocName === SUPER_ADMIN_NAME.toLowerCase());
-                const email = isSushovan
-                  ? rawEmail && rawEmail !== SUPER_ADMIN_EMAIL.toLowerCase()
-                    ? rawEmail
-                    : 'sushoovandas@gmail.com'
-                  : isAditiSuper
-                  ? SUPER_ADMIN_EMAIL
-                  : rawEmail;
-                const empId = isAditiSuper
-                  ? 'emp-modelatech2026_gmail_com'
-                  : isSushovan
-                  ? 'emp-sushoovan_das'
-                  : String(data.id || (docId.startsWith('emp-') ? docId : `emp-${docId}`)).trim();
-                const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
-                const resolvedRole: UserRole = isAditiSuper
-                  ? 'SUPER_ADMIN'
-                  : normalizeUserRole(
-                      data.assignedRole || data.appRole || data.role || 'VIEWER',
-                      isSuperAdminEmail(email)
-                    );
-
-                const sanitizedCandidate = sanitizeEmployeeRecord({
-                  id: empId,
-                  name: isAditiSuper ? SUPER_ADMIN_NAME : name,
-                  email,
-                  role: resolvedRole,
-                  primaryDiscipline: disc,
-                  discipline: disc,
-                  avatar:
-                    data.avatar ||
-                    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                      isAditiSuper ? SUPER_ADMIN_NAME : name
-                    )}`,
-                  weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
-                  experienceYears: Number(data.experienceYears) || 4,
-                  status: 'Active',
-                  activeProjectIds: Array.isArray(data.activeProjectIds)
-                    ? data.activeProjectIds
-                    : ['proj-1'],
-                  skills: [disc, 'Revit 2026', 'Navisworks Manage', 'BIM Coordination'],
-                  phone: data.phone || '+1 (555) 019-2834',
-                });
-
-                const idx = updated.findIndex(
-                  (e) =>
-                    e.id === sanitizedCandidate.id ||
-                    (sanitizedCandidate.email &&
-                      (e.email || '').toLowerCase().trim() ===
-                        sanitizedCandidate.email.toLowerCase().trim()) ||
-                    (sanitizedCandidate.name &&
-                      (e.name || '').toLowerCase().trim() ===
-                        sanitizedCandidate.name.toLowerCase().trim())
-                );
-
-                if (idx === -1) {
-                  changed = true;
-                  updated.push(sanitizedCandidate);
-                } else {
-                  const currentEmp = updated[idx];
-                  const nextName = sanitizedCandidate.name || currentEmp.name;
-                  const nextRole = sanitizedCandidate.role || currentEmp.role;
-                  const nextId = sanitizedCandidate.id || currentEmp.id;
-                  const nextEmail = sanitizedCandidate.email || currentEmp.email;
-                  if (
-                    currentEmp.name !== nextName ||
-                    currentEmp.role !== nextRole ||
-                    currentEmp.id !== nextId ||
-                    currentEmp.email !== nextEmail
-                  ) {
-                    changed = true;
-                    updated[idx] = {
-                      ...currentEmp,
-                      id: nextId,
-                      name: nextName,
-                      email: nextEmail,
-                      role: nextRole,
-                    };
-                  }
-                }
-              });
-
-              return changed ? updated : currentEmployees;
-            });
+      if (
+        change.type === 'removed' ||
+        data.isDeleted === true ||
+        String(data.status || '').toLowerCase() === 'deleted'
+      ) {
+        const normName = name.toLowerCase().replace(/abhinandn/g, 'abhinandan').replace(/sushoovan|sushovon/g, 'sushovan');
+        const normEmail = email.replace(/^abhinandnb@/, 'abhinandanb@').replace(/^sushovandas@/, 'sushoovandas@');
+        const hasOtherActiveDoc = snapshot.docs.some((otherDoc: any) => {
+          if (otherDoc.id === docId) return false;
+          const oData = otherDoc.data() || {};
+          if (oData.isDeleted === true || String(oData.status || '').toLowerCase() === 'deleted') {
+            return false;
           }
-        },
-        (err) => {
-          console.warn('Firestore users listener notice:', err);
+          const oEmail = String(oData.email || oData.userEmail || '')
+            .trim()
+            .toLowerCase()
+            .replace(/^abhinandnb@/, 'abhinandanb@')
+            .replace(/^sushovandas@/, 'sushoovandas@');
+          const oName = String(oData.fullName || oData.name || '')
+            .trim()
+            .toLowerCase()
+            .replace(/abhinandn/g, 'abhinandan')
+            .replace(/sushoovan|sushovon/g, 'sushovan');
+          return (normEmail && oEmail === normEmail) || (normName && oName === normName);
+        });
+
+        if (!hasOtherActiveDoc) {
+          registerDeletedMemberKeys({ id: empId || docId, email, name });
+          setEmployees((prev) =>
+            prev.filter(
+              (e) =>
+                e.id !== docId &&
+                e.id !== empId &&
+                e.id.replace(/^emp-/, '') !== docId.replace(/^emp-/, '') &&
+                (!email || (e.email || '').toLowerCase().trim() !== email) &&
+                (!name || (e.name || '').toLowerCase().trim() !== name.toLowerCase())
+            )
+          );
         }
+      }
+    };
+
+    try {
+      unsubUsers = onSnapshot(
+        collection(db, 'users'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => handleSnapshotRemoval(snapshot, change));
+          usersDocsMap.clear();
+          snapshot.docs.forEach((d) => usersDocsMap.set(d.id, d.data() || {}));
+          syncAllRosterDocs();
+        },
+        (err) => console.warn('Firestore users listener notice:', err)
+      );
+
+      unsubTeamMembers = onSnapshot(
+        collection(db, 'team_members'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => handleSnapshotRemoval(snapshot, change));
+          teamMembersDocsMap.clear();
+          snapshot.docs.forEach((d) => teamMembersDocsMap.set(d.id, d.data() || {}));
+          syncAllRosterDocs();
+        },
+        (err) => console.warn('Firestore team_members listener notice:', err)
       );
     } catch (e) {
-      console.warn('Firestore users setup notice:', e);
+      console.warn('Firestore users/team_members setup notice:', e);
     }
+
     return () => {
       if (unsubUsers) unsubUsers();
+      if (unsubTeamMembers) unsubTeamMembers();
     };
   }, [registerDeletedMemberKeys, unregisterDeletedMemberKeys]);
 
@@ -3212,24 +3191,29 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Synchronize Firestore work_logs, daily_logs, and timesheets collections into state in real-time via onSnapshot()
-  // - Super Admins & Directors view all organizational daily logs in real time
-  // - Viewers & standard engineers submit daily logs to daily_logs / work_logs / timesheets and sync bi-directionally
+  // Synchronize Firestore work_logs, daily_logs, timesheets + Central SSOT SSE & 5-second polling fallback
+  const hasBackfilledSessionToSsotRef = React.useRef(false);
   useEffect(() => {
     let unsubWorkLogs: (() => void) | undefined;
     let unsubDailyLogs: (() => void) | undefined;
     let unsubTimesheets: (() => void) | undefined;
+    let sseConnection: EventSource | undefined;
+    let pollInterval: ReturnType<typeof setInterval> | undefined;
 
     const workLogsMap = new Map<string, DailyWorkLog>();
     const dailyLogsMap = new Map<string, DailyWorkLog>();
     const timesheetsMap = new Map<string, DailyWorkLog>();
+    const ssotLogsMap = new Map<string, DailyWorkLog>();
+    const deletedLogIdsSet = new Set<string>();
 
-    const parseLogDoc = (docSnap: any): DailyWorkLog => {
-      const data = docSnap.data();
+    const parseRawLogRecord = (rawId: string, data: any): DailyWorkLog | null => {
+      if (!data) return null;
+      const docId = String(rawId || data.id || '').trim();
+      if (!docId || deletedLogIdsSet.has(docId) || data.isDeleted === true) return null;
+
       const rawEmployeeName = String(data.employeeName || 'BIM Modeler').trim();
       const isNameSuperAdmin = rawEmployeeName.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase();
       const rawEmail = String(data.memberEmail || data.userEmail || '').trim().toLowerCase();
-      // Prevent a non-Super-Admin employee log from inheriting Super Admin's email due to legacy fallback
       const normalizedEmail =
         !isNameSuperAdmin &&
         rawEmployeeName !== 'BIM Modeler' &&
@@ -3255,7 +3239,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           ? resolvedMemberId
           : data.userId || resolvedMemberId;
       return sanitizeWorkLogRecord({
-        id: docSnap.id,
+        id: docId,
         employeeId: resolvedMemberId,
         memberId: data.memberId || resolvedMemberId,
         employeeName: rawEmployeeName,
@@ -3279,11 +3263,31 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       });
     };
 
+    const parseLogDoc = (docSnap: any): DailyWorkLog | null => {
+      return parseRawLogRecord(docSnap.id, docSnap.data());
+    };
+
+    const pickNewerLog = (existing: DailyWorkLog | undefined, incoming: DailyWorkLog): DailyWorkLog => {
+      if (!existing) return incoming;
+      const existingTs = new Date((existing as any).updatedAt || existing.timestamp || existing.createdAt || 0).getTime() || 0;
+      const incomingTs = new Date((incoming as any).updatedAt || incoming.timestamp || incoming.createdAt || 0).getTime() || 0;
+      return incomingTs >= existingTs ? incoming : existing;
+    };
+
     const syncMergedLogs = () => {
       const combined = new Map<string, DailyWorkLog>();
-      workLogsMap.forEach((v, k) => combined.set(k, v));
-      dailyLogsMap.forEach((v, k) => combined.set(k, v));
-      timesheetsMap.forEach((v, k) => combined.set(k, v));
+      workLogsMap.forEach((v, k) => {
+        if (!deletedLogIdsSet.has(k)) combined.set(k, pickNewerLog(combined.get(k), v));
+      });
+      dailyLogsMap.forEach((v, k) => {
+        if (!deletedLogIdsSet.has(k)) combined.set(k, pickNewerLog(combined.get(k), v));
+      });
+      timesheetsMap.forEach((v, k) => {
+        if (!deletedLogIdsSet.has(k)) combined.set(k, pickNewerLog(combined.get(k), v));
+      });
+      ssotLogsMap.forEach((v, k) => {
+        if (!deletedLogIdsSet.has(k)) combined.set(k, pickNewerLog(combined.get(k), v));
+      });
 
       const list = Array.from(combined.values());
       list.sort((a, b) => {
@@ -3292,7 +3296,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
       });
 
-      setAllWorkLogs(list);
+      if (list.length > 0 || combined.size > 0) {
+        setAllWorkLogs(list);
+      }
 
       if (list.length > 0) {
         setEmployees((currentEmployees) => {
@@ -3370,13 +3376,196 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     };
 
+    const mergeIncomingTeamMembers = (rawMembers: any[]) => {
+      if (!Array.isArray(rawMembers) || rawMembers.length === 0) return;
+      setEmployees((currentEmployees) => {
+        let changed = false;
+        const updated = currentEmployees.map((e) => sanitizeEmployeeRecord(e));
+        rawMembers.forEach((data) => {
+          if (!data || data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') return;
+          const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
+          const name = String(data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')).trim();
+          if (!name && !rawEmail) return;
+          const disc = ((data.discipline || data.primaryDiscipline || 'BIM - ACS') as Discipline);
+          const candidate = sanitizeEmployeeRecord({
+            id: String(data.id || (rawEmail ? `emp-${generateRequestDocId(rawEmail)}` : `emp-${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`)).trim(),
+            name,
+            email: rawEmail,
+            role: (data.role || 'BIM Modeler') as any,
+            primaryDiscipline: disc,
+            discipline: disc,
+            avatar: data.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+            weeklyCapacityHours: Number(data.weeklyCapacityHours) || 40,
+            experienceYears: Number(data.experienceYears) || 4,
+            status: 'Active',
+            activeProjectIds: Array.isArray(data.activeProjectIds) ? data.activeProjectIds : ['proj-1'],
+            skills: [disc],
+            phone: data.phone || '',
+          });
+          const idx = updated.findIndex(
+            (e) =>
+              e.id === candidate.id ||
+              (candidate.email && (e.email || '').toLowerCase().trim() === candidate.email.toLowerCase().trim()) ||
+              (candidate.name && (e.name || '').toLowerCase().trim() === candidate.name.toLowerCase().trim())
+          );
+          if (idx === -1) {
+            changed = true;
+            updated.push(candidate);
+          }
+        });
+        return changed ? updated : currentEmployees;
+      });
+    };
+
+    // Backfill any locally cached records from this session to Central SSOT & Firestore once on load
+    if (!hasBackfilledSessionToSsotRef.current) {
+      hasBackfilledSessionToSsotRef.current = true;
+      try {
+        const localSavedLogs = localStorage.getItem(STORAGE_KEYS.WORK_LOGS);
+        const localSavedEmps = localStorage.getItem(STORAGE_KEYS.EMPLOYEES);
+        const parsedLogs: DailyWorkLog[] = localSavedLogs ? JSON.parse(localSavedLogs) : [];
+        const parsedEmps: Employee[] = localSavedEmps ? JSON.parse(localSavedEmps) : [];
+
+        if (Array.isArray(parsedLogs) && parsedLogs.length > 0) {
+          const cleanLogs = parsedLogs.map((l) => JSON.parse(JSON.stringify(sanitizeWorkLogRecord(l))));
+          fetch('/api/ssot/timesheets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ isBackfill: true, logs: cleanLogs }),
+          }).catch(() => {});
+          cleanLogs.forEach((l) => {
+            if (l && l.id) {
+              const payload = {
+                ...l,
+                hours: Number(l.hoursLogged) || 0,
+                hoursLogged: Number(l.hoursLogged) || 0,
+              };
+              setDoc(doc(db, 'timesheets', l.id), payload, { merge: true }).catch(() => {});
+              setDoc(doc(db, 'daily_logs', l.id), payload, { merge: true }).catch(() => {});
+              setDoc(doc(db, 'work_logs', l.id), payload, { merge: true }).catch(() => {});
+            }
+          });
+        }
+
+        if (Array.isArray(parsedEmps) && parsedEmps.length > 0) {
+          const cleanEmps = parsedEmps
+            .filter((e) => e && !e.isDeleted && String(e.status || '').toLowerCase() !== 'deleted')
+            .map((e) => JSON.parse(JSON.stringify(sanitizeEmployeeRecord(e))));
+          fetch('/api/ssot/team-members', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ isBackfill: true, members: cleanEmps }),
+          }).catch(() => {});
+          cleanEmps.forEach((emp) => {
+            if (!emp) return;
+            const cleanEmail = (emp.email || '').trim().toLowerCase();
+            const docId = cleanEmail ? generateRequestDocId(cleanEmail) : (emp.id || '').replace(/^emp-/, '');
+            if (!docId) return;
+            const payload = JSON.parse(
+              JSON.stringify({
+                id: emp.id,
+                name: emp.name,
+                fullName: emp.name,
+                email: cleanEmail || emp.email || '',
+                role: emp.role || 'VIEWER',
+                discipline: emp.discipline || emp.primaryDiscipline || 'BIM - ACS',
+                primaryDiscipline: emp.primaryDiscipline || emp.discipline || 'BIM - ACS',
+                assignedTo: emp.id,
+                status: 'APPROVED',
+                isDeleted: false,
+              })
+            );
+            setDoc(doc(db, 'team_members', docId), payload, { merge: true }).catch(() => {});
+            setDoc(doc(db, 'users', docId), payload, { merge: true }).catch(() => {});
+          });
+        }
+      } catch {}
+    }
+
+    const fetchSsotAndFirestorePoll = async () => {
+      try {
+        const res = await fetch('/api/ssot/state', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.deletedLogIds)) {
+            data.deletedLogIds.forEach((id: string) => {
+              deletedLogIdsSet.add(String(id));
+              ssotLogsMap.delete(String(id));
+              workLogsMap.delete(String(id));
+              dailyLogsMap.delete(String(id));
+              timesheetsMap.delete(String(id));
+            });
+          }
+          if (Array.isArray(data?.timesheets)) {
+            ssotLogsMap.clear();
+            data.timesheets.forEach((item: any) => {
+              const parsed = parseRawLogRecord(item.id, item);
+              if (parsed) ssotLogsMap.set(parsed.id, parsed);
+            });
+            syncMergedLogs();
+          }
+          if (Array.isArray(data?.teamMembers)) {
+            mergeIncomingTeamMembers(data.teamMembers);
+          }
+        }
+      } catch {}
+
+      try {
+        const [wlSnap, dlSnap, tsSnap, tmSnap, uSnap] = await Promise.all([
+          getDocs(collection(db, 'work_logs')).catch(() => null),
+          getDocs(collection(db, 'daily_logs')).catch(() => null),
+          getDocs(collection(db, 'timesheets')).catch(() => null),
+          getDocs(collection(db, 'team_members')).catch(() => null),
+          getDocs(collection(db, 'users')).catch(() => null),
+        ]);
+        let logsUpdated = false;
+        if (wlSnap) {
+          wlSnap.docs.forEach((d) => {
+            const p = parseLogDoc(d);
+            if (p) {
+              workLogsMap.set(d.id, p);
+              logsUpdated = true;
+            }
+          });
+        }
+        if (dlSnap) {
+          dlSnap.docs.forEach((d) => {
+            const p = parseLogDoc(d);
+            if (p) {
+              dailyLogsMap.set(d.id, p);
+              logsUpdated = true;
+            }
+          });
+        }
+        if (tsSnap) {
+          tsSnap.docs.forEach((d) => {
+            const p = parseLogDoc(d);
+            if (p) {
+              timesheetsMap.set(d.id, p);
+              logsUpdated = true;
+            }
+          });
+        }
+        if (logsUpdated) {
+          syncMergedLogs();
+        }
+        const polledMembers: any[] = [];
+        if (tmSnap) tmSnap.docs.forEach((d) => polledMembers.push({ id: d.id, ...d.data() }));
+        if (uSnap) uSnap.docs.forEach((d) => polledMembers.push({ id: d.id, ...d.data() }));
+        if (polledMembers.length > 0) {
+          mergeIncomingTeamMembers(polledMembers);
+        }
+      } catch {}
+    };
+
     try {
       unsubWorkLogs = onSnapshot(
         collection(db, 'work_logs'),
         (snapshot) => {
           workLogsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            workLogsMap.set(docSnap.id, parseLogDoc(docSnap));
+            const p = parseLogDoc(docSnap);
+            if (p) workLogsMap.set(docSnap.id, p);
           });
           syncMergedLogs();
         },
@@ -3390,7 +3579,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (snapshot) => {
           dailyLogsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            dailyLogsMap.set(docSnap.id, parseLogDoc(docSnap));
+            const p = parseLogDoc(docSnap);
+            if (p) dailyLogsMap.set(docSnap.id, p);
           });
           syncMergedLogs();
         },
@@ -3404,7 +3594,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (snapshot) => {
           timesheetsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            timesheetsMap.set(docSnap.id, parseLogDoc(docSnap));
+            const p = parseLogDoc(docSnap);
+            if (p) timesheetsMap.set(docSnap.id, p);
           });
           syncMergedLogs();
         },
@@ -3412,6 +3603,65 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           console.warn('Firestore timesheets real-time listener notice:', err);
         }
       );
+
+      if (typeof EventSource !== 'undefined') {
+        sseConnection = new EventSource('/api/ssot/stream');
+        sseConnection.onmessage = (ev) => {
+          try {
+            const payload = JSON.parse(ev.data);
+            if (payload?.type === 'INIT_SSOT') {
+              if (Array.isArray(payload.deletedLogIds)) {
+                payload.deletedLogIds.forEach((id: string) => deletedLogIdsSet.add(String(id)));
+              }
+              if (Array.isArray(payload.timesheets)) {
+                ssotLogsMap.clear();
+                payload.timesheets.forEach((item: any) => {
+                  const parsed = parseRawLogRecord(item.id, item);
+                  if (parsed) ssotLogsMap.set(parsed.id, parsed);
+                });
+                syncMergedLogs();
+              }
+              if (Array.isArray(payload.teamMembers)) {
+                mergeIncomingTeamMembers(payload.teamMembers);
+              }
+            } else if (payload?.type === 'UPSERT_TIMESHEETS' && Array.isArray(payload.timesheets)) {
+              payload.timesheets.forEach((item: any) => {
+                if (item?.id) deletedLogIdsSet.delete(String(item.id));
+                const parsed = parseRawLogRecord(item.id, item);
+                if (parsed) ssotLogsMap.set(parsed.id, parsed);
+              });
+              syncMergedLogs();
+            } else if (payload?.type === 'DELETE_TIMESHEET' && payload?.id) {
+              const delId = String(payload.id);
+              deletedLogIdsSet.add(delId);
+              ssotLogsMap.delete(delId);
+              workLogsMap.delete(delId);
+              dailyLogsMap.delete(delId);
+              timesheetsMap.delete(delId);
+              syncMergedLogs();
+            } else if (payload?.type === 'UPSERT_TEAM_MEMBERS' && Array.isArray(payload.teamMembers)) {
+              mergeIncomingTeamMembers(payload.teamMembers);
+            } else if (payload?.type === 'DELETE_TEAM_MEMBER') {
+              const delId = String(payload.id || '').trim();
+              const delEmail = String(payload.email || '').trim().toLowerCase();
+              const delName = String(payload.name || '').trim().toLowerCase();
+              registerDeletedMemberKeys({ id: delId, email: delEmail, name: delName });
+              setEmployees((prev) =>
+                prev.filter(
+                  (e) =>
+                    e.id !== delId &&
+                    e.id.replace(/^emp-/, '') !== delId.replace(/^emp-/, '') &&
+                    (!delEmail || (e.email || '').toLowerCase().trim() !== delEmail) &&
+                    (!delName || (e.name || '').toLowerCase().trim() !== delName)
+                )
+              );
+            }
+          } catch {}
+        };
+      }
+
+      fetchSsotAndFirestorePoll();
+      pollInterval = setInterval(fetchSsotAndFirestorePoll, 5000);
     } catch (e) {
       console.warn('Firestore work_logs/daily_logs/timesheets setup error:', e);
     }
@@ -3420,6 +3670,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (unsubWorkLogs) unsubWorkLogs();
       if (unsubDailyLogs) unsubDailyLogs();
       if (unsubTimesheets) unsubTimesheets();
+      if (sseConnection) sseConnection.close();
+      if (pollInterval) clearInterval(pollInterval);
     };
   }, [
     currentUser?.email,
@@ -4956,22 +5208,33 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     // 1. Optimistic state update in allWorkLogs
     setAllWorkLogs((prev) => [newLog, ...prev.filter((w) => w.id !== logId)]);
 
-    // 2. Persist lean payload to Firestore daily_logs and work_logs collections non-blockingly
+    // 2. Persist lean payload to Firestore timesheets, daily_logs, work_logs, and Central SSOT store
     try {
-      const payload = {
-        ...newLog,
-        employeeId: newLog.employeeId,
-        memberId: newLog.employeeId,
-        userId: newLog.employeeId,
-        employeeName: newLog.employeeName,
-        memberEmail: newLog.memberEmail || '',
-        userEmail: newLog.userEmail || '',
-        hours: hoursValue,
-        hoursLogged: hoursValue,
-        isTestEntry: isTestEntryFlag,
-        loggedBy: loggedByValue,
-        createdAt: createdAtValue,
-      };
+      const payload = JSON.parse(
+        JSON.stringify({
+          ...newLog,
+          employeeId: newLog.employeeId,
+          memberId: newLog.employeeId,
+          userId: newLog.employeeId,
+          employeeName: newLog.employeeName,
+          memberEmail: newLog.memberEmail || '',
+          userEmail: newLog.userEmail || '',
+          hours: hoursValue,
+          hoursLogged: hoursValue,
+          isTestEntry: isTestEntryFlag,
+          loggedBy: loggedByValue,
+          createdAt: createdAtValue,
+          updatedAt: isoNow,
+        })
+      );
+      fetch('/api/ssot/timesheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      setDoc(doc(db, 'timesheets', logId), payload, { merge: true }).catch((err) =>
+        console.warn('Firestore timesheets addWorkLog sync notice:', err)
+      );
       setDoc(doc(db, 'daily_logs', logId), payload, { merge: true }).catch((err) =>
         console.warn('Firestore daily_logs addWorkLog sync notice:', err)
       );
@@ -5028,15 +5291,28 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       })
     );
     try {
+      const nowIso = new Date().toISOString();
       const basePayload = fullUpdated
         ? { ...fullUpdated }
         : sanitizeWorkLogRecord({ ...(updates as DailyWorkLog), id });
-      const sanitizedUpdates = {
-        ...basePayload,
-        ...(basePayload.hoursLogged !== undefined
-          ? { hours: Number(basePayload.hoursLogged) || 0, hoursLogged: Number(basePayload.hoursLogged) || 0 }
-          : {}),
-      };
+      const sanitizedUpdates = JSON.parse(
+        JSON.stringify({
+          ...basePayload,
+          updatedAt: nowIso,
+          timestamp: nowIso,
+          ...(basePayload.hoursLogged !== undefined
+            ? { hours: Number(basePayload.hoursLogged) || 0, hoursLogged: Number(basePayload.hoursLogged) || 0 }
+            : {}),
+        })
+      );
+      fetch('/api/ssot/timesheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sanitizedUpdates),
+      }).catch(() => {});
+      setDoc(doc(db, 'timesheets', id), sanitizedUpdates, { merge: true }).catch((err) =>
+        console.warn('Firestore timesheets updateWorkLog sync notice:', err)
+      );
       setDoc(doc(db, 'daily_logs', id), sanitizedUpdates, { merge: true }).catch((err) =>
         console.warn('Firestore daily_logs updateWorkLog sync notice:', err)
       );
@@ -5102,6 +5378,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       return prev.filter((w) => w.id !== id);
     });
     try {
+      fetch(`/api/ssot/timesheets/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }).catch(() => {});
+      deleteDoc(doc(db, 'timesheets', id)).catch((err) =>
+        console.warn('Firestore timesheets deleteWorkLog sync notice:', err)
+      );
       deleteDoc(doc(db, 'daily_logs', id)).catch((err) =>
         console.warn('Firestore daily_logs deleteWorkLog sync notice:', err)
       );
@@ -5169,26 +5451,32 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     });
     setEmployees((prev) => [...prev, newEmp]);
 
-    // Persist new team member and discipline assignment to Firestore
+    // Persist new team member and discipline assignment to Firestore & Central SSOT
     const cleanEmail = (newEmp.email || '').trim().toLowerCase();
     const docId = cleanEmail ? generateRequestDocId(cleanEmail) : newEmp.id;
-    const payload = {
-      id: newEmp.id,
-      name: newEmp.name,
-      fullName: newEmp.name,
-      email: cleanEmail || newEmp.email,
-      role: newEmp.role,
-      discipline: newEmp.discipline || newEmp.primaryDiscipline || 'BIM - ACS',
-      primaryDiscipline: newEmp.primaryDiscipline || newEmp.discipline || 'BIM - ACS',
-      assignedTo: newEmp.id,
-      status: 'APPROVED',
-      isDeleted: false,
-      updatedAt: new Date().toISOString(),
-    };
+    const payload = JSON.parse(
+      JSON.stringify({
+        id: newEmp.id,
+        name: newEmp.name,
+        fullName: newEmp.name,
+        email: cleanEmail || newEmp.email || '',
+        role: newEmp.role || 'VIEWER',
+        discipline: newEmp.discipline || newEmp.primaryDiscipline || 'BIM - ACS',
+        primaryDiscipline: newEmp.primaryDiscipline || newEmp.discipline || 'BIM - ACS',
+        assignedTo: newEmp.id,
+        status: 'APPROVED',
+        isDeleted: false,
+        updatedAt: new Date().toISOString(),
+      })
+    );
     try {
-      updateDoc(doc(db, 'users', docId), payload).catch(() => {
-        setDoc(doc(db, 'users', docId), payload, { merge: true }).catch(() => {});
-      });
+      fetch('/api/ssot/team-members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      setDoc(doc(db, 'team_members', docId), payload, { merge: true }).catch(() => {});
+      setDoc(doc(db, 'users', docId), payload, { merge: true }).catch(() => {});
     } catch {}
     return newEmp;
   };
@@ -5210,17 +5498,25 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const cleanEmail = (updates.email || emp.email || '').trim().toLowerCase();
       const docId = cleanEmail ? generateRequestDocId(cleanEmail) : id.replace(/^emp-/, '');
       const updatedDiscipline = updates.discipline || updates.primaryDiscipline || emp.discipline || emp.primaryDiscipline || 'BIM - ACS';
-      const firestoreUpdates: Record<string, any> = {
-        ...updates,
-        assignedTo: id,
-        discipline: updatedDiscipline,
-        primaryDiscipline: updatedDiscipline,
-        updatedAt: new Date().toISOString(),
-      };
+      const firestoreUpdates: Record<string, any> = JSON.parse(
+        JSON.stringify({
+          ...emp,
+          ...updates,
+          id: emp.id || id,
+          assignedTo: id,
+          discipline: updatedDiscipline,
+          primaryDiscipline: updatedDiscipline,
+          updatedAt: new Date().toISOString(),
+        })
+      );
       try {
-        updateDoc(doc(db, 'users', docId), firestoreUpdates).catch(() => {
-          setDoc(doc(db, 'users', docId), firestoreUpdates, { merge: true }).catch(() => {});
-        });
+        fetch('/api/ssot/team-members', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(firestoreUpdates),
+        }).catch(() => {});
+        setDoc(doc(db, 'team_members', docId), firestoreUpdates, { merge: true }).catch(() => {});
+        setDoc(doc(db, 'users', docId), firestoreUpdates, { merge: true }).catch(() => {});
         updateDoc(doc(db, 'access_requests', docId), {
           discipline: updatedDiscipline,
           primaryDiscipline: updatedDiscipline,
@@ -5369,12 +5665,21 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const candidateUserDocIds = Array.from(
         new Set([id, strippedId, `emp-${strippedId}`, detEmailId, `emp-${detEmailId}`, targetReq?.id || ''].filter(Boolean))
       );
+      fetch(
+        `/api/ssot/team-members/${encodeURIComponent(id)}?email=${encodeURIComponent(targetEmail)}&name=${encodeURIComponent(targetName)}`,
+        { method: 'DELETE' }
+      ).catch(() => {});
+
       candidateUserDocIds.forEach((docId) => {
+        deleteDoc(doc(db, 'team_members', docId)).catch(() => {});
         deleteDoc(doc(db, 'users', docId)).catch(() => {});
         deleteDoc(doc(db, 'access_requests', docId)).catch(() => {});
       });
 
       if (targetEmail) {
+        getDocs(query(collection(db, 'team_members'), where('email', '==', targetEmail)))
+          .then((snap) => snap.docs.forEach((d) => deleteDoc(doc(db, 'team_members', d.id)).catch(() => {})))
+          .catch(() => {});
         getDocs(query(collection(db, 'users'), where('email', '==', targetEmail)))
           .then((snap) => snap.docs.forEach((d) => deleteDoc(doc(db, 'users', d.id)).catch(() => {})))
           .catch(() => {});
@@ -5390,6 +5695,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       });
 
       logsToRemove.forEach((l) => {
+        fetch(`/api/ssot/timesheets/${encodeURIComponent(l.id)}`, { method: 'DELETE' }).catch(() => {});
+        deleteDoc(doc(db, 'timesheets', l.id)).catch(() => {});
         deleteDoc(doc(db, 'daily_logs', l.id)).catch(() => {});
         deleteDoc(doc(db, 'work_logs', l.id)).catch(() => {});
       });

@@ -299,6 +299,304 @@ app.delete("/api/access-requests/:idOrEmail", (req, res) => {
   }
 });
 
+// ============================================================================
+// Central Server-Side SSOT Store & SSE Stream for Timesheets & Team Members
+// Guarantees identical multi-session state across all parallel Super Admin browsers
+// ============================================================================
+const SSOT_STORE_PATH = path.join(process.cwd(), ".ssot-store.json");
+const ssotTimesheets = new Map<string, any>();
+const ssotTeamMembers = new Map<string, any>();
+const ssotDeletedMemberIds = new Set<string>();
+const ssotDeletedLogIds = new Set<string>();
+const ssotSseClients = new Set<express.Response>();
+
+function loadSsotStore() {
+  try {
+    if (fs.existsSync(SSOT_STORE_PATH)) {
+      const raw = fs.readFileSync(SSOT_STORE_PATH, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.deletedMemberIds)) {
+        parsed.deletedMemberIds.forEach((k: string) => ssotDeletedMemberIds.add(String(k)));
+      }
+      if (Array.isArray(parsed?.deletedLogIds)) {
+        parsed.deletedLogIds.forEach((k: string) => ssotDeletedLogIds.add(String(k)));
+      }
+      if (Array.isArray(parsed?.timesheets)) {
+        parsed.timesheets.forEach((log: any) => {
+          if (log?.id && !ssotDeletedLogIds.has(String(log.id))) {
+            ssotTimesheets.set(String(log.id), log);
+          }
+        });
+      }
+      if (Array.isArray(parsed?.teamMembers)) {
+        parsed.teamMembers.forEach((member: any) => {
+          const key = String(member?.id || member?.email || "").trim();
+          if (key && !ssotDeletedMemberIds.has(key)) {
+            ssotTeamMembers.set(key, member);
+          }
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[SSOTStore] Failed to load SSOT store from disk:", err);
+  }
+}
+
+function persistSsotStore() {
+  try {
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      deletedMemberIds: Array.from(ssotDeletedMemberIds),
+      deletedLogIds: Array.from(ssotDeletedLogIds),
+      timesheets: Array.from(ssotTimesheets.values()),
+      teamMembers: Array.from(ssotTeamMembers.values()),
+    };
+    fs.writeFileSync(SSOT_STORE_PATH, JSON.stringify(payload, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("[SSOTStore] Failed to persist SSOT store:", err);
+  }
+}
+
+function broadcastSsotEvent(data: any) {
+  const message = `data: ${JSON.stringify(data)}\n\n`;
+  ssotSseClients.forEach((client) => {
+    try {
+      client.write(message);
+    } catch {
+      ssotSseClients.delete(client);
+    }
+  });
+}
+
+loadSsotStore();
+
+app.use("/api/ssot", (req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
+app.get("/api/ssot/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.flushHeaders?.();
+
+  res.write(
+    `data: ${JSON.stringify({
+      type: "INIT_SSOT",
+      timesheets: Array.from(ssotTimesheets.values()),
+      teamMembers: Array.from(ssotTeamMembers.values()),
+      deletedMemberIds: Array.from(ssotDeletedMemberIds),
+      deletedLogIds: Array.from(ssotDeletedLogIds),
+    })}\n\n`
+  );
+
+  ssotSseClients.add(res);
+  const hb = setInterval(() => {
+    try {
+      res.write(`: heartbeat ${Date.now()}\n\n`);
+    } catch {
+      clearInterval(hb);
+      ssotSseClients.delete(res);
+    }
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(hb);
+    ssotSseClients.delete(res);
+  });
+});
+
+app.get("/api/ssot/state", (_req, res) => {
+  res.json({
+    success: true,
+    timestamp: new Date().toISOString(),
+    timesheets: Array.from(ssotTimesheets.values()),
+    teamMembers: Array.from(ssotTeamMembers.values()),
+    deletedMemberIds: Array.from(ssotDeletedMemberIds),
+    deletedLogIds: Array.from(ssotDeletedLogIds),
+  });
+});
+
+app.post("/api/ssot/timesheets", (req, res) => {
+  try {
+    const body = req.body || {};
+    const items = Array.isArray(body.logs) ? body.logs : body.id ? [body] : [];
+    const updatedLogs: any[] = [];
+    const nowIso = new Date().toISOString();
+
+    for (const item of items) {
+      if (!item || !item.id) continue;
+      const logId = String(item.id).trim();
+      if (body.isBackfill && ssotDeletedLogIds.has(logId)) continue;
+      if (!body.isBackfill) {
+        ssotDeletedLogIds.delete(logId);
+      }
+      const existing = ssotTimesheets.get(logId);
+      if (body.isBackfill && existing) {
+        const existingTs = new Date(existing.updatedAt || existing.timestamp || 0).getTime() || 0;
+        const incomingTs = new Date(item.updatedAt || item.timestamp || 0).getTime() || 0;
+        if (existingTs >= incomingTs) continue;
+      }
+      const record = {
+        ...(existing || {}),
+        ...item,
+        id: logId,
+        updatedAt: item.updatedAt || nowIso,
+      };
+      ssotTimesheets.set(logId, record);
+      updatedLogs.push(record);
+    }
+
+    if (updatedLogs.length > 0) {
+      persistSsotStore();
+      broadcastSsotEvent({
+        type: "UPSERT_TIMESHEETS",
+        timesheets: updatedLogs,
+      });
+    }
+
+    res.json({ success: true, count: updatedLogs.length, timesheets: updatedLogs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to save timesheets" });
+  }
+});
+
+app.delete("/api/ssot/timesheets/:id", (req, res) => {
+  try {
+    const logId = String(req.params.id || "").trim();
+    if (logId) {
+      ssotTimesheets.delete(logId);
+      ssotDeletedLogIds.add(logId);
+      persistSsotStore();
+      broadcastSsotEvent({ type: "DELETE_TIMESHEET", id: logId });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to delete timesheet" });
+  }
+});
+
+app.post("/api/ssot/team-members", (req, res) => {
+  try {
+    const body = req.body || {};
+    const items = Array.isArray(body.members) ? body.members : body.id || body.email || body.name ? [body] : [];
+    const updatedMembers: any[] = [];
+    const nowIso = new Date().toISOString();
+
+    for (const item of items) {
+      if (!item) continue;
+      const idKey = String(item.id || "").trim();
+      const emailKey = String(item.email || "").trim().toLowerCase();
+      const nameKey = String(item.name || item.fullName || "").trim().toLowerCase();
+      const primaryKey = idKey || emailKey || nameKey;
+      if (!primaryKey) continue;
+
+      if (body.isBackfill && (ssotDeletedMemberIds.has(primaryKey) || (emailKey && ssotDeletedMemberIds.has(emailKey)) || (nameKey && ssotDeletedMemberIds.has(`name:${nameKey}`)))) {
+        continue;
+      }
+      if (!body.isBackfill) {
+        ssotDeletedMemberIds.delete(primaryKey);
+        if (emailKey) ssotDeletedMemberIds.delete(emailKey);
+        if (nameKey) ssotDeletedMemberIds.delete(`name:${nameKey}`);
+      }
+
+      // Deduplicate by matching id, email, or name in ssotTeamMembers
+      let matchKey = primaryKey;
+      for (const [k, v] of ssotTeamMembers.entries()) {
+        const vEmail = String(v?.email || "").trim().toLowerCase();
+        const vName = String(v?.name || v?.fullName || "").trim().toLowerCase();
+        if (k === primaryKey || (emailKey && vEmail === emailKey) || (nameKey && vName === nameKey)) {
+          matchKey = k;
+          break;
+        }
+      }
+
+      const existing = ssotTeamMembers.get(matchKey);
+      if (body.isBackfill && existing) {
+        const existingTs = new Date(existing.updatedAt || 0).getTime() || 0;
+        const incomingTs = new Date(item.updatedAt || 0).getTime() || 0;
+        if (existingTs > incomingTs) continue;
+      }
+
+      const record = {
+        ...(existing || {}),
+        ...item,
+        id: item.id || existing?.id || `emp-${primaryKey.replace(/[^a-z0-9]/gi, "_")}`,
+        updatedAt: item.updatedAt || nowIso,
+        isDeleted: false,
+      };
+      ssotTeamMembers.set(matchKey, record);
+      updatedMembers.push(record);
+    }
+
+    if (updatedMembers.length > 0) {
+      persistSsotStore();
+      broadcastSsotEvent({
+        type: "UPSERT_TEAM_MEMBERS",
+        teamMembers: updatedMembers,
+      });
+    }
+
+    res.json({ success: true, count: updatedMembers.length, teamMembers: updatedMembers });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to save team members" });
+  }
+});
+
+app.delete("/api/ssot/team-members/:id", (req, res) => {
+  try {
+    const param = String(req.params.id || "").trim();
+    const queryEmail = String(req.query.email || "").trim().toLowerCase();
+    const queryName = String(req.query.name || "").trim().toLowerCase();
+
+    if (param) {
+      ssotDeletedMemberIds.add(param);
+      ssotDeletedMemberIds.add(param.replace(/^emp-/, ""));
+      ssotDeletedMemberIds.add(`emp-${param.replace(/^emp-/, "")}`);
+    }
+    if (queryEmail) ssotDeletedMemberIds.add(queryEmail);
+    if (queryName) ssotDeletedMemberIds.add(`name:${queryName}`);
+
+    for (const [k, v] of ssotTeamMembers.entries()) {
+      const vId = String(v?.id || "").trim();
+      const vEmail = String(v?.email || "").trim().toLowerCase();
+      const vName = String(v?.name || v?.fullName || "").trim().toLowerCase();
+      if (
+        k === param ||
+        vId === param ||
+        vId.replace(/^emp-/, "") === param.replace(/^emp-/, "") ||
+        (queryEmail && vEmail === queryEmail) ||
+        (queryName && vName === queryName)
+      ) {
+        ssotTeamMembers.delete(k);
+      }
+    }
+
+    persistSsotStore();
+    broadcastSsotEvent({
+      type: "DELETE_TEAM_MEMBER",
+      id: param,
+      email: queryEmail,
+      name: queryName,
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to delete team member" });
+  }
+});
+
 // Server-side Gemini API initialization
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,

@@ -75,9 +75,10 @@ service cloud.firestore {
     }
 
     function isValidUserRecord(data) {
-      return isValidEmailString(data.email)
-        && ('role' in data && data.role in ['SUPER_ADMIN', 'DIRECTOR', 'PROJECT_MANAGER', 'EDITOR', 'VIEWER', 'Super Admin', 'Director', 'Project Manager', 'Editor', 'Viewer'])
-        && (!('status' in data) || data.status in ['APPROVED', 'PENDING', 'REJECTED', 'Approved', 'Pending', 'Rejected', 'Active', 'pending', 'approved', 'rejected']);
+      return data.keys().size() > 0
+        && (!('email' in data) || !(data.email is string) || data.email.size() == 0 || isValidEmailString(data.email))
+        && (!('role' in data) || (data.role is string && data.role.size() >= 1 && data.role.size() <= 150))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50));
     }
 
     // Access Requests Collections (supporting canonical and alias collection names)
@@ -109,11 +110,17 @@ service cloud.firestore {
       allow delete: if isValidId(requestId) && (isSuperAdmin() || request.time != null);
     }
 
-    // Users Collection
+    // Users & Team Members Collections
     match /users/{userId} {
       allow get, list: if isSuperAdmin() || request.time != null;
       allow create, update: if isValidId(userId) && isValidUserRecord(incoming());
       allow delete: if isValidId(userId) && (isSuperAdmin() || request.time != null);
+    }
+
+    match /team_members/{memberId} {
+      allow get, list: if isSuperAdmin() || request.time != null;
+      allow create, update: if isValidId(memberId) && incoming().keys().size() > 0;
+      allow delete: if isValidId(memberId) && (isSuperAdmin() || request.time != null);
     }
 
     // Projects Collection
@@ -183,18 +190,25 @@ service cloud.firestore {
       );
     }
 
-    // Daily Work Logs Collection
+    // Daily Work Logs & Timesheets Collections
     match /work_logs/{logId} {
       allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || request.time != null;
-      allow create: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
-      allow update: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || isValidWorkLog(incoming()));
+      allow create: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()) || request.time != null);
+      allow update: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || isValidWorkLog(incoming()) || request.time != null);
       allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || request.time != null);
     }
 
     match /daily_logs/{logId} {
       allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || request.time != null;
-      allow create: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()));
-      allow update: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || isValidWorkLog(incoming()));
+      allow create: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()) || request.time != null);
+      allow update: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || isValidWorkLog(incoming()) || request.time != null);
+      allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || request.time != null);
+    }
+
+    match /timesheets/{logId} {
+      allow get, list: if isSuperAdmin() || isLogOwner(resource.data) || request.time != null;
+      allow create: if isValidId(logId) && (isSuperAdmin() || isValidWorkLog(incoming()) || request.time != null);
+      allow update: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || isValidWorkLog(incoming()) || request.time != null);
       allow delete: if isValidId(logId) && (isSuperAdmin() || isLogOwner(resource.data) || request.time != null);
     }
   }
