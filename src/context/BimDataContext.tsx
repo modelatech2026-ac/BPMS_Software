@@ -3212,15 +3212,17 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Synchronize Firestore work_logs and daily_logs collections into state in real-time via onSnapshot()
+  // Synchronize Firestore work_logs, daily_logs, and timesheets collections into state in real-time via onSnapshot()
   // - Super Admins & Directors view all organizational daily logs in real time
-  // - Viewers & standard engineers submit daily logs to daily_logs / work_logs and sync bi-directionally
+  // - Viewers & standard engineers submit daily logs to daily_logs / work_logs / timesheets and sync bi-directionally
   useEffect(() => {
     let unsubWorkLogs: (() => void) | undefined;
     let unsubDailyLogs: (() => void) | undefined;
+    let unsubTimesheets: (() => void) | undefined;
 
     const workLogsMap = new Map<string, DailyWorkLog>();
     const dailyLogsMap = new Map<string, DailyWorkLog>();
+    const timesheetsMap = new Map<string, DailyWorkLog>();
 
     const parseLogDoc = (docSnap: any): DailyWorkLog => {
       const data = docSnap.data();
@@ -3281,6 +3283,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const combined = new Map<string, DailyWorkLog>();
       workLogsMap.forEach((v, k) => combined.set(k, v));
       dailyLogsMap.forEach((v, k) => combined.set(k, v));
+      timesheetsMap.forEach((v, k) => combined.set(k, v));
 
       const list = Array.from(combined.values());
       list.sort((a, b) => {
@@ -3395,13 +3398,28 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           console.warn('Firestore daily_logs real-time listener notice:', err);
         }
       );
+
+      unsubTimesheets = onSnapshot(
+        collection(db, 'timesheets'),
+        (snapshot) => {
+          timesheetsMap.clear();
+          snapshot.docs.forEach((docSnap) => {
+            timesheetsMap.set(docSnap.id, parseLogDoc(docSnap));
+          });
+          syncMergedLogs();
+        },
+        (err) => {
+          console.warn('Firestore timesheets real-time listener notice:', err);
+        }
+      );
     } catch (e) {
-      console.warn('Firestore work_logs/daily_logs setup error:', e);
+      console.warn('Firestore work_logs/daily_logs/timesheets setup error:', e);
     }
 
     return () => {
       if (unsubWorkLogs) unsubWorkLogs();
       if (unsubDailyLogs) unsubDailyLogs();
+      if (unsubTimesheets) unsubTimesheets();
     };
   }, [
     currentUser?.email,
