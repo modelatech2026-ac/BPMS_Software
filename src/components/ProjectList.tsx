@@ -499,12 +499,43 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       statusFilter === 'all' || p.status === statusFilter;
     const matchesDiscipline =
       disciplineFilter === 'all' ||
-      (p.disciplines || []).some(
-        (d) =>
-          d === disciplineFilter ||
-          d.toLowerCase() === disciplineFilter.toLowerCase() ||
-          (disciplineFilter === 'BIM - ACS' && (d === 'BIM - ACS' || d === ('Architecture' as any)))
-      ) ||
+      (p.disciplines || []).some((d) => {
+        if (d === disciplineFilter || d.toLowerCase() === disciplineFilter.toLowerCase()) {
+          return true;
+        }
+        if (
+          disciplineFilter === 'BIM - ACS' &&
+          (d === 'BIM - ACS' || d === ('Architecture' as any) || d === ('ACS' as any))
+        ) {
+          return true;
+        }
+        if (
+          disciplineFilter === 'BIM - MEP' &&
+          (d === 'BIM - MEP' ||
+            d === 'MEP' ||
+            d === 'MEP - HVAC' ||
+            d === 'MEP - Electrical' ||
+            d === 'MEP - Plumbing' ||
+            d === 'Fire Protection')
+        ) {
+          return true;
+        }
+        if (
+          (disciplineFilter === 'Structure' || disciplineFilter === 'Structural') &&
+          (d === 'Structure' || d === 'Structural')
+        ) {
+          return true;
+        }
+        return false;
+      }) ||
+      (disciplineFilter === 'SCAN TO BIM' &&
+        `${p.name || ''} ${p.code || ''} ${p.description || ''}`
+          .toUpperCase()
+          .includes('SCAN')) ||
+      (disciplineFilter === 'CAD' &&
+        `${p.name || ''} ${p.code || ''} ${p.buildingType || ''}`
+          .toUpperCase()
+          .includes('CAD')) ||
       (p.typology || '').toLowerCase().includes(disciplineFilter.toLowerCase());
     return matchesScope && matchesSearch && matchesStatus && matchesDiscipline;
   });
@@ -615,6 +646,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
             >
               <option value="all" className="bg-slate-900">All Disciplines</option>
               <option value="BIM - ACS" className="bg-slate-900">BIM - ACS</option>
+              <option value="BIM - MEP" className="bg-slate-900">BIM - MEP</option>
               <option value="SCAN TO BIM" className="bg-slate-900">SCAN TO BIM</option>
               <option value="CAD" className="bg-slate-900">CAD</option>
               <option value="Structure" className="bg-slate-900">Structure</option>
@@ -622,6 +654,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               <option value="MEP - Electrical" className="bg-slate-900">MEP - Electrical</option>
               <option value="MEP - Plumbing" className="bg-slate-900">MEP - Plumbing</option>
               <option value="Fire Protection" className="bg-slate-900">Fire Protection</option>
+              <option value="Infrastructure" className="bg-slate-900">Infrastructure</option>
               <option value="Façade / Envelope" className="bg-slate-900">Façade / Envelope</option>
               <option value="Coordination & QA" className="bg-slate-900">Coordination & QA</option>
               <option value="AI & Automation" className="bg-slate-900">AI & Automation</option>

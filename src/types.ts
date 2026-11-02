@@ -7,6 +7,7 @@ export type Discipline =
   | 'MEP - HVAC'
   | 'MEP - Electrical'
   | 'MEP - Plumbing'
+  | 'SCAN TO BIM'
   | 'CAD'
   | 'SES'
   | 'Fire Protection'
@@ -19,15 +20,18 @@ export type Discipline =
 export const PRIMARY_DISCIPLINES = [
   "BIM - ACS",
   "Structure",
+  "Structural",
+  "BIM - MEP",
   "MEP - HVAC",
   "MEP - Electrical",
   "MEP - Plumbing",
+  "SCAN TO BIM",
   "CAD",
   "SES",
-  "BIM - MEP",
   "Fire Protection",
   "Façade / Envelope",
   "Coordination & QA",
+  "Infrastructure",
   "AI & Automation",
   "Estimation"
 ];
@@ -283,7 +287,23 @@ export interface UserAccessRecord {
   lastActive: string;
 }
 
-export type BimServiceType = 'ACS' | 'MEP' | 'SCAN TO BIM' | 'CAD';
+export type BimServiceType =
+  | 'BIM - ACS'
+  | 'Structure'
+  | 'MEP - HVAC'
+  | 'MEP - Electrical'
+  | 'MEP - Plumbing'
+  | 'CAD'
+  | 'SES'
+  | 'BIM - MEP'
+  | 'Façade / Envelope'
+  | 'Coordination & QA'
+  | 'Fire Protection'
+  | 'AI & Automation'
+  | 'Estimation'
+  | 'SCAN TO BIM'
+  | 'ACS'
+  | 'MEP';
 
 export type PrimaryDiscipline =
   | 'Architectural'

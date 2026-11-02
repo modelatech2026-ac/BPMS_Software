@@ -136,7 +136,11 @@ export const DisciplineDistributionChart: React.FC<{
     'MEP - HVAC',
     'MEP - Electrical',
     'MEP - Plumbing',
+    'SCAN TO BIM',
+    'CAD',
+    'SES',
     'Fire Protection',
+    'Infrastructure',
     'Façade / Envelope',
     'Coordination & QA',
     'AI & Automation',
@@ -152,6 +156,7 @@ export const DisciplineDistributionChart: React.FC<{
     'MEP - HVAC': 'bg-cyan-500 text-cyan-400',
     'MEP - Electrical': 'bg-amber-500 text-amber-400',
     'MEP - Plumbing': 'bg-indigo-500 text-indigo-400',
+    'SCAN TO BIM': 'bg-purple-500 text-purple-400',
     'CAD': 'bg-amber-500 text-amber-400',
     'SES': 'bg-fuchsia-500 text-fuchsia-400',
     'Fire Protection': 'bg-rose-500 text-rose-400',
@@ -162,12 +167,21 @@ export const DisciplineDistributionChart: React.FC<{
     'Estimation': 'bg-sky-500 text-sky-400',
   };
 
-  const totals = disciplines.map(disc => {
-    const hours = workLogs
-      .filter(w => !w.isTestEntry && w.discipline === disc)
-      .reduce((sum, w) => sum + w.hoursLogged, 0);
-    return { discipline: disc, hours };
-  }).filter(d => d.hours > 0);
+  const normalizeDisc = (d?: string): Discipline => {
+    if (!d) return 'BIM - ACS';
+    if (d === 'MEP') return 'BIM - MEP';
+    if (d === 'Structural') return 'Structure';
+    return d as Discipline;
+  };
+
+  const totals = disciplines
+    .map((disc) => {
+      const hours = workLogs
+        .filter((w) => !w.isTestEntry && normalizeDisc(w.discipline) === disc)
+        .reduce((sum, w) => sum + w.hoursLogged, 0);
+      return { discipline: disc, hours };
+    })
+    .filter((d) => d.hours > 0);
 
   const grandTotal = totals.reduce((sum, t) => sum + t.hours, 0);
 

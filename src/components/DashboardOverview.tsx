@@ -361,55 +361,149 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
-  // Helper to map project name / tags to the 4 primary BIM service types
-  const mapProjectToService = (project: BimProject): BimServiceType => {
-    const discStr = (project.disciplines || []).join(' ');
-    const text = (project.name + ' ' + (project.description || '') + ' ' + discStr).toUpperCase();
-    if (text.includes('SCAN') || text.includes('POINT CLOUD') || text.includes('AS-BUILT') || text.includes('REALITY CAPTURE')) {
-      return 'SCAN TO BIM';
+  // Helper to check if a discipline string matches a specific BIM Service Type / Discipline card
+  const doesDisciplineMatchService = (disc: string | undefined, svc: BimServiceType): boolean => {
+    const d = (disc || '').trim().toUpperCase();
+    if (!d) return false;
+    const s = svc.toUpperCase();
+    if (d === s) return true;
+
+    switch (svc) {
+      case 'BIM - ACS':
+      case 'ACS':
+        return d === 'BIM - ACS' || d === 'ACS' || d === 'ARCHITECTURAL' || d === 'ARCHITECTURE';
+      case 'Structure':
+        return d === 'STRUCTURE' || d === 'STRUCTURAL' || d === 'INFRASTRUCTURE';
+      case 'MEP - HVAC':
+        return d === 'MEP - HVAC' || d.includes('HVAC');
+      case 'MEP - Electrical':
+        return d === 'MEP - ELECTRICAL' || d.includes('ELECTRICAL') || d.includes('ELEC');
+      case 'MEP - Plumbing':
+        return d === 'MEP - PLUMBING' || d.includes('PLUMBING') || d.includes('PLUMB');
+      case 'CAD':
+        return d === 'CAD' || d.includes('CAD') || d.includes('DRAFT');
+      case 'SES':
+        return d === 'SES';
+      case 'BIM - MEP':
+      case 'MEP':
+        return d === 'BIM - MEP' || d === 'MEP';
+      case 'Façade / Envelope':
+        return d === 'FAÇADE / ENVELOPE' || d.includes('FACADE') || d.includes('FAÇADE') || d.includes('ENVELOPE');
+      case 'Coordination & QA':
+        return d === 'COORDINATION & QA' || d.includes('COORDINATION') || d.includes('QA');
+      case 'Fire Protection':
+        return d === 'FIRE PROTECTION' || d.includes('FIRE');
+      case 'AI & Automation':
+        return d === 'AI & AUTOMATION' || d.includes('AUTOMATION') || d === 'AI';
+      case 'Estimation':
+        return d === 'ESTIMATION';
+      case 'SCAN TO BIM':
+        return (
+          d === 'SCAN TO BIM' ||
+          d.includes('SCAN') ||
+          d.includes('POINT CLOUD') ||
+          d.includes('AS-BUILT') ||
+          d.includes('REALITY CAPTURE')
+        );
+      default:
+        return false;
     }
-    if (text.includes('MEP') || text.includes('HVAC') || text.includes('PLUMBING') || text.includes('ELECTRICAL') || text.includes('PIPING')) {
-      return 'MEP';
-    }
-    if (text.includes('CAD') || text.includes('DRAFTING') || text.includes('SHEET') || text.includes('DRAWING')) {
-      return 'CAD';
-    }
-    return 'ACS'; // Default to Architectural, Coordination & Structure
   };
 
-  // Helper to map discipline string from workLogs/allocations to BimServiceType
-  const mapDisciplineToService = (disc?: string): BimServiceType => {
-    const text = (disc || '').toUpperCase();
-    if (text.includes('SCAN') || text.includes('POINT CLOUD')) return 'SCAN TO BIM';
-    if (text.includes('MEP') || text.includes('HVAC') || text.includes('PLUMB') || text.includes('ELEC')) return 'MEP';
-    if (text.includes('CAD') || text.includes('DRAFT')) return 'CAD';
-    return 'ACS';
+  // Helper to check if a project belongs to a specific BIM Service Type / Discipline card
+  const doesProjectMatchService = (project: BimProject, svc: BimServiceType): boolean => {
+    const rawDiscs =
+      Array.isArray(project.disciplines) && project.disciplines.length > 0
+        ? project.disciplines
+        : (project as any).discipline
+        ? [String((project as any).discipline)]
+        : ['BIM - ACS'];
+
+    if (rawDiscs.some((d) => doesDisciplineMatchService(d, svc))) {
+      return true;
+    }
+
+    if (
+      Array.isArray(project.tasks) &&
+      project.tasks.some((t) => doesDisciplineMatchService(t.discipline, svc))
+    ) {
+      return true;
+    }
+
+    const titleCodeType = `${project.name || ''} ${project.code || ''} ${project.buildingType || ''}`.toUpperCase();
+    const descText = (project.description || '').toUpperCase();
+
+    if (svc === 'SCAN TO BIM') {
+      return (
+        titleCodeType.includes('SCAN') ||
+        titleCodeType.includes('POINT CLOUD') ||
+        titleCodeType.includes('AS-BUILT') ||
+        titleCodeType.includes('REALITY CAPTURE') ||
+        descText.includes('SCAN-TO-BIM') ||
+        descText.includes('SCAN TO BIM')
+      );
+    }
+
+    if (svc === 'CAD') {
+      return titleCodeType.includes('CAD') || titleCodeType.includes('DRAFTING');
+    }
+
+    return false;
   };
 
   // Service Type Projections Calculation (dynamically scoped to selectedProjectId)
   const serviceTypeData = useMemo(() => {
-    const services: BimServiceType[] = ['ACS', 'MEP', 'SCAN TO BIM', 'CAD'];
-    const serviceLabels: Record<BimServiceType, { label: string; desc: string; color: string; bg: string; border: string }> = {
-      'ACS': {
-        label: 'ACS (Architecture & Structure)',
-        desc: 'Core 3D models, structural framing, envelope LOD 300-350',
+    const services: BimServiceType[] = [
+      'BIM - ACS',
+      'Structure',
+      'MEP - HVAC',
+      'MEP - Electrical',
+      'MEP - Plumbing',
+      'CAD',
+      'SES',
+      'BIM - MEP',
+      'Façade / Envelope',
+      'Coordination & QA',
+      'Fire Protection',
+      'AI & Automation',
+      'Estimation',
+      'SCAN TO BIM',
+    ];
+    const serviceLabels: Record<string, { label: string; desc: string; color: string; bg: string; border: string }> = {
+      'BIM - ACS': {
+        label: 'BIM - ACS (Architecture & Coordination)',
+        desc: 'Core 3D architectural models, spatial coordination & LOD 300-350',
         color: 'text-blue-400',
         bg: 'bg-blue-500',
         border: 'border-blue-500/30'
       },
-      'MEP': {
-        label: 'MEP Coordination',
-        desc: 'HVAC ductwork, electrical trays, plumbing & clash resolution',
+      'Structure': {
+        label: 'Structure',
+        desc: 'Structural framing, steel trusses, foundations & rebar detailing',
+        color: 'text-indigo-400',
+        bg: 'bg-indigo-500',
+        border: 'border-indigo-500/30'
+      },
+      'MEP - HVAC': {
+        label: 'MEP - HVAC',
+        desc: 'Mechanical ductwork, AHU plant rooms & thermal distribution',
         color: 'text-cyan-400',
         bg: 'bg-cyan-500',
         border: 'border-cyan-500/30'
       },
-      'SCAN TO BIM': {
-        label: 'SCAN TO BIM',
-        desc: 'LiDAR point clouds, reverse engineering & as-built verification',
-        color: 'text-purple-400',
-        bg: 'bg-purple-500',
-        border: 'border-purple-500/30'
+      'MEP - Electrical': {
+        label: 'MEP - Electrical',
+        desc: 'Electrical containment, cable trays, switchgear & lighting layouts',
+        color: 'text-amber-400',
+        bg: 'bg-amber-500',
+        border: 'border-amber-500/30'
+      },
+      'MEP - Plumbing': {
+        label: 'MEP - Plumbing',
+        desc: 'Domestic water supply, sanitary drainage & pump room piping',
+        color: 'text-sky-400',
+        bg: 'bg-sky-500',
+        border: 'border-sky-500/30'
       },
       'CAD': {
         label: 'CAD & Detailing',
@@ -417,23 +511,84 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
         color: 'text-amber-400',
         bg: 'bg-amber-500',
         border: 'border-amber-500/30'
+      },
+      'SES': {
+        label: 'SES',
+        desc: 'Specialized engineering systems & technical infrastructure',
+        color: 'text-fuchsia-400',
+        bg: 'bg-fuchsia-500',
+        border: 'border-fuchsia-500/30'
+      },
+      'BIM - MEP': {
+        label: 'BIM - MEP',
+        desc: 'Multi-trade MEP coordination, plant integration & clash resolution',
+        color: 'text-teal-400',
+        bg: 'bg-teal-500',
+        border: 'border-teal-500/30'
+      },
+      'Façade / Envelope': {
+        label: 'Façade / Envelope',
+        desc: 'Curtain wall systems, exterior cladding & building envelope BIM',
+        color: 'text-purple-400',
+        bg: 'bg-purple-500',
+        border: 'border-purple-500/30'
+      },
+      'Coordination & QA': {
+        label: 'Coordination & QA',
+        desc: 'Federated model auditing, clash detection & QA/QC validation',
+        color: 'text-orange-400',
+        bg: 'bg-orange-500',
+        border: 'border-orange-500/30'
+      },
+      'Fire Protection': {
+        label: 'Fire Protection',
+        desc: 'Sprinkler networks, fire suppression risers & life safety systems',
+        color: 'text-rose-400',
+        bg: 'bg-rose-500',
+        border: 'border-rose-500/30'
+      },
+      'AI & Automation': {
+        label: 'AI & Automation',
+        desc: 'Revit API plugins, Dynamo scripts & automated BIM workflows',
+        color: 'text-violet-400',
+        bg: 'bg-violet-500',
+        border: 'border-violet-500/30'
+      },
+      'Estimation': {
+        label: 'Estimation',
+        desc: '5D BIM quantity takeoffs, bid estimation & effort scoping',
+        color: 'text-emerald-400',
+        bg: 'bg-emerald-500',
+        border: 'border-emerald-500/30'
+      },
+      'SCAN TO BIM': {
+        label: 'SCAN TO BIM',
+        desc: 'LiDAR point clouds, reverse engineering & as-built verification',
+        color: 'text-purple-400',
+        bg: 'bg-purple-500',
+        border: 'border-purple-500/30'
       }
     };
 
     const isSingleProjectScope = Boolean(selectedProjectId && selectedProjectId !== 'all');
+    const activeScoped = scopedProjects.filter(
+      (p) => p.status !== 'Completed' && p.status !== 'CLOSED'
+    );
+    const targetProjects =
+      !isSingleProjectScope && activeScoped.length > 0 ? activeScoped : scopedProjects;
 
     return services.map(svc => {
-      const projs = scopedProjects.filter(p => mapProjectToService(p) === svc);
+      const projs = targetProjects.filter(p => doesProjectMatchService(p, svc));
       let budgetHours = projs.reduce((sum, p) => sum + (Number(p.totalEstimatedHours) || 0), 0);
       let completedHours = projs.reduce((sum, p) => sum + getProjectCompletedHours(p.id), 0);
 
-      // When a single project is selected, also check if discipline-specific logs or allocations exist for this service pillar
-      if (isSingleProjectScope && projs.length === 0) {
+      // Also check if discipline-specific logs or allocations exist when no project directly has the tag
+      if (projs.length === 0) {
         const svcLogsHours = scopedWorkLogs
-          .filter(w => mapDisciplineToService(w.discipline) === svc)
+          .filter(w => doesDisciplineMatchService(w.discipline, svc))
           .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
         const svcAllocHours = scopedAllocations
-          .filter(a => mapDisciplineToService(a.discipline) === svc)
+          .filter(a => doesDisciplineMatchService(a.discipline, svc))
           .reduce((sum, a) => sum + (Number(a.assignedHours) || 0), 0);
         completedHours += svcLogsHours;
         budgetHours += svcAllocHours;

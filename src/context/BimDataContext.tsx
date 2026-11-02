@@ -1295,12 +1295,25 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
         ? Number(matched.totalEstimatedHours)
         : masterProj.totalEstimatedHours;
 
+    const masterPrimaryDisc = masterProj.disciplines?.[0];
+    let resolvedDisciplines =
+      Array.isArray(matched.disciplines) && matched.disciplines.length > 0
+        ? matched.disciplines
+        : masterProj.disciplines;
+    if (
+      (masterPrimaryDisc === 'SCAN TO BIM' || masterPrimaryDisc === 'CAD') &&
+      !resolvedDisciplines.includes(masterPrimaryDisc)
+    ) {
+      resolvedDisciplines = [masterPrimaryDisc, ...resolvedDisciplines];
+    }
+
     return {
       ...masterProj,
       ...matched,
       id: masterProj.id,
       code: matched.code || masterProj.code,
       name: cleanProjectName(matched.name || masterProj.name),
+      disciplines: resolvedDisciplines,
       totalEstimatedHours: resolvedEst,
       estimatedHours: resolvedEst,
       ...(matched.manualEstimatedHoursOverride !== undefined
@@ -3480,7 +3493,205 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
           return changed ? updated.map((e) => sanitizeEmployeeRecord(e)) : currentEmployees;
         });
+
+        // Also ensure no active project referenced in operational logs is orphaned from projects state
+        setProjects((currentProjects) => {
+          let projChanged = false;
+          const existingIds = new Set(currentProjects.map((p) => p.id));
+          const existingNameKeys = new Set(
+            currentProjects.map((p) => normalizeProjectNameKey(p.name)).filter(Boolean)
+          );
+          const orphanedProjects: BimProject[] = [];
+
+          list.forEach((log) => {
+            if (!log || log.isTestEntry) return;
+            const rawPid = String(log.projectId || '').trim();
+            const rawPName = cleanProjectName(String(log.projectName || '').trim());
+            const normPName = normalizeProjectNameKey(rawPName);
+            if (!rawPid && !normPName) return;
+            if (rawPName.toLowerCase() === 'bim project' || rawPName.toLowerCase() === 'unassigned project') {
+              return;
+            }
+            const matchedExisting = currentProjects.some((p) =>
+              doesLogBelongToProject(log, p)
+            );
+            if (
+              !matchedExisting &&
+              (!rawPid || !existingIds.has(rawPid)) &&
+              (!normPName || !existingNameKeys.has(normPName))
+            ) {
+              const newId = rawPid || `proj-${normPName.replace(/[^a-z0-9]+/g, '-')}`;
+              const displayName = rawPName || rawPid;
+              existingIds.add(newId);
+              if (normPName) existingNameKeys.add(normPName);
+              projChanged = true;
+              const disc = (log.discipline as Discipline) || 'BIM - ACS';
+              orphanedProjects.push({
+                id: newId,
+                code: `BIM-${displayName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase() || 'PRJ'}`,
+                name: displayName,
+                clientName: 'Modela',
+                buildingType: 'Commercial',
+                location: 'Global',
+                grossFloorAreaSqm: 1000,
+                startDate: log.date || toLocalIsoDate(new Date()),
+                targetCompletionDate: '',
+                plannedDeliveryDate: '',
+                status: 'WIP',
+                totalEstimatedHours: 0,
+                totalCompletedHours: 0,
+                currentLOD: (log.lodStage as LODLevel) || 'LOD 300',
+                targetLOD: 'LOD 350',
+                budgetAmount: 0,
+                disciplines: [disc],
+                assignedEmployeeIds: log.employeeId ? [log.employeeId] : [],
+                description: `${displayName} BIM modeling and coordination project.`,
+                tasks: [],
+                milestones: [],
+                clashes: [],
+              });
+            }
+          });
+
+          return projChanged ? [...orphanedProjects, ...currentProjects] : currentProjects;
+        });
       }
+    };
+
+    const mergeIncomingSsotProjects = (rawProjects: any[]) => {
+      if (!Array.isArray(rawProjects) || rawProjects.length === 0) return;
+      setProjects((prev) => {
+        const byId = new Map<string, any>();
+        const byName = new Map<string, any>();
+        rawProjects.forEach((pr: any) => {
+          if (!pr) return;
+          if (pr.id) byId.set(String(pr.id), pr);
+          const nKey = normalizeProjectNameKey(pr.name || pr.projectName);
+          if (nKey && !byName.has(nKey)) byName.set(nKey, pr);
+        });
+
+        const existingIds = new Set(prev.map((p) => p.id));
+        const existingNameKeys = new Set(
+          prev.map((p) => normalizeProjectNameKey(p.name)).filter(Boolean)
+        );
+
+        const updated = prev.map((p) => {
+          const nKey = normalizeProjectNameKey(p.name);
+          const incoming = byId.get(p.id) || (nKey ? byName.get(nKey) : undefined);
+          if (!incoming) return p;
+          const nextEst =
+            incoming.manualEstimatedHoursOverride !== undefined
+              ? Number(incoming.manualEstimatedHoursOverride)
+              : incoming.estimatedHours !== undefined
+              ? Number(incoming.estimatedHours)
+              : incoming.totalEstimatedHours !== undefined
+              ? Number(incoming.totalEstimatedHours)
+              : p.totalEstimatedHours;
+          const nextLogged =
+            incoming.manualHoursOverride !== undefined
+              ? Number(incoming.manualHoursOverride)
+              : incoming.totalLogged !== undefined
+              ? Number(incoming.totalLogged)
+              : incoming.totalCompletedHours !== undefined
+              ? Number(incoming.totalCompletedHours)
+              : incoming.totalHoursLogged !== undefined
+              ? Number(incoming.totalHoursLogged)
+              : undefined;
+          return {
+            ...p,
+            ...incoming,
+            id: p.id,
+            name: cleanProjectName(incoming.name || incoming.projectName || p.name),
+            totalEstimatedHours: nextEst,
+            estimatedHours: nextEst,
+            ...(nextLogged !== undefined
+              ? {
+                  totalLogged: nextLogged,
+                  totalCompletedHours: nextLogged,
+                  manualHoursOverride: nextLogged,
+                }
+              : {}),
+          };
+        });
+
+        const newEntries: BimProject[] = [];
+        rawProjects.forEach((incoming: any) => {
+          if (!incoming) return;
+          const incId = String(incoming.id || '').trim();
+          const incName = cleanProjectName(String(incoming.name || incoming.projectName || '').trim());
+          const nKey = normalizeProjectNameKey(incName);
+          if (!incId && !incName) return;
+          if (
+            (!incId || !existingIds.has(incId)) &&
+            (!nKey || !existingNameKeys.has(nKey))
+          ) {
+            const finalId = incId || `proj-${Date.now()}`;
+            const finalName = incName || finalId;
+            existingIds.add(finalId);
+            if (nKey) existingNameKeys.add(nKey);
+            const nextEst = Number(
+              incoming.manualEstimatedHoursOverride ??
+                incoming.estimatedHours ??
+                incoming.totalEstimatedHours ??
+                0
+            );
+            const nextLogged =
+              incoming.manualHoursOverride !== undefined
+                ? Number(incoming.manualHoursOverride)
+                : incoming.totalLogged !== undefined
+                ? Number(incoming.totalLogged)
+                : incoming.totalCompletedHours !== undefined
+                ? Number(incoming.totalCompletedHours)
+                : incoming.totalHoursLogged !== undefined
+                ? Number(incoming.totalHoursLogged)
+                : undefined;
+
+            newEntries.push({
+              id: finalId,
+              code:
+                incoming.code ||
+                `BIM-${finalName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase() || 'PRJ'}`,
+              name: finalName,
+              clientName: incoming.clientName || 'Modela',
+              buildingType: incoming.buildingType || 'Commercial',
+              location: incoming.location || 'Global',
+              grossFloorAreaSqm: Number(incoming.grossFloorAreaSqm) || 1000,
+              startDate: incoming.startDate || toLocalIsoDate(new Date()),
+              targetCompletionDate: incoming.targetCompletionDate || incoming.plannedDeliveryDate || '',
+              plannedDeliveryDate: incoming.plannedDeliveryDate || incoming.targetCompletionDate || '',
+              actualDeliveredDate: incoming.actualDeliveredDate,
+              status: incoming.status || 'WIP',
+              totalEstimatedHours: nextEst,
+              estimatedHours: nextEst,
+              manualEstimatedHoursOverride: incoming.manualEstimatedHoursOverride,
+              totalCompletedHours: nextLogged ?? 0,
+              ...(nextLogged !== undefined
+                ? {
+                    totalLogged: nextLogged,
+                    manualHoursOverride: incoming.manualHoursOverride,
+                  }
+                : {}),
+              manualHoursBaseLogged: incoming.manualHoursBaseLogged,
+              currentLOD: incoming.currentLOD || 'LOD 300',
+              targetLOD: incoming.targetLOD || 'LOD 350',
+              budgetAmount: Number(incoming.budgetAmount) || 0,
+              disciplines:
+                Array.isArray(incoming.disciplines) && incoming.disciplines.length > 0
+                  ? incoming.disciplines
+                  : ['BIM - ACS'],
+              milestones: Array.isArray(incoming.milestones) ? incoming.milestones : [],
+              tasks: Array.isArray(incoming.tasks) ? incoming.tasks : [],
+              clashes: Array.isArray(incoming.clashes) ? incoming.clashes : [],
+              assignedEmployeeIds: Array.isArray(incoming.assignedEmployeeIds)
+                ? incoming.assignedEmployeeIds
+                : [],
+              description: incoming.description || '',
+            });
+          }
+        });
+
+        return newEntries.length > 0 ? [...newEntries, ...updated] : updated;
+      });
     };
 
     const mergeIncomingTeamMembers = (rawMembers: any[]) => {
@@ -3615,47 +3826,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             mergeIncomingTeamMembers(data.teamMembers);
           }
           if (Array.isArray(data?.projects) && data.projects.length > 0) {
-            setProjects((prev) => {
-              const byId = new Map<string, any>();
-              data.projects.forEach((pr: any) => {
-                if (pr?.id) byId.set(String(pr.id), pr);
-              });
-              return prev.map((p) => {
-                const incoming = byId.get(p.id);
-                if (!incoming) return p;
-                const nextEst =
-                  incoming.manualEstimatedHoursOverride !== undefined
-                    ? Number(incoming.manualEstimatedHoursOverride)
-                    : incoming.estimatedHours !== undefined
-                    ? Number(incoming.estimatedHours)
-                    : incoming.totalEstimatedHours !== undefined
-                    ? Number(incoming.totalEstimatedHours)
-                    : p.totalEstimatedHours;
-                const nextLogged =
-                  incoming.manualHoursOverride !== undefined
-                    ? Number(incoming.manualHoursOverride)
-                    : incoming.totalLogged !== undefined
-                    ? Number(incoming.totalLogged)
-                    : incoming.totalCompletedHours !== undefined
-                    ? Number(incoming.totalCompletedHours)
-                    : incoming.totalHoursLogged !== undefined
-                    ? Number(incoming.totalHoursLogged)
-                    : undefined;
-                return {
-                  ...p,
-                  ...incoming,
-                  totalEstimatedHours: nextEst,
-                  estimatedHours: nextEst,
-                  ...(nextLogged !== undefined
-                    ? {
-                        totalLogged: nextLogged,
-                        totalCompletedHours: nextLogged,
-                        manualHoursOverride: nextLogged,
-                      }
-                    : {}),
-                };
-              });
-            });
+            mergeIncomingSsotProjects(data.projects);
           }
         }
       } catch {}
@@ -3774,6 +3945,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               if (Array.isArray(payload.teamMembers)) {
                 mergeIncomingTeamMembers(payload.teamMembers);
               }
+              if (Array.isArray(payload.projects) && payload.projects.length > 0) {
+                mergeIncomingSsotProjects(payload.projects);
+              }
             } else if (payload?.type === 'UPSERT_TIMESHEETS' && Array.isArray(payload.timesheets)) {
               payload.timesheets.forEach((item: any) => {
                 if (item?.id) deletedLogIdsSet.delete(String(item.id));
@@ -3792,47 +3966,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             } else if (payload?.type === 'UPSERT_TEAM_MEMBERS' && Array.isArray(payload.teamMembers)) {
               mergeIncomingTeamMembers(payload.teamMembers);
             } else if (payload?.type === 'UPSERT_PROJECTS' && Array.isArray(payload.projects)) {
-              setProjects((prev) => {
-                const byId = new Map<string, any>();
-                payload.projects.forEach((pr: any) => {
-                  if (pr?.id) byId.set(String(pr.id), pr);
-                });
-                return prev.map((p) => {
-                  const incoming = byId.get(p.id);
-                  if (!incoming) return p;
-                  const nextEst =
-                    incoming.manualEstimatedHoursOverride !== undefined
-                      ? Number(incoming.manualEstimatedHoursOverride)
-                      : incoming.estimatedHours !== undefined
-                      ? Number(incoming.estimatedHours)
-                      : incoming.totalEstimatedHours !== undefined
-                      ? Number(incoming.totalEstimatedHours)
-                      : p.totalEstimatedHours;
-                  const nextLogged =
-                    incoming.manualHoursOverride !== undefined
-                      ? Number(incoming.manualHoursOverride)
-                      : incoming.totalLogged !== undefined
-                      ? Number(incoming.totalLogged)
-                      : incoming.totalCompletedHours !== undefined
-                      ? Number(incoming.totalCompletedHours)
-                      : incoming.totalHoursLogged !== undefined
-                      ? Number(incoming.totalHoursLogged)
-                      : undefined;
-                  return {
-                    ...p,
-                    ...incoming,
-                    totalEstimatedHours: nextEst,
-                    estimatedHours: nextEst,
-                    ...(nextLogged !== undefined
-                      ? {
-                          totalLogged: nextLogged,
-                          totalCompletedHours: nextLogged,
-                          manualHoursOverride: nextLogged,
-                        }
-                      : {}),
-                  };
-                });
-              });
+              mergeIncomingSsotProjects(payload.projects);
             } else if (payload?.type === 'DELETE_TEAM_MEMBER') {
               const delId = String(payload.id || '').trim();
               const delEmail = String(payload.email || '').trim().toLowerCase();
@@ -5240,7 +5374,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       // Strip undefined values so Firestore setDoc never rejects optional fields
       const sanitizedProj = JSON.parse(JSON.stringify(newProj));
-      const firestorePayload = {
+      const ssotPayload = {
         ...sanitizedProj,
         projectName: newProj.name,
         status: newProj.status || 'WIP',
@@ -5250,6 +5384,16 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           newProj.plannedDeliveryDate ||
           newProj.targetCompletionDate ||
           new Date().toISOString().slice(0, 10),
+        updatedAt: new Date().toISOString(),
+      };
+      fetch('/api/ssot/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ssotPayload),
+      }).catch(() => {});
+
+      const firestorePayload = {
+        ...ssotPayload,
         createdAt: serverTimestamp(),
       };
       setDoc(doc(db, 'projects', newProj.id), firestorePayload, { merge: true }).catch((err) =>
@@ -5363,6 +5507,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const payload = updatedDoc ? { ...updatedDoc, status } : { id, status };
       const sanitizedPayload = JSON.parse(JSON.stringify(payload));
+      fetch('/api/ssot/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sanitizedPayload),
+      }).catch(() => {});
       setDoc(doc(db, 'projects', id), sanitizedPayload, { merge: true }).catch((err) =>
         console.warn('Firestore updateProjectStatus sync notice:', err)
       );
