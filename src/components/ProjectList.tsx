@@ -582,19 +582,24 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           return true;
         }
         if (
-          disciplineFilter === 'BIM - ACS' &&
-          (d === 'BIM - ACS' || d === ('Architecture' as any) || d === ('ACS' as any))
+          (disciplineFilter === 'BIM - ACS' || disciplineFilter === 'ACS') &&
+          (d === 'BIM - ACS' ||
+            d === 'ACS' ||
+            d === ('Architecture' as any) ||
+            d === 'Structure' ||
+            d === 'Structural')
         ) {
           return true;
         }
         if (
-          disciplineFilter === 'BIM - MEP' &&
+          (disciplineFilter === 'BIM - MEP' || disciplineFilter === 'MEP') &&
           (d === 'BIM - MEP' ||
             d === 'MEP' ||
             d === 'MEP - HVAC' ||
             d === 'MEP - Electrical' ||
             d === 'MEP - Plumbing' ||
-            d === 'Fire Protection')
+            d === 'Fire Protection' ||
+            d === 'SES')
         ) {
           return true;
         }
@@ -723,10 +728,12 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               className="bg-transparent text-slate-200 text-xs font-semibold focus:outline-none cursor-pointer pr-2"
             >
               <option value="all" className="bg-slate-900">All Disciplines</option>
-              <option value="BIM - ACS" className="bg-slate-900">BIM - ACS</option>
-              <option value="BIM - MEP" className="bg-slate-900">BIM - MEP</option>
+              <option value="ACS" className="bg-slate-900">ACS</option>
+              <option value="MEP" className="bg-slate-900">MEP</option>
               <option value="SCAN TO BIM" className="bg-slate-900">SCAN TO BIM</option>
               <option value="CAD" className="bg-slate-900">CAD</option>
+              <option value="BIM - ACS" className="bg-slate-900">BIM - ACS</option>
+              <option value="BIM - MEP" className="bg-slate-900">BIM - MEP</option>
               <option value="Structure" className="bg-slate-900">Structure</option>
               <option value="MEP - HVAC" className="bg-slate-900">MEP - HVAC</option>
               <option value="MEP - Electrical" className="bg-slate-900">MEP - Electrical</option>

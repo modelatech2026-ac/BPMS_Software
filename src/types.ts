@@ -1,14 +1,15 @@
 export type Discipline =
+  | 'ACS'
+  | 'MEP'
+  | 'SCAN TO BIM'
+  | 'CAD'
   | 'BIM - ACS'
   | 'BIM - MEP'
   | 'Structure'
   | 'Structural'
-  | 'MEP'
   | 'MEP - HVAC'
   | 'MEP - Electrical'
   | 'MEP - Plumbing'
-  | 'SCAN TO BIM'
-  | 'CAD'
   | 'SES'
   | 'Fire Protection'
   | 'Façade / Envelope'
@@ -18,6 +19,10 @@ export type Discipline =
   | 'Estimation';
 
 export const PRIMARY_DISCIPLINES = [
+  "ACS",
+  "MEP",
+  "SCAN TO BIM",
+  "CAD",
   "BIM - ACS",
   "Structure",
   "Structural",
@@ -25,8 +30,6 @@ export const PRIMARY_DISCIPLINES = [
   "MEP - HVAC",
   "MEP - Electrical",
   "MEP - Plumbing",
-  "SCAN TO BIM",
-  "CAD",
   "SES",
   "Fire Protection",
   "Façade / Envelope",

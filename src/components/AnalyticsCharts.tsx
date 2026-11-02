@@ -148,6 +148,7 @@ export const DisciplineDistributionChart: React.FC<{
   ];
 
   const colors: Record<Discipline, string> = {
+    'ACS': 'bg-emerald-500 text-emerald-400',
     'BIM - ACS': 'bg-emerald-500 text-emerald-400',
     'BIM - MEP': 'bg-cyan-500 text-cyan-400',
     'Structure': 'bg-blue-500 text-blue-400',
@@ -169,6 +170,7 @@ export const DisciplineDistributionChart: React.FC<{
 
   const normalizeDisc = (d?: string): Discipline => {
     if (!d) return 'BIM - ACS';
+    if (d === 'ACS') return 'BIM - ACS';
     if (d === 'MEP') return 'BIM - MEP';
     if (d === 'Structural') return 'Structure';
     return d as Discipline;

@@ -495,12 +495,15 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             <label className="block text-slate-400 font-medium mb-1">BIM Disciplines</label>
             <div className="flex flex-wrap gap-2">
               {[
+                'ACS',
+                'MEP',
+                'SCAN TO BIM',
+                'CAD',
                 'BIM - ACS',
                 'Structure',
                 'MEP - HVAC',
                 'MEP - Electrical',
                 'MEP - Plumbing',
-                'CAD',
                 'SES',
                 'BIM - MEP',
                 'Façade / Envelope',
