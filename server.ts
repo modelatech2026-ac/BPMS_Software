@@ -306,6 +306,7 @@ app.delete("/api/access-requests/:idOrEmail", (req, res) => {
 const SSOT_STORE_PATH = path.join(process.cwd(), ".ssot-store.json");
 const ssotTimesheets = new Map<string, any>();
 const ssotTeamMembers = new Map<string, any>();
+const ssotProjects = new Map<string, any>();
 const ssotDeletedMemberIds = new Set<string>();
 const ssotDeletedLogIds = new Set<string>();
 const ssotSseClients = new Set<express.Response>();
@@ -336,6 +337,13 @@ function loadSsotStore() {
           }
         });
       }
+      if (Array.isArray(parsed?.projects)) {
+        parsed.projects.forEach((proj: any) => {
+          if (proj?.id) {
+            ssotProjects.set(String(proj.id), proj);
+          }
+        });
+      }
     }
   } catch (err) {
     console.warn("[SSOTStore] Failed to load SSOT store from disk:", err);
@@ -350,6 +358,7 @@ function persistSsotStore() {
       deletedLogIds: Array.from(ssotDeletedLogIds),
       timesheets: Array.from(ssotTimesheets.values()),
       teamMembers: Array.from(ssotTeamMembers.values()),
+      projects: Array.from(ssotProjects.values()),
     };
     fs.writeFileSync(SSOT_STORE_PATH, JSON.stringify(payload, null, 2), "utf-8");
   } catch (err) {
@@ -396,6 +405,7 @@ app.get("/api/ssot/stream", (req, res) => {
       type: "INIT_SSOT",
       timesheets: Array.from(ssotTimesheets.values()),
       teamMembers: Array.from(ssotTeamMembers.values()),
+      projects: Array.from(ssotProjects.values()),
       deletedMemberIds: Array.from(ssotDeletedMemberIds),
       deletedLogIds: Array.from(ssotDeletedLogIds),
     })}\n\n`
@@ -423,9 +433,45 @@ app.get("/api/ssot/state", (_req, res) => {
     timestamp: new Date().toISOString(),
     timesheets: Array.from(ssotTimesheets.values()),
     teamMembers: Array.from(ssotTeamMembers.values()),
+    projects: Array.from(ssotProjects.values()),
     deletedMemberIds: Array.from(ssotDeletedMemberIds),
     deletedLogIds: Array.from(ssotDeletedLogIds),
   });
+});
+
+app.post("/api/ssot/projects", (req, res) => {
+  try {
+    const body = req.body || {};
+    const items = Array.isArray(body.projects) ? body.projects : body.id ? [body] : [];
+    const updatedProjects: any[] = [];
+    const nowIso = new Date().toISOString();
+
+    for (const item of items) {
+      if (!item || !item.id) continue;
+      const projId = String(item.id).trim();
+      const existing = ssotProjects.get(projId) || {};
+      const record = {
+        ...existing,
+        ...item,
+        id: projId,
+        updatedAt: item.updatedAt || nowIso,
+      };
+      ssotProjects.set(projId, record);
+      updatedProjects.push(record);
+    }
+
+    if (updatedProjects.length > 0) {
+      persistSsotStore();
+      broadcastSsotEvent({
+        type: "UPSERT_PROJECTS",
+        projects: updatedProjects,
+      });
+    }
+
+    res.json({ success: true, count: updatedProjects.length, projects: updatedProjects });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to save projects" });
+  }
 });
 
 app.post("/api/ssot/timesheets", (req, res) => {

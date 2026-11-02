@@ -25,7 +25,7 @@ import {
   X,
   Check
 } from 'lucide-react';
-import { collection, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useBimData, isUserSuperAdmin, sanitizeWorkLogRecord, doesLogBelongToProject } from '../context/BimDataContext';
 import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS, ResourceAllocationItem, DailyWorkLog } from '../types';
@@ -274,8 +274,22 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     return Array.from(map.values());
   }, [allWorkLogs, workLogs, liveWorkLogs]);
 
-  // Aggregate total Logged Hours for a target project dynamically
+  // Aggregate total Logged Hours for a target project dynamically, respecting manual overrides
   const getProjectDynamicLoggedHours = (project: BimProject): number => {
+    if (
+      project.manualHoursOverride !== undefined &&
+      project.manualHoursOverride !== null &&
+      !Number.isNaN(Number(project.manualHoursOverride))
+    ) {
+      return Number(project.manualHoursOverride);
+    }
+    if (
+      project.totalLogged !== undefined &&
+      project.totalLogged !== null &&
+      !Number.isNaN(Number(project.totalLogged))
+    ) {
+      return Number(project.totalLogged);
+    }
     return combinedWorkLogs
       .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, project))
       .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
@@ -333,37 +347,115 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     }
   };
 
-  const commitLoggedHours = (project: BimProject, rawValue: string) => {
-    const parsed = parseFloat(rawValue);
-    if (!Number.isNaN(parsed) && parsed >= 0) {
-      const currentLoggedFromWorkLogs = (workLogs || [])
-        .filter((w) => !w.isTestEntry && w.projectId === project.id)
+  const handleHoursChange = async (
+    projectId: string,
+    field: 'totalLogged' | 'estimatedHours',
+    value: number
+  ) => {
+    if (Number.isNaN(value) || value < 0) return;
+    const targetProj = projects.find((p) => p.id === projectId);
+    if (!targetProj) return;
+
+    if (field === 'totalLogged') {
+      const currentLoggedFromWorkLogs = combinedWorkLogs
+        .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, targetProj))
         .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
-      updateProject(project.id, {
-        totalCompletedHours: parsed,
-        manualHoursOverride: parsed,
+
+      // 1. Update local state immediately for instant UI feedback
+      updateProject(projectId, {
+        totalLogged: value,
+        totalCompletedHours: value,
+        manualHoursOverride: value,
         manualHoursBaseLogged: currentLoggedFromWorkLogs,
       });
+
+      // 2. Persist update to central database
+      const payload = {
+        id: targetProj.id,
+        name: targetProj.name,
+        projectName: targetProj.name,
+        status: targetProj.status || 'WIP',
+        estimatedHours: Number(targetProj.estimatedHours ?? targetProj.totalEstimatedHours) || 0,
+        totalEstimatedHours: Number(targetProj.estimatedHours ?? targetProj.totalEstimatedHours) || 0,
+        totalLogged: value,
+        totalHoursLogged: value,
+        totalCompletedHours: value,
+        manualHoursOverride: value,
+        manualHoursBaseLogged: currentLoggedFromWorkLogs,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        fetch('/api/ssot/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch(() => {});
+        await setDoc(doc(db, 'projects', projectId), payload, { merge: true });
+      } catch (err) {
+        console.warn('Firestore handleHoursChange totalLogged sync notice:', err);
+      }
+    } else {
+      // 1. Update local state immediately for instant UI feedback
+      updateProject(projectId, {
+        estimatedHours: value,
+        totalEstimatedHours: value,
+        manualEstimatedHoursOverride: value,
+      });
+
+      // 2. Persist update to central database
+      const payload = {
+        id: targetProj.id,
+        name: targetProj.name,
+        projectName: targetProj.name,
+        status: targetProj.status || 'WIP',
+        estimatedHours: value,
+        totalEstimatedHours: value,
+        manualEstimatedHoursOverride: value,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        fetch('/api/ssot/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch(() => {});
+        await setDoc(doc(db, 'projects', projectId), payload, { merge: true });
+      } catch (err) {
+        console.warn('Firestore handleHoursChange estimatedHours sync notice:', err);
+      }
     }
-    setActiveInlineKey(null);
+  };
+
+  const commitLoggedHours = (project: BimProject, rawValue: string) => {
+    const loggedKey = `${project.id}:logged`;
+    const effectiveRaw =
+      inlineDrafts[loggedKey] !== undefined ? inlineDrafts[loggedKey] : rawValue;
+    const parsed = parseFloat(effectiveRaw);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      handleHoursChange(project.id, 'totalLogged', parsed);
+    }
+    setActiveInlineKey((prev) => (prev === loggedKey ? null : prev));
     setInlineDrafts((prev) => {
+      if (!(loggedKey in prev)) return prev;
       const next = { ...prev };
-      delete next[`${project.id}:logged`];
+      delete next[loggedKey];
       return next;
     });
   };
 
   const commitEstimatedHours = (project: BimProject, rawValue: string) => {
-    const parsed = parseFloat(rawValue);
+    const estimatedKey = `${project.id}:estimated`;
+    const effectiveRaw =
+      inlineDrafts[estimatedKey] !== undefined ? inlineDrafts[estimatedKey] : rawValue;
+    const parsed = parseFloat(effectiveRaw);
     if (!Number.isNaN(parsed) && parsed >= 0) {
-      updateProject(project.id, {
-        totalEstimatedHours: parsed,
-      });
+      handleHoursChange(project.id, 'estimatedHours', parsed);
     }
-    setActiveInlineKey(null);
+    setActiveInlineKey((prev) => (prev === estimatedKey ? null : prev));
     setInlineDrafts((prev) => {
+      if (!(estimatedKey in prev)) return prev;
       const next = { ...prev };
-      delete next[`${project.id}:estimated`];
+      delete next[estimatedKey];
       return next;
     });
   };
@@ -588,7 +680,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   filteredProjects.map((project) => {
                     const completed = getProjectDynamicLoggedHours(project);
                     const assignedHours = getProjectAssignedHours(project);
-                    const estimated = Number(project.totalEstimatedHours) || 0;
+                    const estimated = Number(
+                      project.manualEstimatedHoursOverride ??
+                        project.estimatedHours ??
+                        project.totalEstimatedHours
+                    ) || 0;
                     const remainingHours = estimated - assignedHours;
                     const pct = estimated > 0
                       ? Math.round((assignedHours / estimated) * 100)
@@ -601,8 +697,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
                     const loggedKey = `${project.id}:logged`;
                     const estimatedKey = `${project.id}:estimated`;
-                    const isEditingLogged = activeInlineKey === loggedKey;
-                    const isEditingEstimated = activeInlineKey === estimatedKey;
 
                     return (
                       <tr
@@ -681,20 +775,25 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                                 min="0"
                                 aria-label={`Total Hours Logged for ${project.name}`}
                                 value={
-                                  isEditingLogged && inlineDrafts[loggedKey] !== undefined
+                                  inlineDrafts[loggedKey] !== undefined
                                     ? inlineDrafts[loggedKey]
                                     : Number(completed.toFixed(1))
                                 }
                                 onFocus={(e) => {
                                   setActiveInlineKey(loggedKey);
-                                  setInlineDrafts((prev) => ({
-                                    ...prev,
-                                    [loggedKey]: String(Number(completed.toFixed(1))),
-                                  }));
+                                  setInlineDrafts((prev) =>
+                                    prev[loggedKey] !== undefined
+                                      ? prev
+                                      : {
+                                          ...prev,
+                                          [loggedKey]: String(Number(completed.toFixed(1))),
+                                        }
+                                  );
                                   e.currentTarget.select();
                                 }}
                                 onChange={(e) => {
                                   const val = e.target.value;
+                                  setActiveInlineKey(loggedKey);
                                   setInlineDrafts((prev) => ({
                                     ...prev,
                                     [loggedKey]: val,
@@ -757,20 +856,25 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                                 min="0"
                                 aria-label={`Estimated Hours for ${project.name}`}
                                 value={
-                                  isEditingEstimated && inlineDrafts[estimatedKey] !== undefined
+                                  inlineDrafts[estimatedKey] !== undefined
                                     ? inlineDrafts[estimatedKey]
                                     : Number(estimated.toFixed(1))
                                 }
                                 onFocus={(e) => {
                                   setActiveInlineKey(estimatedKey);
-                                  setInlineDrafts((prev) => ({
-                                    ...prev,
-                                    [estimatedKey]: String(Number(estimated.toFixed(1))),
-                                  }));
+                                  setInlineDrafts((prev) =>
+                                    prev[estimatedKey] !== undefined
+                                      ? prev
+                                      : {
+                                          ...prev,
+                                          [estimatedKey]: String(Number(estimated.toFixed(1))),
+                                        }
+                                  );
                                   e.currentTarget.select();
                                 }}
                                 onChange={(e) => {
                                   const val = e.target.value;
+                                  setActiveInlineKey(estimatedKey);
                                   setInlineDrafts((prev) => ({
                                     ...prev,
                                     [estimatedKey]: val,

@@ -1281,18 +1281,43 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
         name: cleanProjectName(masterProj.name),
       };
     }
+    const resolvedEst =
+      matched.manualEstimatedHoursOverride !== undefined &&
+      !Number.isNaN(Number(matched.manualEstimatedHoursOverride))
+        ? Number(matched.manualEstimatedHoursOverride)
+        : matched.estimatedHours !== undefined &&
+          !Number.isNaN(Number(matched.estimatedHours)) &&
+          (Number(matched.estimatedHours) > 0 || masterProj.totalEstimatedHours === 0)
+        ? Number(matched.estimatedHours)
+        : matched.totalEstimatedHours !== undefined &&
+          !Number.isNaN(Number(matched.totalEstimatedHours)) &&
+          (Number(matched.totalEstimatedHours) > 0 || masterProj.totalEstimatedHours === 0)
+        ? Number(matched.totalEstimatedHours)
+        : masterProj.totalEstimatedHours;
+
     return {
       ...masterProj,
       ...matched,
       id: masterProj.id,
       code: masterProj.code,
       name: cleanProjectName(masterProj.name),
-      totalEstimatedHours:
-        matched.totalEstimatedHours !== undefined &&
-        matched.totalEstimatedHours !== 0 &&
-        masterProj.totalEstimatedHours === 0
-          ? matched.totalEstimatedHours
-          : masterProj.totalEstimatedHours,
+      totalEstimatedHours: resolvedEst,
+      estimatedHours: resolvedEst,
+      ...(matched.manualEstimatedHoursOverride !== undefined
+        ? { manualEstimatedHoursOverride: Number(matched.manualEstimatedHoursOverride) }
+        : {}),
+      ...(matched.totalLogged !== undefined
+        ? { totalLogged: Number(matched.totalLogged) }
+        : {}),
+      ...(matched.totalCompletedHours !== undefined
+        ? { totalCompletedHours: Number(matched.totalCompletedHours) }
+        : {}),
+      ...(matched.manualHoursOverride !== undefined
+        ? { manualHoursOverride: Number(matched.manualHoursOverride) }
+        : {}),
+      ...(matched.manualHoursBaseLogged !== undefined
+        ? { manualHoursBaseLogged: Number(matched.manualHoursBaseLogged) }
+        : {}),
       plannedDeliveryDate:
         matched.plannedDeliveryDate !== undefined && matched.plannedDeliveryDate !== ''
           ? matched.plannedDeliveryDate
@@ -3023,13 +3048,19 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             const data = docSnap.data();
             const resolvedName = data.name || data.projectName;
             const resolvedEstHours =
-              data.totalEstimatedHours !== undefined
-                ? Number(data.totalEstimatedHours)
+              data.manualEstimatedHoursOverride !== undefined
+                ? Number(data.manualEstimatedHoursOverride)
                 : data.estimatedHours !== undefined
                 ? Number(data.estimatedHours)
+                : data.totalEstimatedHours !== undefined
+                ? Number(data.totalEstimatedHours)
                 : undefined;
             const resolvedLoggedHours =
-              data.totalCompletedHours !== undefined
+              data.manualHoursOverride !== undefined
+                ? Number(data.manualHoursOverride)
+                : data.totalLogged !== undefined
+                ? Number(data.totalLogged)
+                : data.totalCompletedHours !== undefined
                 ? Number(data.totalCompletedHours)
                 : data.totalHoursLogged !== undefined
                 ? Number(data.totalHoursLogged)
@@ -3065,9 +3096,26 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 : {}),
               ...(data.actualDeliveredDate !== undefined ? { actualDeliveredDate: data.actualDeliveredDate } : {}),
               ...(data.status !== undefined ? { status: data.status } : {}),
-              ...(resolvedEstHours !== undefined ? { totalEstimatedHours: resolvedEstHours } : {}),
-              ...(resolvedLoggedHours !== undefined ? { totalCompletedHours: resolvedLoggedHours } : {}),
-              ...(data.manualHoursOverride !== undefined ? { manualHoursOverride: Number(data.manualHoursOverride) } : {}),
+              ...(resolvedEstHours !== undefined
+                ? {
+                    totalEstimatedHours: resolvedEstHours,
+                    estimatedHours: resolvedEstHours,
+                  }
+                : {}),
+              ...(data.manualEstimatedHoursOverride !== undefined
+                ? { manualEstimatedHoursOverride: Number(data.manualEstimatedHoursOverride) }
+                : {}),
+              ...(resolvedLoggedHours !== undefined
+                ? {
+                    totalCompletedHours: resolvedLoggedHours,
+                    totalLogged: resolvedLoggedHours,
+                  }
+                : {}),
+              ...(data.manualHoursOverride !== undefined
+                ? { manualHoursOverride: Number(data.manualHoursOverride) }
+                : data.totalLogged !== undefined
+                ? { manualHoursOverride: Number(data.totalLogged) }
+                : {}),
               ...(data.manualHoursBaseLogged !== undefined ? { manualHoursBaseLogged: Number(data.manualHoursBaseLogged) } : {}),
               ...(data.currentLOD !== undefined ? { currentLOD: data.currentLOD } : {}),
               ...(data.targetLOD !== undefined ? { targetLOD: data.targetLOD } : {}),
@@ -3116,37 +3164,51 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               const remote = firestoreDocsMap.get(p.id) || (nKey ? remoteByName.get(nKey) : undefined);
               if (!remote) return p;
               const { _createdAtMs, ...cleanRemote } = remote;
-              const masterDef = masterById.get(p.id);
+              const masterDef = masterById.get(p.id) || (nKey ? masterByName.get(nKey) : undefined);
               if (masterDef) {
+                const resolvedEst =
+                  cleanRemote.manualEstimatedHoursOverride !== undefined &&
+                  !Number.isNaN(Number(cleanRemote.manualEstimatedHoursOverride))
+                    ? Number(cleanRemote.manualEstimatedHoursOverride)
+                    : cleanRemote.estimatedHours !== undefined &&
+                      !Number.isNaN(Number(cleanRemote.estimatedHours)) &&
+                      (Number(cleanRemote.estimatedHours) > 0 || masterDef.totalEstimatedHours === 0)
+                    ? Number(cleanRemote.estimatedHours)
+                    : cleanRemote.totalEstimatedHours !== undefined &&
+                      !Number.isNaN(Number(cleanRemote.totalEstimatedHours)) &&
+                      (Number(cleanRemote.totalEstimatedHours) > 0 || masterDef.totalEstimatedHours === 0)
+                    ? Number(cleanRemote.totalEstimatedHours)
+                    : p.manualEstimatedHoursOverride !== undefined &&
+                      !Number.isNaN(Number(p.manualEstimatedHoursOverride))
+                    ? Number(p.manualEstimatedHoursOverride)
+                    : p.totalEstimatedHours !== undefined &&
+                      !Number.isNaN(Number(p.totalEstimatedHours))
+                    ? Number(p.totalEstimatedHours)
+                    : masterDef.totalEstimatedHours;
+
                 return {
                   ...p,
                   ...cleanRemote,
                   id: masterDef.id,
                   code: masterDef.code,
                   name: masterDef.name,
-                  totalEstimatedHours:
-                    cleanRemote.totalEstimatedHours !== undefined &&
-                    cleanRemote.totalEstimatedHours > 0 &&
-                    masterDef.totalEstimatedHours === 0
-                      ? cleanRemote.totalEstimatedHours
-                      : masterDef.totalEstimatedHours > 0
-                      ? masterDef.totalEstimatedHours
-                      : Number(cleanRemote.totalEstimatedHours) || 0,
+                  totalEstimatedHours: resolvedEst,
+                  estimatedHours: resolvedEst,
                   plannedDeliveryDate:
                     cleanRemote.plannedDeliveryDate !== undefined && cleanRemote.plannedDeliveryDate !== ''
                       ? cleanRemote.plannedDeliveryDate
-                      : masterDef.plannedDeliveryDate,
+                      : p.plannedDeliveryDate || masterDef.plannedDeliveryDate,
                   targetCompletionDate:
                     cleanRemote.targetCompletionDate !== undefined && cleanRemote.targetCompletionDate !== ''
                       ? cleanRemote.targetCompletionDate
-                      : cleanRemote.plannedDeliveryDate || masterDef.targetCompletionDate,
+                      : cleanRemote.plannedDeliveryDate || p.targetCompletionDate || masterDef.targetCompletionDate,
                   actualDeliveredDate:
                     cleanRemote.actualDeliveredDate !== undefined
                       ? cleanRemote.actualDeliveredDate
-                      : masterDef.actualDeliveredDate,
+                      : p.actualDeliveredDate ?? masterDef.actualDeliveredDate,
                   status:
                     !cleanRemote.status || cleanRemote.status === 'Not Started'
-                      ? masterDef.status
+                      ? p.status || masterDef.status
                       : cleanRemote.status,
                 };
               }
@@ -3552,6 +3614,49 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           if (Array.isArray(data?.teamMembers)) {
             mergeIncomingTeamMembers(data.teamMembers);
           }
+          if (Array.isArray(data?.projects) && data.projects.length > 0) {
+            setProjects((prev) => {
+              const byId = new Map<string, any>();
+              data.projects.forEach((pr: any) => {
+                if (pr?.id) byId.set(String(pr.id), pr);
+              });
+              return prev.map((p) => {
+                const incoming = byId.get(p.id);
+                if (!incoming) return p;
+                const nextEst =
+                  incoming.manualEstimatedHoursOverride !== undefined
+                    ? Number(incoming.manualEstimatedHoursOverride)
+                    : incoming.estimatedHours !== undefined
+                    ? Number(incoming.estimatedHours)
+                    : incoming.totalEstimatedHours !== undefined
+                    ? Number(incoming.totalEstimatedHours)
+                    : p.totalEstimatedHours;
+                const nextLogged =
+                  incoming.manualHoursOverride !== undefined
+                    ? Number(incoming.manualHoursOverride)
+                    : incoming.totalLogged !== undefined
+                    ? Number(incoming.totalLogged)
+                    : incoming.totalCompletedHours !== undefined
+                    ? Number(incoming.totalCompletedHours)
+                    : incoming.totalHoursLogged !== undefined
+                    ? Number(incoming.totalHoursLogged)
+                    : undefined;
+                return {
+                  ...p,
+                  ...incoming,
+                  totalEstimatedHours: nextEst,
+                  estimatedHours: nextEst,
+                  ...(nextLogged !== undefined
+                    ? {
+                        totalLogged: nextLogged,
+                        totalCompletedHours: nextLogged,
+                        manualHoursOverride: nextLogged,
+                      }
+                    : {}),
+                };
+              });
+            });
+          }
         }
       } catch {}
 
@@ -3686,6 +3791,48 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               syncMergedLogs();
             } else if (payload?.type === 'UPSERT_TEAM_MEMBERS' && Array.isArray(payload.teamMembers)) {
               mergeIncomingTeamMembers(payload.teamMembers);
+            } else if (payload?.type === 'UPSERT_PROJECTS' && Array.isArray(payload.projects)) {
+              setProjects((prev) => {
+                const byId = new Map<string, any>();
+                payload.projects.forEach((pr: any) => {
+                  if (pr?.id) byId.set(String(pr.id), pr);
+                });
+                return prev.map((p) => {
+                  const incoming = byId.get(p.id);
+                  if (!incoming) return p;
+                  const nextEst =
+                    incoming.manualEstimatedHoursOverride !== undefined
+                      ? Number(incoming.manualEstimatedHoursOverride)
+                      : incoming.estimatedHours !== undefined
+                      ? Number(incoming.estimatedHours)
+                      : incoming.totalEstimatedHours !== undefined
+                      ? Number(incoming.totalEstimatedHours)
+                      : p.totalEstimatedHours;
+                  const nextLogged =
+                    incoming.manualHoursOverride !== undefined
+                      ? Number(incoming.manualHoursOverride)
+                      : incoming.totalLogged !== undefined
+                      ? Number(incoming.totalLogged)
+                      : incoming.totalCompletedHours !== undefined
+                      ? Number(incoming.totalCompletedHours)
+                      : incoming.totalHoursLogged !== undefined
+                      ? Number(incoming.totalHoursLogged)
+                      : undefined;
+                  return {
+                    ...p,
+                    ...incoming,
+                    totalEstimatedHours: nextEst,
+                    estimatedHours: nextEst,
+                    ...(nextLogged !== undefined
+                      ? {
+                          totalLogged: nextLogged,
+                          totalCompletedHours: nextLogged,
+                          manualHoursOverride: nextLogged,
+                        }
+                      : {}),
+                  };
+                });
+              });
             } else if (payload?.type === 'DELETE_TEAM_MEMBER') {
               const delId = String(payload.id || '').trim();
               const delEmail = String(payload.email || '').trim().toLowerCase();
@@ -4900,6 +5047,22 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const project = getProjectById(projectId);
     if (!project) return 0;
 
+    if (
+      project.manualHoursOverride !== undefined &&
+      project.manualHoursOverride !== null &&
+      !Number.isNaN(Number(project.manualHoursOverride))
+    ) {
+      return Number(project.manualHoursOverride);
+    }
+
+    if (
+      project.totalLogged !== undefined &&
+      project.totalLogged !== null &&
+      !Number.isNaN(Number(project.totalLogged))
+    ) {
+      return Number(project.totalLogged);
+    }
+
     const sourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
 
     // Sum operational hours (excluding test entries) from all organizational workLogs for this project
@@ -5099,38 +5262,85 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const updateProject = (id: string, updates: Partial<BimProject>) => {
-    let updatedDoc: BimProject | undefined;
-    setProjects((prev) =>
-      prev.map((p) => {
+    const existingProj = projects.find((p) => p.id === id);
+    const normalizedUpdates: Partial<BimProject> = { ...updates };
+
+    if (normalizedUpdates.estimatedHours !== undefined || normalizedUpdates.totalEstimatedHours !== undefined) {
+      const estVal = Number(
+        normalizedUpdates.estimatedHours ?? normalizedUpdates.totalEstimatedHours ?? 0
+      );
+      normalizedUpdates.totalEstimatedHours = estVal;
+      normalizedUpdates.estimatedHours = estVal;
+      normalizedUpdates.manualEstimatedHoursOverride = estVal;
+    }
+
+    if (
+      normalizedUpdates.totalLogged !== undefined ||
+      normalizedUpdates.totalCompletedHours !== undefined ||
+      normalizedUpdates.manualHoursOverride !== undefined
+    ) {
+      const logVal = Number(
+        normalizedUpdates.totalLogged ??
+          normalizedUpdates.manualHoursOverride ??
+          normalizedUpdates.totalCompletedHours ??
+          0
+      );
+      normalizedUpdates.totalLogged = logVal;
+      normalizedUpdates.totalCompletedHours = logVal;
+      normalizedUpdates.manualHoursOverride = logVal;
+    }
+
+    let updatedDoc: BimProject | undefined = existingProj
+      ? { ...existingProj, ...normalizedUpdates }
+      : undefined;
+
+    setProjects((prev) => {
+      const next = prev.map((p) => {
         if (p.id === id) {
-          updatedDoc = { ...p, ...updates };
+          updatedDoc = { ...p, ...normalizedUpdates };
           return updatedDoc;
         }
         return p;
-      })
-    );
+      });
+      try {
+        localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
     try {
-      const base = updatedDoc ? { ...updatedDoc, ...updates } : { id, ...updates };
+      const base = updatedDoc ? { ...updatedDoc, ...normalizedUpdates } : { id, ...normalizedUpdates };
       const sanitizedPayload = JSON.parse(JSON.stringify(base));
       if (sanitizedPayload.name !== undefined) {
         sanitizedPayload.projectName = sanitizedPayload.name;
       }
       if (sanitizedPayload.totalEstimatedHours !== undefined) {
         sanitizedPayload.estimatedHours = Number(sanitizedPayload.totalEstimatedHours) || 0;
+        sanitizedPayload.manualEstimatedHoursOverride = Number(sanitizedPayload.totalEstimatedHours) || 0;
       }
       if (sanitizedPayload.totalCompletedHours !== undefined) {
         sanitizedPayload.totalHoursLogged = Number(sanitizedPayload.totalCompletedHours) || 0;
+        sanitizedPayload.totalLogged = Number(sanitizedPayload.totalCompletedHours) || 0;
+        sanitizedPayload.manualHoursOverride = Number(sanitizedPayload.totalCompletedHours) || 0;
       }
-      if ('plannedDeliveryDate' in updates) {
-        sanitizedPayload.plannedDeliveryDate = updates.plannedDeliveryDate || '';
+      if ('plannedDeliveryDate' in normalizedUpdates) {
+        sanitizedPayload.plannedDeliveryDate = normalizedUpdates.plannedDeliveryDate || '';
         sanitizedPayload.targetCompletionDate =
-          updates.targetCompletionDate !== undefined
-            ? updates.targetCompletionDate || ''
-            : updates.plannedDeliveryDate || '';
+          normalizedUpdates.targetCompletionDate !== undefined
+            ? normalizedUpdates.targetCompletionDate || ''
+            : normalizedUpdates.plannedDeliveryDate || '';
       }
-      if ('actualDeliveredDate' in updates) {
-        sanitizedPayload.actualDeliveredDate = updates.actualDeliveredDate || '';
+      if ('actualDeliveredDate' in normalizedUpdates) {
+        sanitizedPayload.actualDeliveredDate = normalizedUpdates.actualDeliveredDate || '';
       }
+      sanitizedPayload.updatedAt = new Date().toISOString();
+
+      fetch('/api/ssot/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sanitizedPayload),
+      }).catch(() => {});
+
       setDoc(doc(db, 'projects', id), sanitizedPayload, { merge: true }).catch((err) =>
         console.warn('Firestore updateProject sync notice:', err)
       );

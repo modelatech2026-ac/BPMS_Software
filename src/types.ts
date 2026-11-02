@@ -199,7 +199,10 @@ export interface BimProject {
   actualDeliveredDate?: string;
   status: ProjectStatus;
   totalEstimatedHours: number;
+  estimatedHours?: number;
+  manualEstimatedHoursOverride?: number;
   totalCompletedHours?: number;
+  totalLogged?: number;
   manualHoursOverride?: number;
   manualHoursBaseLogged?: number;
   currentLOD: LODLevel;
