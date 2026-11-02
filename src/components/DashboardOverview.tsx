@@ -28,7 +28,7 @@ import {
   Gauge,
   Briefcase
 } from 'lucide-react';
-import { useBimData } from '../context/BimDataContext';
+import { useBimData, getProjectTargetHours } from '../context/BimDataContext';
 import { BimProject, ProjectStatus, BimServiceType, PrimaryDiscipline } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 
@@ -253,7 +253,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
       return overallMetrics?.totalEstimatedHours ?? 0;
     }
     return scopedProjects.reduce(
-      (sum, p) => sum + (Number(p.totalEstimatedHours) || 0),
+      (sum, p) => sum + getProjectTargetHours(p),
       0
     );
   }, [selectedProjectId, overallMetrics, scopedProjects]);
@@ -579,7 +579,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 
     return services.map(svc => {
       const projs = targetProjects.filter(p => doesProjectMatchService(p, svc));
-      let budgetHours = projs.reduce((sum, p) => sum + (Number(p.totalEstimatedHours) || 0), 0);
+      let budgetHours = projs.reduce((sum, p) => sum + getProjectTargetHours(p), 0);
       let completedHours = projs.reduce((sum, p) => sum + getProjectCompletedHours(p.id), 0);
 
       // Also check if discipline-specific logs or allocations exist when no project directly has the tag

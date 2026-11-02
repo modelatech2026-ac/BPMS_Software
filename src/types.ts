@@ -205,6 +205,9 @@ export interface BimProject {
   totalEstimatedHours: number;
   estimatedHours?: number;
   manualEstimatedHoursOverride?: number;
+  changedHours?: number;
+  additionalHours?: number;
+  manualChangedHoursOverride?: number;
   totalCompletedHours?: number;
   totalLogged?: number;
   manualHoursOverride?: number;
@@ -397,7 +400,7 @@ export type UserApprovalStatus =
   | 'rejected'
   | 'suspended';
 
-export type UserRole = 'SUPER_ADMIN' | 'DIRECTOR' | 'PROJECT_MANAGER' | 'EDITOR' | 'VIEWER';
+export type UserRole = 'SUPER_ADMIN' | 'DIRECTOR' | 'PROJECT_MANAGER' | 'MANAGER' | 'EDITOR' | 'VIEWER';
 
 export interface UserDatabaseModel {
   id: string;

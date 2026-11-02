@@ -27,7 +27,15 @@ import {
 } from 'lucide-react';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { useBimData, isUserSuperAdmin, sanitizeWorkLogRecord, doesLogBelongToProject } from '../context/BimDataContext';
+import {
+  useBimData,
+  isUserSuperAdmin,
+  sanitizeWorkLogRecord,
+  doesLogBelongToProject,
+  getProjectEstimatedHours,
+  getProjectChangedHours,
+  getProjectTargetHours,
+} from '../context/BimDataContext';
 import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS, ResourceAllocationItem, DailyWorkLog } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 import { NewProjectModal } from './NewProjectModal';
@@ -343,6 +351,24 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         currentUser?.accessLevel !== 'Director')
   );
 
+  const isManagerRole = Boolean(
+    currentUser?.role === 'MANAGER' ||
+      currentUser?.role === 'PROJECT_MANAGER' ||
+      currentUser?.role === 'Manager' ||
+      currentUser?.role === 'Project Manager' ||
+      currentUser?.role === 'BIM Project Manager' ||
+      currentUser?.role === 'Assistant Manager' ||
+      currentUser?.role?.toUpperCase() === 'MANAGER' ||
+      currentUser?.role?.toUpperCase() === 'PROJECT_MANAGER' ||
+      currentUser?.role?.toUpperCase().includes('MANAGER') ||
+      currentUser?.appRole === 'MANAGER' ||
+      currentUser?.appRole === 'PROJECT_MANAGER' ||
+      currentUser?.securityRole === 'Project Manager' ||
+      currentUser?.accessLevel === 'Project Manager'
+  );
+
+  const canEditHours = (isOnlySuperAdmin || isManagerRole) && adminEditUnlocked;
+
   const handleConfirmDeleteProject = async () => {
     if (!projectToDelete) return;
     const targetId = projectToDelete.id;
@@ -364,7 +390,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
   const handleHoursChange = async (
     projectId: string,
-    field: 'totalLogged' | 'estimatedHours',
+    field: 'totalLogged' | 'estimatedHours' | 'changedHours',
     value: number
   ) => {
     if (Number.isNaN(value) || value < 0) return;
@@ -390,8 +416,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         name: targetProj.name,
         projectName: targetProj.name,
         status: targetProj.status || 'WIP',
-        estimatedHours: Number(targetProj.estimatedHours ?? targetProj.totalEstimatedHours) || 0,
-        totalEstimatedHours: Number(targetProj.estimatedHours ?? targetProj.totalEstimatedHours) || 0,
+        estimatedHours: getProjectEstimatedHours(targetProj),
+        totalEstimatedHours: getProjectEstimatedHours(targetProj),
+        changedHours: getProjectChangedHours(targetProj),
+        additionalHours: getProjectChangedHours(targetProj),
         totalLogged: value,
         totalHoursLogged: value,
         totalCompletedHours: value,
@@ -409,7 +437,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       } catch (err) {
         console.warn('Firestore handleHoursChange totalLogged sync notice:', err);
       }
-    } else {
+    } else if (field === 'estimatedHours') {
       // 1. Update local state immediately for instant UI feedback
       updateProject(projectId, {
         estimatedHours: value,
@@ -426,6 +454,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         estimatedHours: value,
         totalEstimatedHours: value,
         manualEstimatedHoursOverride: value,
+        changedHours: getProjectChangedHours(targetProj),
+        additionalHours: getProjectChangedHours(targetProj),
         updatedAt: new Date().toISOString(),
       };
       try {
@@ -437,6 +467,37 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         await setDoc(doc(db, 'projects', projectId), payload, { merge: true });
       } catch (err) {
         console.warn('Firestore handleHoursChange estimatedHours sync notice:', err);
+      }
+    } else if (field === 'changedHours') {
+      // 1. Update local state immediately for instant UI feedback
+      updateProject(projectId, {
+        changedHours: value,
+        additionalHours: value,
+        manualChangedHoursOverride: value,
+      });
+
+      // 2. Persist update to central database
+      const payload = {
+        id: targetProj.id,
+        name: targetProj.name,
+        projectName: targetProj.name,
+        status: targetProj.status || 'WIP',
+        estimatedHours: getProjectEstimatedHours(targetProj),
+        totalEstimatedHours: getProjectEstimatedHours(targetProj),
+        changedHours: value,
+        additionalHours: value,
+        manualChangedHoursOverride: value,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        fetch('/api/ssot/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch(() => {});
+        await setDoc(doc(db, 'projects', projectId), payload, { merge: true });
+      } catch (err) {
+        console.warn('Firestore handleHoursChange changedHours sync notice:', err);
       }
     }
   };
@@ -471,6 +532,23 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       if (!(estimatedKey in prev)) return prev;
       const next = { ...prev };
       delete next[estimatedKey];
+      return next;
+    });
+  };
+
+  const commitChangedHours = (project: BimProject, rawValue: string) => {
+    const changedKey = `${project.id}:changed`;
+    const effectiveRaw =
+      inlineDrafts[changedKey] !== undefined ? inlineDrafts[changedKey] : rawValue;
+    const parsed = parseFloat(effectiveRaw);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      handleHoursChange(project.id, 'changedHours', parsed);
+    }
+    setActiveInlineKey((prev) => (prev === changedKey ? null : prev));
+    setInlineDrafts((prev) => {
+      if (!(changedKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[changedKey];
       return next;
     });
   };
@@ -540,9 +618,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     return matchesScope && matchesSearch && matchesStatus && matchesDiscipline;
   });
 
-  // Calculate total portfolio stats
+  // Calculate total portfolio stats (Total Target Hours = Estimated Hours + Changed Hours / Additional Hours)
   const totalLoggedHours = activePortfolioProjects.reduce((sum, p) => sum + getProjectDynamicLoggedHours(p), 0);
-  const totalEstimatedHours = activePortfolioProjects.reduce((sum, p) => sum + p.totalEstimatedHours, 0);
+  const totalEstimatedHours = activePortfolioProjects.reduce((sum, p) => sum + getProjectTargetHours(p), 0);
 
   return (
     <div className="space-y-6 pb-12">
@@ -703,6 +781,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   </th>
                   <th className="py-3 px-3 min-w-[130px]">Total Hours Logged</th>
                   <th className="py-3 px-3 min-w-[120px]">Estimated Hours</th>
+                  <th className="py-3 px-3 min-w-[160px]">Changed Hours / Additional Hours</th>
                   <th className="py-3 px-3 min-w-[130px]">Planned Delivery Date</th>
                   <th className="py-3 px-3 min-w-[150px]">
                     <div className="flex items-center gap-1.5">
@@ -718,7 +797,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               <tbody className="divide-y divide-slate-800">
                 {filteredProjects.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-500">
+                    <td colSpan={8} className="py-12 text-center text-slate-500">
                       <p className="text-sm font-semibold text-slate-400">No projects found.</p>
                       <p className="text-xs text-slate-500 mt-1">Click "Add Project" to get started.</p>
                     </td>
@@ -727,23 +806,22 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   filteredProjects.map((project) => {
                     const completed = getProjectDynamicLoggedHours(project);
                     const assignedHours = getProjectAssignedHours(project);
-                    const estimated = Number(
-                      project.manualEstimatedHoursOverride ??
-                        project.estimatedHours ??
-                        project.totalEstimatedHours
-                    ) || 0;
-                    const remainingHours = estimated - assignedHours;
-                    const pct = estimated > 0
-                      ? Math.round((assignedHours / estimated) * 100)
+                    const estimated = getProjectEstimatedHours(project);
+                    const changedHours = getProjectChangedHours(project);
+                    const totalTargetHours = getProjectTargetHours(project);
+                    const remainingHours = totalTargetHours - assignedHours;
+                    const pct = totalTargetHours > 0
+                      ? Math.round((assignedHours / totalTargetHours) * 100)
                       : assignedHours > 0 ? 100 : 0;
-                    const isOver = assignedHours > estimated && estimated > 0;
-                    const isZeroEstOver = estimated === 0 && assignedHours > 0;
+                    const isOver = assignedHours > totalTargetHours && totalTargetHours > 0;
+                    const isZeroEstOver = totalTargetHours === 0 && assignedHours > 0;
                     const plannedDate = project.plannedDeliveryDate || project.targetCompletionDate;
                     const actualDate = project.actualDeliveredDate;
                     const varianceInfo = calculateDeliveryVariance(plannedDate, actualDate, project.status);
 
                     const loggedKey = `${project.id}:logged`;
                     const estimatedKey = `${project.id}:estimated`;
+                    const changedKey = `${project.id}:changed`;
 
                     return (
                       <tr
@@ -818,10 +896,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                         <td
                           className="py-2.5 px-3"
                           onClick={(e) => {
-                            if (isSuperAdmin) e.stopPropagation();
+                            if (canEditHours) e.stopPropagation();
                           }}
                           onDoubleClick={(e) => {
-                            if (isSuperAdmin) {
+                            if (canEditHours) {
                               e.stopPropagation();
                               setActiveInlineKey(loggedKey);
                               setInlineDrafts((prev) => ({
@@ -831,7 +909,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                             }
                           }}
                         >
-                          {isSuperAdmin ? (
+                          {canEditHours ? (
                             <div className="flex items-center gap-1.5">
                               <Clock className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                               <input
@@ -881,7 +959,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                                   }
                                 }}
                                 className="w-20 bg-slate-800/90 hover:bg-slate-800 focus:bg-slate-950 text-slate-100 font-bold text-[12px] font-mono px-2 py-1 rounded border border-slate-700 hover:border-amber-500/50 focus:border-amber-400 focus:outline-none transition"
-                                title="Super Admin / Director: Click or double-click to edit Total Hours Logged (Enter or blur to save)"
+                                title="Super Admin / Manager: Click or double-click to edit Total Hours Logged (Enter or blur to save)"
                               />
                               <span className="text-slate-500 text-[10px]">hrs</span>
                             </div>
@@ -900,10 +978,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                         <td
                           className="py-2.5 px-3"
                           onClick={(e) => {
-                            if (isSuperAdmin) e.stopPropagation();
+                            if (canEditHours) e.stopPropagation();
                           }}
                           onDoubleClick={(e) => {
-                            if (isSuperAdmin) {
+                            if (canEditHours) {
                               e.stopPropagation();
                               setActiveInlineKey(estimatedKey);
                               setInlineDrafts((prev) => ({
@@ -913,7 +991,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                             }
                           }}
                         >
-                          {isSuperAdmin ? (
+                          {canEditHours ? (
                             <div className="flex items-center gap-1.5">
                               <input
                                 type="number"
@@ -962,7 +1040,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                                   }
                                 }}
                                 className="w-20 bg-slate-800/90 hover:bg-slate-800 focus:bg-slate-950 text-slate-200 font-semibold text-[12px] font-mono px-2 py-1 rounded border border-slate-700 hover:border-amber-500/50 focus:border-amber-400 focus:outline-none transition"
-                                title="Super Admin / Director: Click or double-click to edit Estimated Hours (Enter or blur to save)"
+                                title="Super Admin / Manager: Click or double-click to edit Estimated Hours (Enter or blur to save)"
                               />
                               <span className="text-slate-500 text-[10px]">hrs</span>
                             </div>
@@ -972,6 +1050,102 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                                 {estimated.toFixed(1)}
                               </span>
                               <span className="text-slate-500 text-[10px]">hrs</span>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Changed Hours / Additional Hours */}
+                        <td
+                          className="py-2.5 px-3"
+                          onClick={(e) => {
+                            if (canEditHours) e.stopPropagation();
+                          }}
+                          onDoubleClick={(e) => {
+                            if (canEditHours) {
+                              e.stopPropagation();
+                              setActiveInlineKey(changedKey);
+                              setInlineDrafts((prev) => ({
+                                ...prev,
+                                [changedKey]: String(Number(changedHours.toFixed(1))),
+                              }));
+                            }
+                          }}
+                        >
+                          {canEditHours ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                step="0.5"
+                                min="0"
+                                aria-label={`Changed Hours / Additional Hours for ${project.name}`}
+                                value={
+                                  inlineDrafts[changedKey] !== undefined
+                                    ? inlineDrafts[changedKey]
+                                    : Number(changedHours.toFixed(1))
+                                }
+                                onFocus={(e) => {
+                                  setActiveInlineKey(changedKey);
+                                  setInlineDrafts((prev) =>
+                                    prev[changedKey] !== undefined
+                                      ? prev
+                                      : {
+                                          ...prev,
+                                          [changedKey]: String(Number(changedHours.toFixed(1))),
+                                        }
+                                  );
+                                  e.currentTarget.select();
+                                }}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setActiveInlineKey(changedKey);
+                                  setInlineDrafts((prev) => ({
+                                    ...prev,
+                                    [changedKey]: val,
+                                  }));
+                                }}
+                                onBlur={(e) => commitChangedHours(project, e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitChangedHours(project, e.currentTarget.value);
+                                    e.currentTarget.blur();
+                                  } else if (e.key === 'Escape') {
+                                    setActiveInlineKey(null);
+                                    setInlineDrafts((prev) => {
+                                      const next = { ...prev };
+                                      delete next[changedKey];
+                                      return next;
+                                    });
+                                    e.currentTarget.blur();
+                                  }
+                                }}
+                                className="w-20 bg-slate-800/90 hover:bg-slate-800 focus:bg-slate-950 text-slate-200 font-semibold text-[12px] font-mono px-2 py-1 rounded border border-slate-700 hover:border-amber-500/50 focus:border-amber-400 focus:outline-none transition"
+                                title="Super Admin / Manager: Click or double-click to edit Changed Hours / Additional Hours (Enter or blur to save)"
+                              />
+                              <span className="text-slate-500 text-[10px]">hrs</span>
+                              {changedHours > 0 && (
+                                <span
+                                  className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded whitespace-nowrap"
+                                  title="Total Target Hours = Estimated Hours + Changed / Additional Hours"
+                                >
+                                  Total: {Number(totalTargetHours.toFixed(1))}h
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-slate-300 text-[12px] font-mono">
+                                {changedHours.toFixed(1)}
+                              </span>
+                              <span className="text-slate-500 text-[10px]">hrs</span>
+                              {changedHours > 0 && (
+                                <span
+                                  className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded whitespace-nowrap"
+                                  title="Total Target Hours = Estimated Hours + Changed / Additional Hours"
+                                >
+                                  Total: {Number(totalTargetHours.toFixed(1))}h
+                                </span>
+                              )}
                             </div>
                           )}
                         </td>

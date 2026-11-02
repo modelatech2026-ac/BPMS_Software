@@ -135,7 +135,7 @@ export function toAuthUser(user: UserDatabaseModel): AuthUser {
     role: mapAppRoleToDisplayRole(effectiveRole),
     appRole: effectiveRole,
     status: isSuper ? 'APPROVED' : user.status,
-    isAdmin: isSuper || user.role === 'DIRECTOR' || user.role === 'PROJECT_MANAGER',
+    isAdmin: isSuper || user.role === 'DIRECTOR' || user.role === 'PROJECT_MANAGER' || user.role === 'MANAGER',
     accessLevel: mapAppRoleToAccessLevel(effectiveRole),
     requestTimestamp: user.createdAt,
   };
@@ -148,6 +148,7 @@ export function mapAppRoleToAccessLevel(role: UserRole): import('../types').Acce
     case 'DIRECTOR':
       return 'Director';
     case 'PROJECT_MANAGER':
+    case 'MANAGER':
       return 'Project Manager';
     case 'EDITOR':
       return 'Editor';
@@ -164,6 +165,7 @@ export function mapAppRoleToDisplayRole(role: UserRole): string {
     case 'DIRECTOR':
       return 'Director';
     case 'PROJECT_MANAGER':
+    case 'MANAGER':
       return 'BIM Project Manager';
     case 'EDITOR':
       return 'BIM Modeler / Editor';
@@ -197,10 +199,12 @@ export function normalizeUserRole(rawRole: any, isSuperAdmin: boolean = false): 
   if (
     str === 'PROJECT_MANAGER' ||
     str === 'PROJECT MANAGER' ||
+    str === 'MANAGER' ||
     str === 'PM' ||
     str === 'BIM PROJECT MANAGER' ||
     str === 'SENIOR BIM PROJECT MANAGER' ||
-    str.includes('PROJECT MANAGER')
+    str === 'ASSISTANT MANAGER' ||
+    str.includes('MANAGER')
   ) {
     return 'PROJECT_MANAGER';
   }
@@ -235,6 +239,7 @@ export function mapUserRoleToSecurityRole(role: UserRole): SecurityRole {
     case 'DIRECTOR':
       return 'Director';
     case 'PROJECT_MANAGER':
+    case 'MANAGER':
       return 'Project Manager';
     case 'VIEWER':
       return 'Viewer';

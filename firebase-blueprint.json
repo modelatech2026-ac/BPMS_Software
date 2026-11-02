@@ -139,6 +139,12 @@
         "totalEstimatedHours": {
           "type": "number"
         },
+        "changedHours": {
+          "type": "number"
+        },
+        "additionalHours": {
+          "type": "number"
+        },
         "totalHoursLogged": {
           "type": "number"
         },

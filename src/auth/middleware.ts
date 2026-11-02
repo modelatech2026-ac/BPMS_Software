@@ -42,6 +42,15 @@ export const ROLE_PERMISSIONS: Record<
     canDeleteRecords: true,
     canExportReports: true,
   },
+  MANAGER: {
+    canViewAnalytics: true,
+    canEditProjects: true,
+    canLogHours: true,
+    canManageTeam: true,
+    canAccessAdminNexus: false,
+    canDeleteRecords: false,
+    canExportReports: true,
+  },
   PROJECT_MANAGER: {
     canViewAnalytics: true,
     canEditProjects: true,

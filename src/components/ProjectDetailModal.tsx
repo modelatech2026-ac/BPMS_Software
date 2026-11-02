@@ -16,7 +16,13 @@ import {
   Edit3,
   Check
 } from 'lucide-react';
-import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
+import {
+  useBimData,
+  isUserSuperAdmin,
+  getProjectEstimatedHours,
+  getProjectChangedHours,
+  getProjectTargetHours,
+} from '../context/BimDataContext';
 import { BimProject, Milestone, TaskItem, LODLevel, Discipline, PRIMARY_DISCIPLINES } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 
@@ -188,10 +194,13 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   };
 
   const completedHours = getProjectCompletedHours(liveProject.id);
-  const variance = liveProject.totalEstimatedHours - completedHours;
-  const isOverBudget = completedHours > liveProject.totalEstimatedHours;
-  const burnPct = liveProject.totalEstimatedHours > 0
-    ? Math.min(100, Math.round((completedHours / liveProject.totalEstimatedHours) * 100))
+  const baseEstimatedHours = getProjectEstimatedHours(liveProject);
+  const changedAdditionalHours = getProjectChangedHours(liveProject);
+  const totalTargetHours = getProjectTargetHours(liveProject);
+  const variance = totalTargetHours - completedHours;
+  const isOverBudget = completedHours > totalTargetHours;
+  const burnPct = totalTargetHours > 0
+    ? Math.min(100, Math.round((completedHours / totalTargetHours) * 100))
     : 0;
 
   const assignedStaff = employees.filter((e) =>
@@ -338,7 +347,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                         <span
                           onClick={() => {
                             if (isSuperAdmin) {
-                              setEstHoursDraft(String(liveProject.totalEstimatedHours ?? 0));
+                              setEstHoursDraft(String(baseEstimatedHours));
                               setIsEditingEstHours(true);
                             }
                           }}
@@ -347,12 +356,17 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                               ? 'cursor-pointer hover:text-blue-400 border-b border-dashed border-slate-600 hover:border-blue-400 transition'
                               : ''
                           }
-                          title={isSuperAdmin ? 'Click to edit Total Estimated Hours' : undefined}
+                          title={isSuperAdmin ? 'Click to edit Base Estimated Hours' : undefined}
                         >
-                          {liveProject.totalEstimatedHours}
+                          {totalTargetHours}
                         </span>
                       )}
                       <span>hrs</span>
+                      {changedAdditionalHours > 0 && (
+                        <span className="text-xs font-normal text-slate-400 ml-1">
+                          ({baseEstimatedHours}h est + {changedAdditionalHours}h changed)
+                        </span>
+                      )}
                     </h3>
                   </div>
                   <div className="text-right">
@@ -422,7 +436,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                   <div>
                     <span className="text-slate-400 block">Hours Variance:</span>
                     <strong className={`text-sm ${isOverBudget ? 'text-amber-400' : 'text-emerald-400'}`}>
-                      {isOverBudget ? `+${completedHours - liveProject.totalEstimatedHours}h Over` : `${variance}h Remaining`}
+                      {isOverBudget ? `+${completedHours - totalTargetHours}h Over` : `${variance}h Remaining`}
                     </strong>
                   </div>
                   <div>

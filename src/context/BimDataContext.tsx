@@ -1241,6 +1241,32 @@ export const cleanProjectName = (name?: string): string => {
   return stripped;
 };
 
+export const getProjectEstimatedHours = (project?: Partial<BimProject> | null): number => {
+  if (!project) return 0;
+  return (
+    Number(
+      project.manualEstimatedHoursOverride ??
+        project.estimatedHours ??
+        project.totalEstimatedHours
+    ) || 0
+  );
+};
+
+export const getProjectChangedHours = (project?: Partial<BimProject> | null): number => {
+  if (!project) return 0;
+  return (
+    Number(
+      project.manualChangedHoursOverride ??
+        project.changedHours ??
+        project.additionalHours
+    ) || 0
+  );
+};
+
+export const getProjectTargetHours = (project?: Partial<BimProject> | null): number => {
+  return getProjectEstimatedHours(project) + getProjectChangedHours(project);
+};
+
 const normalizeProjectNameKey = (name?: string): string =>
   cleanProjectName(name).toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -1295,6 +1321,16 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
         ? Number(matched.totalEstimatedHours)
         : masterProj.totalEstimatedHours;
 
+    const resolvedChanged =
+      matched.manualChangedHoursOverride !== undefined &&
+      !Number.isNaN(Number(matched.manualChangedHoursOverride))
+        ? Number(matched.manualChangedHoursOverride)
+        : matched.changedHours !== undefined && !Number.isNaN(Number(matched.changedHours))
+        ? Number(matched.changedHours)
+        : matched.additionalHours !== undefined && !Number.isNaN(Number(matched.additionalHours))
+        ? Number(matched.additionalHours)
+        : undefined;
+
     const masterPrimaryDisc = masterProj.disciplines?.[0];
     let resolvedDisciplines =
       Array.isArray(matched.disciplines) && matched.disciplines.length > 0
@@ -1318,6 +1354,13 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
       estimatedHours: resolvedEst,
       ...(matched.manualEstimatedHoursOverride !== undefined
         ? { manualEstimatedHoursOverride: Number(matched.manualEstimatedHoursOverride) }
+        : {}),
+      ...(resolvedChanged !== undefined
+        ? {
+            changedHours: resolvedChanged,
+            additionalHours: resolvedChanged,
+            manualChangedHoursOverride: resolvedChanged,
+          }
         : {}),
       ...(matched.totalLogged !== undefined
         ? { totalLogged: Number(matched.totalLogged) }
@@ -3068,6 +3111,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 : data.totalEstimatedHours !== undefined
                 ? Number(data.totalEstimatedHours)
                 : undefined;
+            const resolvedChangedHours =
+              data.manualChangedHoursOverride !== undefined
+                ? Number(data.manualChangedHoursOverride)
+                : data.changedHours !== undefined
+                ? Number(data.changedHours)
+                : data.additionalHours !== undefined
+                ? Number(data.additionalHours)
+                : undefined;
             const resolvedLoggedHours =
               data.manualHoursOverride !== undefined
                 ? Number(data.manualHoursOverride)
@@ -3117,6 +3168,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 : {}),
               ...(data.manualEstimatedHoursOverride !== undefined
                 ? { manualEstimatedHoursOverride: Number(data.manualEstimatedHoursOverride) }
+                : {}),
+              ...(resolvedChangedHours !== undefined
+                ? {
+                    changedHours: resolvedChangedHours,
+                    additionalHours: resolvedChangedHours,
+                    manualChangedHoursOverride: resolvedChangedHours,
+                  }
                 : {}),
               ...(resolvedLoggedHours !== undefined
                 ? {
@@ -3587,6 +3645,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               : incoming.totalEstimatedHours !== undefined
               ? Number(incoming.totalEstimatedHours)
               : p.totalEstimatedHours;
+          const nextChanged =
+            incoming.manualChangedHoursOverride !== undefined
+              ? Number(incoming.manualChangedHoursOverride)
+              : incoming.changedHours !== undefined
+              ? Number(incoming.changedHours)
+              : incoming.additionalHours !== undefined
+              ? Number(incoming.additionalHours)
+              : undefined;
           const nextLogged =
             incoming.manualHoursOverride !== undefined
               ? Number(incoming.manualHoursOverride)
@@ -3604,6 +3670,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             name: cleanProjectName(incoming.name || incoming.projectName || p.name),
             totalEstimatedHours: nextEst,
             estimatedHours: nextEst,
+            ...(nextChanged !== undefined
+              ? {
+                  changedHours: nextChanged,
+                  additionalHours: nextChanged,
+                  manualChangedHoursOverride: nextChanged,
+                }
+              : {}),
             ...(nextLogged !== undefined
               ? {
                   totalLogged: nextLogged,
@@ -5419,6 +5492,22 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     if (
+      normalizedUpdates.changedHours !== undefined ||
+      normalizedUpdates.additionalHours !== undefined ||
+      normalizedUpdates.manualChangedHoursOverride !== undefined
+    ) {
+      const chgVal = Number(
+        normalizedUpdates.changedHours ??
+          normalizedUpdates.manualChangedHoursOverride ??
+          normalizedUpdates.additionalHours ??
+          0
+      );
+      normalizedUpdates.changedHours = chgVal;
+      normalizedUpdates.additionalHours = chgVal;
+      normalizedUpdates.manualChangedHoursOverride = chgVal;
+    }
+
+    if (
       normalizedUpdates.totalLogged !== undefined ||
       normalizedUpdates.totalCompletedHours !== undefined ||
       normalizedUpdates.manualHoursOverride !== undefined
@@ -5461,6 +5550,21 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (sanitizedPayload.totalEstimatedHours !== undefined) {
         sanitizedPayload.estimatedHours = Number(sanitizedPayload.totalEstimatedHours) || 0;
         sanitizedPayload.manualEstimatedHoursOverride = Number(sanitizedPayload.totalEstimatedHours) || 0;
+      }
+      if (
+        sanitizedPayload.changedHours !== undefined ||
+        sanitizedPayload.additionalHours !== undefined ||
+        sanitizedPayload.manualChangedHoursOverride !== undefined
+      ) {
+        const chgVal = Number(
+          sanitizedPayload.changedHours ??
+            sanitizedPayload.manualChangedHoursOverride ??
+            sanitizedPayload.additionalHours ??
+            0
+        );
+        sanitizedPayload.changedHours = chgVal;
+        sanitizedPayload.additionalHours = chgVal;
+        sanitizedPayload.manualChangedHoursOverride = chgVal;
       }
       if (sanitizedPayload.totalCompletedHours !== undefined) {
         sanitizedPayload.totalHoursLogged = Number(sanitizedPayload.totalCompletedHours) || 0;
@@ -6429,7 +6533,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         : projects.filter((p) => p.id === selectedProjectId);
 
     const totalEstimated = targetProjects.reduce(
-      (sum, p) => sum + p.totalEstimatedHours,
+      (sum, p) => sum + getProjectTargetHours(p),
       0
     );
 
