@@ -398,6 +398,8 @@ export interface OnboardingRequest {
   name: string;
   fullName?: string;
   discipline?: string;
+  assignedDiscipline?: Discipline | string;
+  orgDiscipline?: Discipline | string;
   reasonForAccess?: string;
   createdAt?: string;
   avatar?: string;

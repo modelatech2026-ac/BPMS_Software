@@ -3,6 +3,7 @@ import {
   useBimData,
   mergeAccessRequestsWithLocal,
   invalidateAccessRequestsCache,
+  saveLocalAccessRequest,
   getRequestTimeMs,
   PENDING_ACCESS_REQUESTS_KEY,
   DELETED_ACCESS_REQUESTS_KEY,
@@ -203,7 +204,12 @@ export const AdminNexus: React.FC = () => {
       : 'pending';
 
     const fullName = String(raw.fullName || raw.name || cleanEmail.split('@')[0]).trim();
-    const discipline = String(raw.discipline || raw.primaryDiscipline || raw.organization || 'BIM - ACS');
+    const discipline = String(
+      raw.assignedDiscipline || raw.discipline || raw.primaryDiscipline || raw.orgDiscipline || raw.organization || 'BIM - ACS'
+    );
+    const orgDiscipline = String(
+      raw.orgDiscipline || raw.assignedDiscipline || raw.discipline || raw.primaryDiscipline || raw.organization || discipline
+    );
     const reasonForAccess = String(
       raw.reasonForAccess || raw.accessReason || 'Sign-in Access Request for ProductionPulse BPMS'
     );
@@ -237,7 +243,9 @@ export const AdminNexus: React.FC = () => {
       assignedAccessLevel: calculatedAccessLevel,
       primaryDiscipline: discipline,
       discipline: discipline,
-      organization: raw.organization || discipline,
+      assignedDiscipline: discipline,
+      orgDiscipline: orgDiscipline,
+      organization: orgDiscipline,
       reasonForAccess: reasonForAccess,
       accessReason: reasonForAccess,
       createdAt: createdAt,
@@ -307,6 +315,9 @@ export const AdminNexus: React.FC = () => {
               item.name === merged[idx]?.name &&
               item.status === merged[idx]?.status &&
               item.assignedRole === merged[idx]?.assignedRole &&
+              item.discipline === merged[idx]?.discipline &&
+              item.assignedDiscipline === merged[idx]?.assignedDiscipline &&
+              item.orgDiscipline === merged[idx]?.orgDiscipline &&
               item.createdAt === merged[idx]?.createdAt &&
               item.timestamp === merged[idx]?.timestamp
           )
@@ -1108,6 +1119,92 @@ export const AdminNexus: React.FC = () => {
     }
   };
 
+  const handleDisciplineChange = useCallback(
+    async (requestId: string, newDiscipline: Discipline, isApprovedRequest = false) => {
+      setPendingDisciplineMap((prev) => ({
+        ...prev,
+        [requestId]: newDiscipline,
+      }));
+
+      const nowIso = new Date().toISOString();
+      const targetReq = onboardingRequests.find((r) => r.id === requestId);
+
+      // Update local docsMapRef cache so background polling / snapshots stay in sync
+      docsMapRef.current.forEach((colMap) => {
+        colMap.forEach((docVal, key) => {
+          const dEmail = String(docVal?.email || '').trim().toLowerCase();
+          if (
+            key === requestId ||
+            docVal?.id === requestId ||
+            (targetReq?.email && dEmail === targetReq.email.trim().toLowerCase())
+          ) {
+            colMap.set(key, {
+              ...docVal,
+              discipline: newDiscipline,
+              primaryDiscipline: newDiscipline,
+              assignedDiscipline: newDiscipline,
+              orgDiscipline: newDiscipline,
+              organization: newDiscipline,
+              updatedAt: nowIso,
+              timestamp: nowIso,
+            });
+          }
+        });
+      });
+
+      setOnboardingRequests((prev) =>
+        prev.map((req) => {
+          if (
+            req.id === requestId ||
+            (targetReq?.email && req.email.toLowerCase() === targetReq.email.toLowerCase())
+          ) {
+            const updatedReq: OnboardingRequest = {
+              ...req,
+              assignedDiscipline: newDiscipline,
+              orgDiscipline: newDiscipline,
+              discipline: newDiscipline,
+              primaryDiscipline: newDiscipline,
+              organization: newDiscipline,
+              timestamp: nowIso,
+            };
+            saveLocalAccessRequest(updatedReq);
+            return updatedReq;
+          }
+          return req;
+        })
+      );
+
+      if (isApprovedRequest && targetReq) {
+        const currentRole =
+          pendingRoleMap[requestId] ||
+          targetReq.assignedRole ||
+          normalizeUserRole(targetReq.role) ||
+          'EDITOR';
+        const accessLevel = mapAppRoleToAccessLevel(currentRole);
+        approveOnboardingRequest(requestId, currentRole, accessLevel, newDiscipline);
+        showNotification(`Updated ${targetReq.name}'s discipline to ${newDiscipline}`);
+      } else {
+        try {
+          for (const colName of ['access_requests', 'accessRequests']) {
+            await updateDoc(doc(db, colName, requestId), {
+              discipline: newDiscipline,
+              primaryDiscipline: newDiscipline,
+              assignedDiscipline: newDiscipline,
+              orgDiscipline: newDiscipline,
+              organization: newDiscipline,
+              assignedTo: requestId,
+              timestamp: nowIso,
+              updatedAt: nowIso,
+            }).catch(() => {});
+          }
+        } catch (err) {
+          console.warn('Firestore discipline updateDoc notice:', err);
+        }
+      }
+    },
+    [onboardingRequests, pendingRoleMap, approveOnboardingRequest, setOnboardingRequests]
+  );
+
   const handleToggleAccessRequest = useCallback(
     (requestId: string, applicantName: string, decision: 'accept' | 'reject') => {
       if (decision === 'accept') {
@@ -1120,6 +1217,7 @@ export const AdminNexus: React.FC = () => {
         const accessLevel = mapAppRoleToAccessLevel(selectedRole);
         const selectedDiscipline =
           pendingDisciplineMap[requestId] ||
+          (req?.assignedDiscipline as Discipline) ||
           (req?.discipline as Discipline) ||
           (req?.primaryDiscipline as Discipline) ||
           'BIM - ACS';
@@ -1151,6 +1249,7 @@ export const AdminNexus: React.FC = () => {
       const accessLevel = mapAppRoleToAccessLevel(selectedRole);
       const selectedDiscipline =
         pendingDisciplineMap[requestId] ||
+        (req?.assignedDiscipline as Discipline) ||
         (req?.discipline as Discipline) ||
         (req?.primaryDiscipline as Discipline) ||
         'BIM - ACS';
@@ -1763,6 +1862,20 @@ export const AdminNexus: React.FC = () => {
                       const isPending = isReqPending(req.status);
                       const isApproved = req.status.toUpperCase() === 'APPROVED' || req.status.toLowerCase() === 'approved';
                       const isRejected = req.status.toUpperCase() === 'REJECTED' || req.status.toLowerCase() === 'rejected';
+                      const activeDiscipline = (
+                        pendingDisciplineMap[req.id] ||
+                        req.assignedDiscipline ||
+                        req.discipline ||
+                        req.primaryDiscipline ||
+                        'BIM - ACS'
+                      ) as Discipline;
+                      const activeOrgDiscipline =
+                        pendingDisciplineMap[req.id] ||
+                        req.orgDiscipline ||
+                        req.assignedDiscipline ||
+                        req.discipline ||
+                        req.primaryDiscipline ||
+                        'BIM - ACS';
 
                       return (
                         <tr key={req.id} className="hover:bg-slate-800/40 transition">
@@ -1779,10 +1892,10 @@ export const AdminNexus: React.FC = () => {
 
                           <td className="py-3 px-3">
                             <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-medium block w-fit">
-                              {req.discipline || req.primaryDiscipline || 'BIM - ACS'}
+                              {activeDiscipline}
                             </span>
                             <span className="text-[10px] text-slate-400 block mt-1">
-                              {req.organization || req.discipline || 'Partner Division'}
+                              {activeOrgDiscipline}
                             </span>
                           </td>
 
@@ -1833,11 +1946,7 @@ export const AdminNexus: React.FC = () => {
                                   }));
 
                                   const accessLevel = mapAppRoleToAccessLevel(newRole);
-                                  const currentDiscipline =
-                                    pendingDisciplineMap[req.id] ||
-                                    (req.discipline as Discipline) ||
-                                    (req.primaryDiscipline as Discipline) ||
-                                    'BIM - ACS';
+                                  const currentDiscipline = activeDiscipline;
 
                                   persistUserRoleToDatabase({
                                     email: req.email,
@@ -1871,35 +1980,9 @@ export const AdminNexus: React.FC = () => {
 
                               {/* Discipline selector dropdown */}
                               <select
-                                value={
-                                  pendingDisciplineMap[req.id] ||
-                                  (req.discipline as Discipline) ||
-                                  (req.primaryDiscipline as Discipline) ||
-                                  'BIM - ACS'
-                                }
-                                onChange={async (e) => {
-                                  const newDiscipline = e.target.value as Discipline;
-                                  setPendingDisciplineMap((prev) => ({
-                                    ...prev,
-                                    [req.id]: newDiscipline,
-                                  }));
-                                  if (isApproved) {
-                                    const currentRole = pendingRoleMap[req.id] || req.assignedRole || normalizeUserRole(req.role) || 'EDITOR';
-                                    const accessLevel = mapAppRoleToAccessLevel(currentRole);
-                                    approveOnboardingRequest(req.id, currentRole, accessLevel, newDiscipline);
-                                    showNotification(`Updated ${req.name}'s discipline to ${newDiscipline}`);
-                                  } else {
-                                    try {
-                                      await updateDoc(doc(db, 'access_requests', req.id), {
-                                        discipline: newDiscipline,
-                                        primaryDiscipline: newDiscipline,
-                                        assignedTo: req.id,
-                                        updatedAt: new Date().toISOString(),
-                                      });
-                                    } catch (err) {
-                                      console.warn('Firestore discipline updateDoc notice:', err);
-                                    }
-                                  }
+                                value={activeDiscipline}
+                                onChange={(e) => {
+                                  handleDisciplineChange(req.id, e.target.value as Discipline, isApproved);
                                 }}
                                 disabled={isRejected}
                                 className={`text-[11px] font-semibold px-2 py-1.5 rounded-xl border transition cursor-pointer ${

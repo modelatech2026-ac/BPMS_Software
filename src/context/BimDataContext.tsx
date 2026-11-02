@@ -577,11 +577,21 @@ export const mergeAccessRequestsWithLocal = (
       ? 'REJECTED'
       : 'pending';
 
+    const resolvedItemDiscipline =
+      item.assignedDiscipline || item.discipline || item.primaryDiscipline || 'BIM - ACS';
+    const resolvedOrgDiscipline =
+      item.orgDiscipline || item.assignedDiscipline || item.discipline || item.primaryDiscipline || item.organization || resolvedItemDiscipline;
+
     const normalizedItem: OnboardingRequest = {
       ...item,
       email: cleanEmail,
       name: item.name || item.fullName || cleanEmail.split('@')[0],
       fullName: item.fullName || item.name || cleanEmail.split('@')[0],
+      discipline: resolvedItemDiscipline,
+      primaryDiscipline: resolvedItemDiscipline,
+      assignedDiscipline: resolvedItemDiscipline,
+      orgDiscipline: resolvedOrgDiscipline,
+      organization: resolvedOrgDiscipline,
       status: normalizedStatus,
     };
 
@@ -623,7 +633,7 @@ export const mergeAccessRequestsWithLocal = (
     const signature = result
       .map(
         (r) =>
-          `${r.id}:${r.email}:${r.name}:${r.status}:${r.assignedRole}:${r.createdAt || ''}:${r.timestamp || ''}`
+          `${r.id}:${r.email}:${r.name}:${r.status}:${r.assignedRole}:${r.assignedDiscipline || r.discipline || ''}:${r.orgDiscipline || r.organization || ''}:${r.createdAt || ''}:${r.timestamp || ''}`
       )
       .join('|');
     if (signature !== lastMergedRequestsSignature) {
@@ -4432,6 +4442,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const reqTarget = onboardingRequests.find((r) => r.id === requestId);
     const targetDiscipline: Discipline =
       (assignedDiscipline as Discipline) ||
+      (reqTarget?.assignedDiscipline as Discipline) ||
       (reqTarget?.discipline as Discipline) ||
       (reqTarget?.primaryDiscipline as Discipline) ||
       'BIM - ACS';
@@ -4451,6 +4462,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             role: displayRole,
             discipline: targetDiscipline,
             primaryDiscipline: targetDiscipline,
+            assignedDiscipline: targetDiscipline,
+            orgDiscipline: targetDiscipline,
+            organization: targetDiscipline,
           };
           return approvedReq;
         }
@@ -4473,6 +4487,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         role: displayRole,
         discipline: targetDiscipline,
         primaryDiscipline: targetDiscipline,
+        assignedDiscipline: targetDiscipline,
+        orgDiscipline: targetDiscipline,
+        organization: targetDiscipline,
       });
 
       // Identity Sync: strict field mapping between access request and member profile

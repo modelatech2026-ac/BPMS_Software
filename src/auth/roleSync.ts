@@ -449,6 +449,7 @@ export async function persistUserRoleToDatabase(params: {
 
   // 4. Persist to Firestore 'access_requests', 'accessRequests', and 'users' + server SSE store
   const isApprovedFlag = normalizedStatus === 'APPROVED';
+  const resolvedDiscipline = params.discipline || 'BIM - ACS';
   const updatePayload: Record<string, any> = {
     email: cleanEmail,
     name: params.name || cleanEmail.split('@')[0],
@@ -457,8 +458,11 @@ export async function persistUserRoleToDatabase(params: {
     assignedRole: validatedRole,
     requestedRole: displayRole,
     assignedAccessLevel: calculatedAccessLevel,
-    discipline: params.discipline || 'BIM - ACS',
-    primaryDiscipline: params.discipline || 'BIM - ACS',
+    discipline: resolvedDiscipline,
+    primaryDiscipline: resolvedDiscipline,
+    assignedDiscipline: resolvedDiscipline,
+    orgDiscipline: resolvedDiscipline,
+    organization: resolvedDiscipline,
     status: isApprovedFlag ? 'approved' : firestoreRequestStatus,
     isApproved: isApprovedFlag,
     reviewedBy:
@@ -496,8 +500,11 @@ export async function persistUserRoleToDatabase(params: {
     isApproved: isApprovedFlag,
     accessLevel: calculatedAccessLevel,
     assignedAccessLevel: calculatedAccessLevel,
-    discipline: params.discipline || 'BIM - ACS',
-    primaryDiscipline: params.discipline || 'BIM - ACS',
+    discipline: resolvedDiscipline,
+    primaryDiscipline: resolvedDiscipline,
+    assignedDiscipline: resolvedDiscipline,
+    orgDiscipline: resolvedDiscipline,
+    organization: resolvedDiscipline,
     isDeleted: false,
     updatedAt: nowIso,
   };
