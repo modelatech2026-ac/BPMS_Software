@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Layers,
@@ -11,23 +11,29 @@ import {
   Timer,
   AlertTriangle,
   PauseCircle,
-  CheckCircle
+  CheckCircle,
+  Edit3
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useBimData } from '../context/BimDataContext';
-import { Discipline, LODLevel, ProjectStatus, PROJECT_STATUS_OPTIONS } from '../types';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
+import { useBimData, normalizeDateToIso } from '../context/BimDataContext';
+import { BimProject, Discipline, LODLevel, ProjectStatus, PROJECT_STATUS_OPTIONS } from '../types';
 import { calculateDeliveryVariance } from '../utils/deliveryVariance';
 
 interface NewProjectModalProps {
   isOpen: boolean;
   onClose: () => void;
+  projectToEdit?: BimProject | null;
 }
 
 export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   isOpen,
   onClose,
+  projectToEdit = null,
 }) => {
-  const { addProject, employees, selectedProjectId, setSelectedProjectId } = useBimData();
+  const { addProject, updateProject, employees, selectedProjectId, setSelectedProjectId } = useBimData();
+  const isEditMode = Boolean(projectToEdit);
 
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
@@ -53,6 +59,70 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     [employees[0]?.id, employees[1]?.id].filter((id): id is string => Boolean(id))
   );
 
+  useEffect(() => {
+    if (!isOpen) return;
+    if (projectToEdit) {
+      setName(projectToEdit.name || '');
+      setCode(projectToEdit.code || '');
+      setClientName(projectToEdit.clientName || '');
+      setBuildingType(projectToEdit.buildingType || 'Commercial High-Rise');
+      setLocation(projectToEdit.location || '');
+      setDescription(projectToEdit.description || '');
+      setStatus(projectToEdit.status || 'WIP');
+      setTotalEstimatedHours(
+        Number(
+          projectToEdit.manualEstimatedHoursOverride ??
+            projectToEdit.estimatedHours ??
+            projectToEdit.totalEstimatedHours ??
+            0
+        )
+      );
+      setBudgetAmount(Number(projectToEdit.budgetAmount ?? 0));
+      setCurrentLOD(projectToEdit.currentLOD || 'LOD 300');
+      setTargetLOD(projectToEdit.targetLOD || 'LOD 350');
+      setStartDate(normalizeDateToIso(projectToEdit.startDate) || '2026-08-01');
+      setPlannedDeliveryDate(
+        normalizeDateToIso(
+          projectToEdit.plannedDeliveryDate || projectToEdit.targetCompletionDate
+        ) || '2026-11-30'
+      );
+      setActualDeliveredDate(
+        projectToEdit.actualDeliveredDate
+          ? normalizeDateToIso(projectToEdit.actualDeliveredDate) || projectToEdit.actualDeliveredDate
+          : ''
+      );
+      setSelectedDisciplines(
+        Array.isArray(projectToEdit.disciplines) && projectToEdit.disciplines.length > 0
+          ? projectToEdit.disciplines
+          : ['BIM - ACS']
+      );
+      setAssignedEmployeeIds(
+        Array.isArray(projectToEdit.assignedEmployeeIds)
+          ? projectToEdit.assignedEmployeeIds
+          : []
+      );
+    } else {
+      setName('');
+      setCode('');
+      setClientName('');
+      setBuildingType('Commercial High-Rise');
+      setLocation('');
+      setDescription('');
+      setStatus('WIP');
+      setTotalEstimatedHours(1200);
+      setBudgetAmount(180000);
+      setCurrentLOD('LOD 300');
+      setTargetLOD('LOD 350');
+      setStartDate('2026-08-01');
+      setPlannedDeliveryDate('2026-11-30');
+      setActualDeliveredDate('');
+      setSelectedDisciplines(['BIM - ACS', 'Structure', 'MEP - HVAC', 'MEP - Electrical']);
+      setAssignedEmployeeIds(
+        [employees[0]?.id, employees[1]?.id].filter((id): id is string => Boolean(id))
+      );
+    }
+  }, [isOpen, projectToEdit]);
+
   if (!isOpen) return null;
 
   const liveVariance = calculateDeliveryVariance(plannedDeliveryDate, actualDeliveredDate || undefined, status);
@@ -73,7 +143,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanName = name.trim();
     if (!cleanName) return;
@@ -89,6 +159,58 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
       selectedDisciplines.length > 0 ? selectedDisciplines : ['BIM - ACS'];
     const cleanAssignees = assignedEmployeeIds.filter(Boolean);
     const effectivePlannedDate = plannedDeliveryDate || new Date().toISOString().slice(0, 10);
+
+    if (isEditMode && projectToEdit) {
+      const estHoursNum = Number(totalEstimatedHours) || 0;
+      const updatedData: Partial<BimProject> = {
+        name: cleanName,
+        code: cleanCode,
+        clientName: cleanClient,
+        buildingType: buildingType.trim() || 'Commercial High-Rise',
+        location: location.trim() || 'Global',
+        description:
+          description.trim() ||
+          `${buildingType || 'Commercial'} BIM modeling and multi-trade coordination project.`,
+        status: status || 'WIP',
+        currentLOD,
+        targetLOD,
+        totalEstimatedHours: estHoursNum,
+        estimatedHours: estHoursNum,
+        manualEstimatedHoursOverride: estHoursNum,
+        budgetAmount: Number(budgetAmount) || 0,
+        startDate: startDate || new Date().toISOString().slice(0, 10),
+        targetCompletionDate: effectivePlannedDate,
+        plannedDeliveryDate: effectivePlannedDate,
+        actualDeliveredDate: actualDeliveredDate.trim() ? actualDeliveredDate.trim() : undefined,
+        disciplines: effectiveDisciplines,
+        assignedEmployeeIds: cleanAssignees,
+      };
+
+      updateProject(projectToEdit.id, updatedData);
+
+      const dbPayload = {
+        ...projectToEdit,
+        ...updatedData,
+        id: projectToEdit.id,
+        projectName: cleanName,
+        actualDeliveredDate: actualDeliveredDate.trim() ? actualDeliveredDate.trim() : '',
+        updatedAt: new Date().toISOString(),
+      };
+
+      try {
+        fetch('/api/ssot/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dbPayload),
+        }).catch(() => {});
+        await setDoc(doc(db, 'projects', projectToEdit.id), dbPayload, { merge: true });
+      } catch (err) {
+        console.warn('Firestore update project notice:', err);
+      }
+
+      onClose();
+      return;
+    }
 
     addProject({
       name: cleanName,
@@ -169,12 +291,16 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center">
-              <Layers className="w-4 h-4" />
+              {isEditMode ? <Edit3 className="w-4 h-4 text-amber-400" /> : <Layers className="w-4 h-4" />}
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Create New BIM Project</h3>
+              <h3 className="text-base font-bold text-white">
+                {isEditMode ? 'Edit BIM Project' : 'Create New BIM Project'}
+              </h3>
               <p className="text-xs text-slate-400">
-                Configure delivery schedule, variance tracking, hour budgets, and BIM milestones
+                {isEditMode
+                  ? `Update project details, scope, status, and delivery schedule for ${projectToEdit?.name}`
+                  : 'Configure delivery schedule, variance tracking, hour budgets, and BIM milestones'}
               </p>
             </div>
           </div>
@@ -259,6 +385,18 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
             </div>
+          </div>
+
+          {/* Project Scope / Description */}
+          <div>
+            <label className="block text-slate-400 font-medium mb-1">Project Scope & Description</label>
+            <input
+              type="text"
+              placeholder="e.g. Commercial BIM modeling and multi-trade coordination project"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
           </div>
 
           {/* Delivery Dates & Live Difference Highlight */}
@@ -432,7 +570,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
               type="submit"
               className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold transition"
             >
-              Create Project
+              {isEditMode ? 'Save Changes' : 'Create Project'}
             </button>
           </div>
         </form>

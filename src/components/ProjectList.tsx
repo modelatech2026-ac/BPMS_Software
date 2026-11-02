@@ -30,6 +30,7 @@ import { db } from '../firebase/config';
 import { useBimData, isUserSuperAdmin, sanitizeWorkLogRecord, doesLogBelongToProject } from '../context/BimDataContext';
 import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS, ResourceAllocationItem, DailyWorkLog } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
+import { NewProjectModal } from './NewProjectModal';
 
 interface ProjectListProps {
   onSelectProject: (project: BimProject) => void;
@@ -302,6 +303,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const [newPlannedDateValue, setNewPlannedDateValue] = useState('');
   const [newActualDateValue, setNewActualDateValue] = useState('');
   const [projectToDelete, setProjectToDelete] = useState<BimProject | null>(null);
+  const [projectToEdit, setProjectToEdit] = useState<BimProject | null>(null);
   const [deletedProjectIds, setDeletedProjectIds] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('bim_deleted_project_ids_v1');
@@ -327,6 +329,19 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       currentUser?.securityRole === 'Director'
   );
   const isSuperAdmin = hasSuperAdminOrDirectorRole && adminEditUnlocked;
+
+  const isOnlySuperAdmin = Boolean(
+    currentUser?.role === 'SUPER_ADMIN' ||
+      currentUser?.appRole === 'SUPER_ADMIN' ||
+      currentUser?.securityRole === 'Super Admin' ||
+      currentUser?.accessLevel === 'Super Admin' ||
+      (isUserSuperAdmin(currentUser) &&
+        currentUser?.role !== 'DIRECTOR' &&
+        currentUser?.role !== 'Director' &&
+        currentUser?.appRole !== 'DIRECTOR' &&
+        currentUser?.securityRole !== 'Director' &&
+        currentUser?.accessLevel !== 'Director')
+  );
 
   const handleConfirmDeleteProject = async () => {
     if (!projectToDelete) return;
@@ -706,9 +721,27 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       >
                         {/* Project Name (Only project name, no description below) */}
                         <td className="py-2.5 px-4">
-                          <div className="font-semibold text-white group-hover:text-blue-300 transition text-[13px] whitespace-nowrap">
-                            {project.name}
-                          </div>
+                          {isOnlySuperAdmin ? (
+                            <div className="flex items-center justify-between gap-2 font-semibold text-white group-hover:text-blue-300 transition text-[13px] whitespace-nowrap">
+                              <span>{project.name}</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSelectProject(project);
+                                }}
+                                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition shrink-0"
+                                title={`Edit Project: ${project.name} (Super Admin Only)`}
+                                aria-label={`Edit project ${project.name}`}
+                              >
+                                <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="font-semibold text-white group-hover:text-blue-300 transition text-[13px] whitespace-nowrap">
+                              {project.name}
+                            </div>
+                          )}
                         </td>
 
                         {/* Status with Manual Select Dropdown (Super Admin / Director only) */}
@@ -984,6 +1017,20 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                             >
                               View
                             </button>
+                            {isOnlySuperAdmin && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSelectProject(project);
+                                }}
+                                className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border border-amber-500/20 hover:border-amber-500/40 transition"
+                                title={`Edit project ${project.name} (Super Admin Only)`}
+                                aria-label={`Edit project ${project.name}`}
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             {hasSuperAdminOrDirectorRole && (
                               <button
                                 type="button"
@@ -1147,6 +1194,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           </div>
         </div>
       )}
+
+      {/* Super Admin Edit Project Modal */}
+      <NewProjectModal
+        isOpen={Boolean(projectToEdit)}
+        onClose={() => setProjectToEdit(null)}
+        projectToEdit={projectToEdit}
+      />
     </div>
   );
 };

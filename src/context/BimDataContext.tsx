@@ -1299,8 +1299,8 @@ const mergeWithMasterProjects = (existingList: BimProject[]): BimProject[] => {
       ...masterProj,
       ...matched,
       id: masterProj.id,
-      code: masterProj.code,
-      name: cleanProjectName(masterProj.name),
+      code: matched.code || masterProj.code,
+      name: cleanProjectName(matched.name || masterProj.name),
       totalEstimatedHours: resolvedEst,
       estimatedHours: resolvedEst,
       ...(matched.manualEstimatedHoursOverride !== undefined
@@ -3190,8 +3190,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                   ...p,
                   ...cleanRemote,
                   id: masterDef.id,
-                  code: masterDef.code,
-                  name: masterDef.name,
+                  code: cleanRemote.code || p.code || masterDef.code,
+                  name: cleanProjectName(cleanRemote.name || p.name || masterDef.name),
                   totalEstimatedHours: resolvedEst,
                   estimatedHours: resolvedEst,
                   plannedDeliveryDate:

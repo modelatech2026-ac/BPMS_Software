@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Clock,
@@ -17,7 +17,7 @@ import {
   Check
 } from 'lucide-react';
 import { useBimData, isUserSuperAdmin } from '../context/BimDataContext';
-import { BimProject, Milestone, TaskItem, LODLevel } from '../types';
+import { BimProject, Milestone, TaskItem, LODLevel, Discipline, PRIMARY_DISCIPLINES } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
 
 interface ProjectDetailModalProps {
@@ -26,6 +26,26 @@ interface ProjectDetailModalProps {
   onOpenReportModalWithProject: (projectId: string) => void;
   onOpenLogModalWithProject: (projectId: string) => void;
 }
+
+const LOD_OPTIONS: LODLevel[] = [
+  'LOD 100',
+  'LOD 200',
+  'LOD 300',
+  'LOD 350',
+  'LOD 400',
+  'LOD 500',
+];
+
+const toIsoDateInput = (val?: string): string => {
+  if (!val) return '';
+  const trimmed = val.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const ddmmyyyy = trimmed.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (ddmmyyyy) {
+    return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+  }
+  return trimmed;
+};
 
 export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   project,
@@ -57,6 +77,21 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
   const [newPlannedDateValue, setNewPlannedDateValue] = useState('');
   const [newActualDateValue, setNewActualDateValue] = useState('');
 
+  // Inline editing states for Project Overview & Hours fields
+  const [isEditingPlannedDate, setIsEditingPlannedDate] = useState(false);
+  const [isEditingActualDate, setIsEditingActualDate] = useState(false);
+  const plannedDateInputRef = useRef<HTMLInputElement | null>(null);
+  const actualDateInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [isEditingBudget, setIsEditingBudget] = useState(false);
+  const [budgetDraft, setBudgetDraft] = useState('');
+
+  const [isEditingEstHours, setIsEditingEstHours] = useState(false);
+  const [estHoursDraft, setEstHoursDraft] = useState('');
+
+  const [isEditingScope, setIsEditingScope] = useState(false);
+  const [scopeDraft, setScopeDraft] = useState('');
+
   // New task form
   const [taskName, setTaskName] = useState('');
   const [taskDiscipline, setTaskDiscipline] = useState(liveProject?.disciplines?.[0] || 'BIM - ACS');
@@ -69,6 +104,11 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     if (liveProject?.disciplines && liveProject.disciplines.length > 0) {
       setTaskDiscipline(liveProject.disciplines[0]);
     }
+    setIsEditingPlannedDate(false);
+    setIsEditingActualDate(false);
+    setIsEditingBudget(false);
+    setIsEditingEstHours(false);
+    setIsEditingScope(false);
   }, [liveProject?.id]);
 
   if (!liveProject) return null;
@@ -85,12 +125,66 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
       });
     } else {
       setTaskAssignee(memberId);
+      if (memberId && !liveProject.assignedEmployeeIds.includes(memberId)) {
+        updateProject(liveProject.id, {
+          assignedEmployeeIds: [...liveProject.assignedEmployeeIds, memberId],
+        });
+      }
     }
     try {
       await syncDisciplineMemberToFirestore(disciplineKey, memberId, liveProject.id);
     } catch (err) {
       console.warn('Firestore discipline assignment sync notice:', err);
     }
+  };
+
+  const handleProjectDisciplineChange = (index: number, newDiscipline: Discipline) => {
+    const nextDisciplines = [...(liveProject.disciplines || [])];
+    nextDisciplines[index] = newDiscipline;
+    const deduped = Array.from(new Set(nextDisciplines));
+    updateProject(liveProject.id, { disciplines: deduped });
+  };
+
+  const handleAddProjectDiscipline = (newDiscipline: string) => {
+    if (!newDiscipline) return;
+    const current = liveProject.disciplines || [];
+    if (!current.includes(newDiscipline as Discipline)) {
+      updateProject(liveProject.id, {
+        disciplines: [...current, newDiscipline as Discipline],
+      });
+    }
+  };
+
+  const handleRemoveProjectDiscipline = (index: number) => {
+    const current = liveProject.disciplines || [];
+    if (current.length <= 1) return;
+    const nextDisciplines = current.filter((_, i) => i !== index);
+    updateProject(liveProject.id, { disciplines: nextDisciplines });
+  };
+
+  const commitBudget = () => {
+    const parsed = Number(budgetDraft);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      updateProject(liveProject.id, { budgetAmount: parsed });
+    }
+    setIsEditingBudget(false);
+  };
+
+  const commitEstHours = () => {
+    const parsed = Number(estHoursDraft);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      updateProject(liveProject.id, {
+        totalEstimatedHours: parsed,
+        estimatedHours: parsed,
+        manualEstimatedHoursOverride: parsed,
+      });
+    }
+    setIsEditingEstHours(false);
+  };
+
+  const commitScope = () => {
+    updateProject(liveProject.id, { description: scopeDraft });
+    setIsEditingScope(false);
   };
 
   const completedHours = getProjectCompletedHours(liveProject.id);
@@ -108,7 +202,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
     e.preventDefault();
     if (!taskName) return;
 
-    addTask(project.id, {
+    addTask(liveProject.id, {
       name: taskName,
       discipline: taskDiscipline as any,
       lod: taskLOD,
@@ -130,14 +224,14 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
         <div className="px-6 py-4 border-b border-slate-800 flex items-start justify-between bg-slate-900">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-blue-400 font-mono">{project.code}</span>
+              <span className="text-xs font-bold text-blue-400 font-mono">{liveProject.code}</span>
               {isSuperAdmin ? (
                 <div className="relative inline-block">
                   <select
-                    value={project.status}
-                    onChange={(e) => updateProjectStatus(project.id, e.target.value as any)}
+                    value={liveProject.status}
+                    onChange={(e) => updateProjectStatus(liveProject.id, e.target.value as any)}
                     className={`font-semibold text-[11px] px-2.5 py-0.5 rounded-full border cursor-pointer focus:outline-none transition ${getProjectStatusStyle(
-                      project.status
+                      liveProject.status
                     )}`}
                   >
                     <option value="WIP" className="bg-slate-900 text-cyan-300">WIP</option>
@@ -151,29 +245,29 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
               ) : (
                 <span
                   className={`font-semibold text-[11px] px-2.5 py-0.5 rounded-full border ${getProjectStatusStyle(
-                    project.status
+                    liveProject.status
                   )}`}
                 >
-                  {project.status}
+                  {liveProject.status}
                 </span>
               )}
             </div>
-            <h2 className="text-lg font-bold text-white mt-1">{project.name}</h2>
+            <h2 className="text-lg font-bold text-white mt-1">{liveProject.name}</h2>
             <p className="text-xs text-slate-400">
-              {project.clientName} • {project.buildingType} • {project.location}
+              {liveProject.clientName} • {liveProject.buildingType} • {liveProject.location}
             </p>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => onOpenLogModalWithProject(project.id)}
+              onClick={() => onOpenLogModalWithProject(liveProject.id)}
               className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition flex items-center gap-1"
             >
               <Clock className="w-3.5 h-3.5" />
               <span>Log Hours</span>
             </button>
             <button
-              onClick={() => onOpenReportModalWithProject(project.id)}
+              onClick={() => onOpenReportModalWithProject(liveProject.id)}
               className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-medium transition flex items-center gap-1"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-300" />
@@ -192,9 +286,9 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
         <div className="px-6 border-b border-slate-800 bg-slate-900/50 flex space-x-4 text-xs font-medium">
           {[
             { id: 'overview', label: 'Project Overview & Hours' },
-            { id: 'tasks', label: `WBS Tasks (${project.tasks.length})` },
-            { id: 'milestones', label: `LOD Milestones (${project.milestones.length})` },
-            { id: 'clashes', label: `Clash Register (${project.clashes.length})` },
+            { id: 'tasks', label: `WBS Tasks (${liveProject.tasks.length})` },
+            { id: 'milestones', label: `LOD Milestones (${liveProject.milestones.length})` },
+            { id: 'clashes', label: `Clash Register (${liveProject.clashes.length})` },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -219,8 +313,46 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                 <div className="flex items-center justify-between">
                   <div>
                     <span className="text-slate-400 font-semibold uppercase">Estimated vs Actual Hours Burn</span>
-                    <h3 className="text-lg font-bold text-white mt-0.5">
-                      {completedHours} / {project.totalEstimatedHours} hrs
+                    <h3 className="text-lg font-bold text-white mt-0.5 flex items-center gap-1.5">
+                      <span>{completedHours} /</span>
+                      {isSuperAdmin && isEditingEstHours ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          autoFocus
+                          value={estHoursDraft}
+                          onChange={(e) => setEstHoursDraft(e.target.value)}
+                          onBlur={commitEstHours}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              commitEstHours();
+                            } else if (e.key === 'Escape') {
+                              setIsEditingEstHours(false);
+                            }
+                          }}
+                          className="w-24 bg-slate-900 text-white font-bold text-sm px-2 py-0.5 rounded border border-blue-500 focus:outline-none"
+                        />
+                      ) : (
+                        <span
+                          onClick={() => {
+                            if (isSuperAdmin) {
+                              setEstHoursDraft(String(liveProject.totalEstimatedHours ?? 0));
+                              setIsEditingEstHours(true);
+                            }
+                          }}
+                          className={
+                            isSuperAdmin
+                              ? 'cursor-pointer hover:text-blue-400 border-b border-dashed border-slate-600 hover:border-blue-400 transition'
+                              : ''
+                          }
+                          title={isSuperAdmin ? 'Click to edit Total Estimated Hours' : undefined}
+                        >
+                          {liveProject.totalEstimatedHours}
+                        </span>
+                      )}
+                      <span>hrs</span>
                     </h3>
                   </div>
                   <div className="text-right">
@@ -243,21 +375,101 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-700 text-xs">
                   <div>
                     <span className="text-slate-400 block">Estimated Budget:</span>
-                    <strong className="text-white text-sm">${project.budgetAmount.toLocaleString()}</strong>
+                    {isSuperAdmin ? (
+                      isEditingBudget ? (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <span className="text-slate-400 font-bold text-sm">$</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="500"
+                            autoFocus
+                            aria-label="Edit Estimated Budget"
+                            value={budgetDraft}
+                            onChange={(e) => setBudgetDraft(e.target.value)}
+                            onBlur={commitBudget}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitBudget();
+                              } else if (e.key === 'Escape') {
+                                setIsEditingBudget(false);
+                              }
+                            }}
+                            className="w-28 bg-slate-900 text-white font-bold text-sm px-2 py-0.5 rounded border border-blue-500 focus:outline-none"
+                          />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBudgetDraft(String(liveProject.budgetAmount ?? 0));
+                            setIsEditingBudget(true);
+                          }}
+                          className="group inline-flex items-center gap-1.5 text-left focus:outline-none"
+                          title="Click to edit Estimated Budget"
+                        >
+                          <strong className="text-white group-hover:text-blue-400 text-sm border-b border-dashed border-slate-600 group-hover:border-blue-400 transition">
+                            ${(liveProject.budgetAmount ?? 0).toLocaleString()}
+                          </strong>
+                          <Edit3 className="w-3 h-3 text-amber-400 opacity-80 group-hover:opacity-100 transition shrink-0" />
+                        </button>
+                      )
+                    ) : (
+                      <strong className="text-white text-sm">${(liveProject.budgetAmount ?? 0).toLocaleString()}</strong>
+                    )}
                   </div>
                   <div>
                     <span className="text-slate-400 block">Hours Variance:</span>
                     <strong className={`text-sm ${isOverBudget ? 'text-amber-400' : 'text-emerald-400'}`}>
-                      {isOverBudget ? `+${completedHours - project.totalEstimatedHours}h Over` : `${variance}h Remaining`}
+                      {isOverBudget ? `+${completedHours - liveProject.totalEstimatedHours}h Over` : `${variance}h Remaining`}
                     </strong>
                   </div>
                   <div>
                     <span className="text-slate-400 block">Current LOD:</span>
-                    <strong className="text-indigo-400 text-sm">{project.currentLOD}</strong>
+                    {isSuperAdmin ? (
+                      <select
+                        aria-label="Edit Current LOD"
+                        value={liveProject.currentLOD}
+                        onChange={(e) =>
+                          updateProject(liveProject.id, {
+                            currentLOD: e.target.value as LODLevel,
+                          })
+                        }
+                        className="mt-0.5 bg-slate-900/90 hover:bg-slate-900 text-indigo-400 font-bold text-sm rounded px-2 py-0.5 border border-slate-700 hover:border-indigo-500/60 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer transition"
+                      >
+                        {LOD_OPTIONS.map((lod) => (
+                          <option key={lod} value={lod} className="bg-slate-900 text-indigo-300">
+                            {lod}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <strong className="text-indigo-400 text-sm">{liveProject.currentLOD}</strong>
+                    )}
                   </div>
                   <div>
                     <span className="text-slate-400 block">Target LOD:</span>
-                    <strong className="text-slate-200 text-sm">{project.targetLOD}</strong>
+                    {isSuperAdmin ? (
+                      <select
+                        aria-label="Edit Target LOD"
+                        value={liveProject.targetLOD}
+                        onChange={(e) =>
+                          updateProject(liveProject.id, {
+                            targetLOD: e.target.value as LODLevel,
+                          })
+                        }
+                        className="mt-0.5 bg-slate-900/90 hover:bg-slate-900 text-slate-200 font-bold text-sm rounded px-2 py-0.5 border border-slate-700 hover:border-blue-500/60 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer transition"
+                      >
+                        {LOD_OPTIONS.map((lod) => (
+                          <option key={lod} value={lod} className="bg-slate-900 text-slate-200">
+                            {lod}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <strong className="text-slate-200 text-sm">{liveProject.targetLOD}</strong>
+                    )}
                   </div>
                 </div>
               </div>
@@ -281,42 +493,135 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 text-slate-300">
                       <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between gap-2">
-                        <div>
+                        <div className="flex-1 min-w-0">
                           <span className="text-slate-400 text-[11px] block">Planned Delivery Date:</span>
-                          <strong className="text-white text-xs">{plannedDate || 'Not specified'}</strong>
+                          {isSuperAdmin && isEditingPlannedDate ? (
+                            <input
+                              ref={plannedDateInputRef}
+                              type="date"
+                              autoFocus
+                              aria-label="Planned Delivery Date"
+                              value={toIsoDateInput(newPlannedDateValue || plannedDate)}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setNewPlannedDateValue(val);
+                                updateProject(liveProject.id, {
+                                  plannedDeliveryDate: val,
+                                  targetCompletionDate: val,
+                                });
+                              }}
+                              onBlur={() => setIsEditingPlannedDate(false)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === 'Escape') {
+                                  setIsEditingPlannedDate(false);
+                                }
+                              }}
+                              className="mt-0.5 w-full bg-slate-800 border border-amber-500/70 rounded px-2 py-0.5 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                            />
+                          ) : (
+                            <strong
+                              onClick={() => {
+                                if (isSuperAdmin) {
+                                  setNewPlannedDateValue(toIsoDateInput(plannedDate));
+                                  setIsEditingPlannedDate(true);
+                                  setTimeout(() => {
+                                    try {
+                                      plannedDateInputRef.current?.focus();
+                                      plannedDateInputRef.current?.showPicker?.();
+                                    } catch {}
+                                  }, 0);
+                                }
+                              }}
+                              className={`text-white text-xs ${
+                                isSuperAdmin ? 'cursor-pointer hover:text-amber-300 transition' : ''
+                              }`}
+                            >
+                              {plannedDate || 'Not specified'}
+                            </strong>
+                          )}
                         </div>
                         {isSuperAdmin && (
                           <button
                             type="button"
                             onClick={() => {
-                              setNewPlannedDateValue(plannedDate || '');
-                              setNewActualDateValue(actualDate || '');
-                              setIsEditingDeliveryDates(true);
+                              setNewPlannedDateValue(toIsoDateInput(plannedDate));
+                              setIsEditingPlannedDate(true);
+                              setTimeout(() => {
+                                try {
+                                  plannedDateInputRef.current?.focus();
+                                  plannedDateInputRef.current?.showPicker?.();
+                                } catch {}
+                              }, 0);
                             }}
                             className="p-1.5 rounded-lg hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition shrink-0"
-                            title="Edit Planned Delivery Date (Super Admin Override)"
+                            title="Edit Planned Delivery Date"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
                       <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between gap-2">
-                        <div>
+                        <div className="flex-1 min-w-0">
                           <span className="text-slate-400 text-[11px] block">Actual Delivered Date:</span>
-                          <strong className={actualDate ? 'text-emerald-400 text-xs' : 'text-slate-500 text-xs'}>
-                            {actualDate || 'In Progress'}
-                          </strong>
+                          {isSuperAdmin && isEditingActualDate ? (
+                            <input
+                              ref={actualDateInputRef}
+                              type="date"
+                              autoFocus
+                              aria-label="Actual Delivered Date"
+                              value={toIsoDateInput(newActualDateValue || actualDate)}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setNewActualDateValue(val);
+                                updateProject(liveProject.id, {
+                                  actualDeliveredDate: val || undefined,
+                                });
+                              }}
+                              onBlur={() => setIsEditingActualDate(false)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === 'Escape') {
+                                  setIsEditingActualDate(false);
+                                }
+                              }}
+                              className="mt-0.5 w-full bg-slate-800 border border-amber-500/70 rounded px-2 py-0.5 text-emerald-300 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                            />
+                          ) : (
+                            <strong
+                              onClick={() => {
+                                if (isSuperAdmin) {
+                                  setNewActualDateValue(toIsoDateInput(actualDate));
+                                  setIsEditingActualDate(true);
+                                  setTimeout(() => {
+                                    try {
+                                      actualDateInputRef.current?.focus();
+                                      actualDateInputRef.current?.showPicker?.();
+                                    } catch {}
+                                  }, 0);
+                                }
+                              }}
+                              className={`${actualDate ? 'text-emerald-400 text-xs' : 'text-slate-500 text-xs'} ${
+                                isSuperAdmin ? 'cursor-pointer hover:text-amber-300 transition' : ''
+                              }`}
+                            >
+                              {actualDate || 'In Progress'}
+                            </strong>
+                          )}
                         </div>
                         {isSuperAdmin && (
                           <button
                             type="button"
                             onClick={() => {
-                              setNewPlannedDateValue(plannedDate || '');
-                              setNewActualDateValue(actualDate || '');
-                              setIsEditingDeliveryDates(true);
+                              setNewActualDateValue(toIsoDateInput(actualDate));
+                              setIsEditingActualDate(true);
+                              setTimeout(() => {
+                                try {
+                                  actualDateInputRef.current?.focus();
+                                  actualDateInputRef.current?.showPicker?.();
+                                } catch {}
+                              }, 0);
                             }}
                             className="p-1.5 rounded-lg hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition shrink-0"
-                            title="Edit Actual Delivered Date (Super Admin Override)"
+                            title="Edit Actual Delivered Date"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -333,12 +638,60 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
 
               {/* Project Description */}
               <div className="space-y-2">
-                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  BIM Scope & Engineering Strategy
-                </h4>
-                <p className="text-xs text-slate-300 leading-relaxed bg-slate-800/40 p-4 rounded-xl border border-slate-700/50">
-                  {project.description}
-                </p>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    BIM Scope & Engineering Strategy
+                  </h4>
+                  {isSuperAdmin && !isEditingScope && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setScopeDraft(liveProject.description || '');
+                        setIsEditingScope(true);
+                      }}
+                      className="p-1 rounded hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition flex items-center gap-1 text-[11px]"
+                      title="Edit BIM Scope & Engineering Strategy"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {isSuperAdmin && isEditingScope ? (
+                  <div className="space-y-2">
+                    <textarea
+                      autoFocus
+                      rows={4}
+                      aria-label="Edit BIM Scope & Engineering Strategy"
+                      value={scopeDraft}
+                      onChange={(e) => setScopeDraft(e.target.value)}
+                      onBlur={commitScope}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsEditingScope(false);
+                        } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                          e.preventDefault();
+                          commitScope();
+                        }
+                      }}
+                      className="w-full text-xs text-slate-200 leading-relaxed bg-slate-800/80 p-4 rounded-xl border border-blue-500/70 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
+                    />
+                  </div>
+                ) : (
+                  <p
+                    onClick={() => {
+                      if (isSuperAdmin) {
+                        setScopeDraft(liveProject.description || '');
+                        setIsEditingScope(true);
+                      }
+                    }}
+                    title={isSuperAdmin ? 'Click to edit BIM Scope & Engineering Strategy' : undefined}
+                    className={`text-xs text-slate-300 leading-relaxed bg-slate-800/40 p-4 rounded-xl border border-slate-700/50 ${
+                      isSuperAdmin ? 'cursor-pointer hover:border-blue-500/50 hover:bg-slate-800/60 transition' : ''
+                    }`}
+                  >
+                    {liveProject.description || 'Click to add BIM scope and engineering strategy...'}
+                  </p>
+                )}
               </div>
 
               {/* Disciplines Engaged */}
@@ -346,19 +699,39 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider">
                   Active BIM Disciplines
                 </h4>
-                <div className="flex flex-wrap gap-2">
-                  {liveProject.disciplines.map((disc) => {
+                <div className="flex flex-wrap items-center gap-2">
+                  {(liveProject.disciplines || []).map((disc, discIdx) => {
                     const assignedMemberId =
                       disciplineAssignments[`${liveProject.id}__${disc}`] ||
                       disciplineAssignments[disc] ||
                       liveProject.tasks.find((t) => t.discipline === disc)?.assignedEmployeeId ||
                       '';
+                    const availableDisciplineOptions = Array.from(
+                      new Set([...PRIMARY_DISCIPLINES, disc])
+                    );
                     return (
                       <div
-                        key={disc}
+                        key={`${disc}-${discIdx}`}
                         className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium flex items-center gap-2"
                       >
-                        <span>{disc}</span>
+                        {isSuperAdmin ? (
+                          <select
+                            aria-label={`Change discipline ${disc}`}
+                            value={disc}
+                            onChange={(e) =>
+                              handleProjectDisciplineChange(discIdx, e.target.value as Discipline)
+                            }
+                            className="bg-slate-900 text-slate-100 text-xs font-semibold rounded px-1.5 py-0.5 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                          >
+                            {availableDisciplineOptions.map((dOpt) => (
+                              <option key={dOpt} value={dOpt}>
+                                {dOpt}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span>{disc}</span>
+                        )}
                         {isSuperAdmin && employees.length > 0 && (
                           <select
                             aria-label={`Assign specialist for ${disc}`}
@@ -374,9 +747,40 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                             ))}
                           </select>
                         )}
+                        {isSuperAdmin && (liveProject.disciplines || []).length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveProjectDiscipline(discIdx)}
+                            className="text-slate-400 hover:text-rose-400 transition p-0.5"
+                            title={`Remove ${disc}`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
                     );
                   })}
+                  {isSuperAdmin && (
+                    <select
+                      aria-label="Add active BIM discipline"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handleAddProjectDiscipline(e.target.value);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-dashed border-slate-600 text-blue-400 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="">+ Add Discipline</option>
+                      {PRIMARY_DISCIPLINES.filter(
+                        (d) => !(liveProject.disciplines || []).includes(d as Discipline)
+                      ).map((d) => (
+                        <option key={d} value={d} className="bg-slate-900 text-slate-200">
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -543,7 +947,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                         onChange={(e) => setTaskDiscipline(e.target.value as any)}
                         className="w-full bg-slate-800 text-slate-200 rounded p-1.5 border border-slate-700"
                       >
-                        {Array.from(new Set([...project.disciplines, 'AI & Automation'])).map((d) => (
+                        {Array.from(new Set([...(liveProject.disciplines || []), 'AI & Automation'])).map((d) => (
                           <option key={d} value={d}>
                             {d}
                           </option>
@@ -616,7 +1020,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                 BIM LOD Deliverable Milestones
               </h4>
               <div className="space-y-3">
-                {project.milestones.map((ms) => (
+                {liveProject.milestones.map((ms) => (
                   <div
                     key={ms.id}
                     className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/60 text-xs space-y-2"
@@ -639,7 +1043,7 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
                           value={ms.status}
                           onChange={(e) =>
                             updateMilestoneStatus(
-                              project.id,
+                              liveProject.id,
                               ms.id,
                               e.target.value as Milestone['status']
                             )
@@ -675,10 +1079,10 @@ export const ProjectDetailModal: React.FC<ProjectDetailModalProps> = ({
           {activeTab === 'clashes' && (
             <div className="space-y-4">
               <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                Cross-Trade Coordination Clashes ({project.clashes.length})
+                Cross-Trade Coordination Clashes ({liveProject.clashes.length})
               </h4>
               <div className="space-y-3">
-                {project.clashes.map((c) => (
+                {liveProject.clashes.map((c) => (
                   <div
                     key={c.id}
                     className="p-3.5 rounded-xl bg-slate-800/50 border border-slate-700/60 text-xs space-y-1.5"
