@@ -712,14 +712,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       </span>
                     </div>
                   </th>
-                  <th className="py-3 px-3 min-w-[120px]">Difference</th>
                   <th className="py-3 px-3 text-right min-w-[110px]">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {filteredProjects.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-12 text-center text-slate-500">
+                    <td colSpan={7} className="py-12 text-center text-slate-500">
                       <p className="text-sm font-semibold text-slate-400">No projects found.</p>
                       <p className="text-xs text-slate-500 mt-1">Click "Add Project" to get started.</p>
                     </td>
@@ -1030,15 +1029,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                               </span>
                             </div>
                           )}
-                        </td>
-
-                        {/* Difference / Variance */}
-                        <td className="py-2.5 px-3">
-                          <span
-                            className={`inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded ${varianceInfo.badgeClass}`}
-                          >
-                            {varianceInfo.label}
-                          </span>
                         </td>
 
                         {/* Action */}

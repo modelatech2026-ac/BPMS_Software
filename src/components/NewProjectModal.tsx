@@ -449,8 +449,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             </div>
           </div>
 
-          {/* Hours, Budget, LOD */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          {/* Hours, LOD */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-slate-400 font-medium mb-1">Estimated Hours</label>
               <input
@@ -459,15 +459,6 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 onChange={(e) => setTotalEstimatedHours(Number(e.target.value))}
                 className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 font-bold"
                 required
-              />
-            </div>
-            <div>
-              <label className="block text-slate-400 font-medium mb-1">Budget ($ USD)</label>
-              <input
-                type="number"
-                value={budgetAmount}
-                onChange={(e) => setBudgetAmount(Number(e.target.value))}
-                className="w-full bg-slate-800 text-slate-200 rounded-lg p-2 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
             </div>
             <div>
