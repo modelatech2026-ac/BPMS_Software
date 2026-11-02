@@ -112,6 +112,15 @@ const normalizePersonEmail = (email?: string): string =>
     .replace(/^abhinandnb@/, 'abhinandanb@')
     .replace(/^sushovandas@/, 'sushoovandas@');
 
+const normalizeAllocationDiscipline = (
+  disc?: string
+): ResourceAllocationItem['discipline'] => {
+  const trimmed = (disc || '').trim();
+  if (!trimmed) return 'BIM - ACS';
+  if (trimmed === 'MEP') return 'BIM - MEP';
+  return trimmed as ResourceAllocationItem['discipline'];
+};
+
 const INITIAL_ALLOCATIONS: ResourceAllocationItem[] = [];
 
 export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectProject }) => {
@@ -216,6 +225,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         if (Array.isArray(parsed)) {
           return parsed.map((item) => ({
             ...item,
+            discipline: normalizeAllocationDiscipline(item.discipline),
             startDate:
               normalizeDateToIso(
                 item.startDate ||
@@ -333,7 +343,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         employeeRole: matchedEmp?.role || data.employeeRole || 'Editor',
         memberEmail: finalEmail,
         assignedToEmail: finalEmail,
-        discipline: data.discipline || matchedEmp?.discipline || 'BIM - ACS',
+        discipline: normalizeAllocationDiscipline(data.discipline || matchedEmp?.discipline || 'BIM - ACS'),
         lod: data.lod || 'LOD 350',
         projectPhase: data.projectPhase || 'Design Development',
         taskType: data.taskType || '3D Modeling',
@@ -764,7 +774,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           employeeName: resolvedName,
           memberEmail: resolvedEmail,
           assignedToEmail: resolvedEmail,
-          discipline: changedItem.discipline || 'BIM - ACS',
+          discipline: normalizeAllocationDiscipline(changedItem.discipline || 'BIM - ACS'),
           lod: changedItem.lod || 'LOD 350',
           projectPhase: changedItem.projectPhase || 'Design Development',
           taskType: changedItem.taskType || '3D Modeling',
@@ -798,12 +808,12 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       employees.find(
         (e) => e.id === memberId || e.id.replace(/^emp-/, '') === memberId.replace(/^emp-/, '')
       );
-    const resolvedDiscipline = (
+    const resolvedDiscipline = normalizeAllocationDiscipline(
       emp?.discipline ||
       emp?.primaryDiscipline ||
       disciplineKey ||
       'BIM - ACS'
-    ) as ResourceAllocationItem['discipline'];
+    );
 
     if (!allocationId) {
       setFormEmployee(memberId);
@@ -1430,6 +1440,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     const disciplineBreakdown: Record<string, number> = {
       Architectural: 0,
       Structural: 0,
+      'BIM - MEP': 0,
       MEP: 0,
       Infrastructure: 0,
       'Coordination & QA': 0,
@@ -1438,8 +1449,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     };
 
     filteredForMetrics.forEach((a) => {
-      if (disciplineBreakdown[a.discipline] !== undefined) {
-        disciplineBreakdown[a.discipline] += Number(a.assignedHours || 0);
+      const normDisc = normalizeAllocationDiscipline(a.discipline);
+      if (disciplineBreakdown[normDisc] !== undefined) {
+        disciplineBreakdown[normDisc] += Number(a.assignedHours || 0);
       }
     });
 
@@ -1478,7 +1490,9 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     return visibleAssignments.filter((a) => {
       const matchesProj = selectedProjectId === 'all' || matchProjectId(a.projectId, selectedProjectId);
       const matchesEmp = !isFullAccessRole || selectedEmployeeId === 'all' || doesAllocationMatchEmployee(a, selectedEmployeeId);
-      const matchesDisc = filterDiscipline === 'all' || a.discipline === filterDiscipline;
+      const matchesDisc =
+        filterDiscipline === 'all' ||
+        normalizeAllocationDiscipline(a.discipline) === normalizeAllocationDiscipline(filterDiscipline);
       const matchesStatus = filterStatus === 'all' || a.status === filterStatus;
       const matchesPriority = filterPriority === 'all' || a.priority === filterPriority;
       const q = searchQuery.toLowerCase();
@@ -1561,7 +1575,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
       );
 
     setFormEmployee(matchedMember?.id || rawEmpId || activeTeamMembers[0]?.id || '');
-    setFormDiscipline((targetAlloc.discipline || 'BIM - ACS') as ResourceAllocationItem['discipline']);
+    setFormDiscipline(normalizeAllocationDiscipline(targetAlloc.discipline || 'BIM - ACS'));
     setFormLOD((targetAlloc.lod || 'LOD 350') as ResourceAllocationItem['lod']);
     setFormPhase(
       (targetAlloc.projectPhase || 'Design Development') as ResourceAllocationItem['projectPhase']
@@ -1828,6 +1842,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
       case 'Structural':
         return 'bg-rose-500/10 text-rose-400 border border-rose-500/30';
+      case 'BIM - MEP':
       case 'MEP':
         return 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
       case 'Infrastructure':
@@ -2806,7 +2821,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                   >
                     <option value="BIM - ACS">BIM - ACS</option>
                     <option value="Structural">Structural</option>
-                    <option value="MEP">MEP</option>
+                    <option value="BIM - MEP">BIM - MEP</option>
                     <option value="Infrastructure">Infrastructure</option>
                     <option value="Coordination & QA">Coordination & QA</option>
                     <option value="AI & Automation">AI & Automation</option>

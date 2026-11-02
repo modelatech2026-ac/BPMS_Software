@@ -1,5 +1,6 @@
 export type Discipline =
   | 'BIM - ACS'
+  | 'BIM - MEP'
   | 'Structure'
   | 'Structural'
   | 'MEP'
@@ -23,7 +24,7 @@ export const PRIMARY_DISCIPLINES = [
   "MEP - Plumbing",
   "CAD",
   "SES",
-  "MEP",
+  "BIM - MEP",
   "Fire Protection",
   "Façade / Envelope",
   "Coordination & QA",
@@ -284,6 +285,7 @@ export type BimServiceType = 'ACS' | 'MEP' | 'SCAN TO BIM' | 'CAD';
 export type PrimaryDiscipline =
   | 'Architectural'
   | 'Structural'
+  | 'BIM - MEP'
   | 'MEP'
   | 'Point Cloud / Scan to BIM Specialist'
   | 'CAD Specialist'
@@ -314,7 +316,7 @@ export interface ResourceAllocationItem {
   employeeRole: string;
   memberEmail?: string;
   assignedToEmail?: string;
-  discipline: 'BIM - ACS' | 'Architectural' | 'Structural' | 'MEP' | 'Infrastructure' | 'Coordination & QA' | 'AI & Automation' | Discipline;
+  discipline: 'BIM - ACS' | 'BIM - MEP' | 'Architectural' | 'Structural' | 'MEP' | 'Infrastructure' | 'Coordination & QA' | 'AI & Automation' | Discipline;
   lod?: 'LOD 200' | 'LOD 300' | 'LOD 350' | 'LOD 400';
   projectPhase: 'Schematic Design' | 'Design Development' | 'Construction Documentation' | 'Fabrication / As-Built';
   taskType: BimTaskType;

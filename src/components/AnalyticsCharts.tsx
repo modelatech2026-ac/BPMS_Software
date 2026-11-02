@@ -131,6 +131,7 @@ export const DisciplineDistributionChart: React.FC<{
 }> = ({ workLogs }) => {
   const disciplines: Discipline[] = [
     'BIM - ACS',
+    'BIM - MEP',
     'Structure',
     'MEP - HVAC',
     'MEP - Electrical',
@@ -144,6 +145,7 @@ export const DisciplineDistributionChart: React.FC<{
 
   const colors: Record<Discipline, string> = {
     'BIM - ACS': 'bg-emerald-500 text-emerald-400',
+    'BIM - MEP': 'bg-cyan-500 text-cyan-400',
     'Structure': 'bg-blue-500 text-blue-400',
     'Structural': 'bg-blue-500 text-blue-400',
     'MEP': 'bg-cyan-500 text-cyan-400',

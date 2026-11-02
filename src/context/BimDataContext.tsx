@@ -3831,7 +3831,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         employeeRole: data.employeeRole || 'Editor',
         memberEmail: resolvedEmail,
         assignedToEmail: resolvedEmail,
-        discipline: data.discipline || 'BIM - ACS',
+        discipline: data.discipline === 'MEP' ? 'BIM - MEP' : (data.discipline || 'BIM - ACS'),
         lod: data.lod || 'LOD 350',
         projectPhase: data.projectPhase || 'Design Development',
         taskType: data.taskType || '3D Modeling',

@@ -373,7 +373,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 'MEP - Plumbing',
                 'CAD',
                 'SES',
-                'MEP',
+                'BIM - MEP',
                 'Façade / Envelope',
                 'Coordination & QA',
                 'Fire Protection',
