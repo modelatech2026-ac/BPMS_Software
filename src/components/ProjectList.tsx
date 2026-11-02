@@ -206,22 +206,38 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       .reduce((sum, alloc) => sum + (Number(alloc.assignedHours) || 0), 0);
   };
 
-  // Direct real-time Firestore onSnapshot subscription for work_logs & daily_logs
+  // Direct real-time Firestore onSnapshot subscription for work_logs, daily_logs, timesheets + SSOT & BroadcastChannel
   const [liveWorkLogs, setLiveWorkLogs] = useState<DailyWorkLog[]>([]);
+  const [deletedLogIds, setDeletedLogIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     let unsubWorkLogs: (() => void) | undefined;
     let unsubDailyLogs: (() => void) | undefined;
+    let unsubTimesheets: (() => void) | undefined;
+    let sseSource: EventSource | undefined;
+    let bcChannel: BroadcastChannel | undefined;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
 
     const workLogsMap = new Map<string, DailyWorkLog>();
     const dailyLogsMap = new Map<string, DailyWorkLog>();
+    const timesheetsMap = new Map<string, DailyWorkLog>();
+    const ssotLogsMap = new Map<string, DailyWorkLog>();
+    const deletedIds = new Set<string>();
 
-    const parseLogDoc = (docSnap: any): DailyWorkLog => {
-      const data = docSnap.data() || {};
+    const parseRawLog = (docId: string, data: any): DailyWorkLog | null => {
+      if (!data || data.isDeleted === true || deletedIds.has(docId)) return null;
+      const resolvedCreatedAt =
+        typeof data.createdAt === 'string'
+          ? data.createdAt
+          : typeof data.createdAt?.toDate === 'function'
+          ? data.createdAt.toDate().toISOString()
+          : typeof data.createdAt?.seconds === 'number'
+          ? new Date(data.createdAt.seconds * 1000).toISOString()
+          : data.timestamp || '';
       return sanitizeWorkLogRecord({
-        id: docSnap.id,
-        employeeId: data.employeeId || data.memberId || '',
-        memberId: data.memberId || data.employeeId || '',
+        id: docId,
+        employeeId: data.employeeId || data.memberId || data.userId || '',
+        memberId: data.memberId || data.employeeId || data.userId || '',
         employeeName: data.employeeName || 'BIM Modeler',
         projectId: data.projectId || '',
         projectName: data.projectName || '',
@@ -233,16 +249,68 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         notes: data.notes || '',
         billable: data.billable !== undefined ? Boolean(data.billable) : true,
         isTestEntry: Boolean(data.isTestEntry ?? false),
-        date: data.date || '',
-        timestamp: data.timestamp || '',
+        date: data.date || (resolvedCreatedAt ? resolvedCreatedAt.slice(0, 10) : ''),
+        timestamp: data.updatedAt || data.timestamp || resolvedCreatedAt || '',
+        createdAt: resolvedCreatedAt,
       });
+    };
+
+    const parseLogDoc = (docSnap: any): DailyWorkLog | null => {
+      return parseRawLog(docSnap.id, docSnap.data() || {});
+    };
+
+    const pickLatest = (existing: DailyWorkLog | undefined, incoming: DailyWorkLog): DailyWorkLog => {
+      if (!existing) return incoming;
+      const existingTs = new Date((existing as any).updatedAt || existing.timestamp || existing.createdAt || 0).getTime() || 0;
+      const incomingTs = new Date((incoming as any).updatedAt || incoming.timestamp || incoming.createdAt || 0).getTime() || 0;
+      return incomingTs >= existingTs ? incoming : existing;
     };
 
     const syncLogsSnapshots = () => {
       const merged = new Map<string, DailyWorkLog>();
-      workLogsMap.forEach((v, k) => merged.set(k, v));
-      dailyLogsMap.forEach((v, k) => merged.set(k, v));
+      workLogsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) merged.set(k, pickLatest(merged.get(k), v));
+      });
+      dailyLogsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) merged.set(k, pickLatest(merged.get(k), v));
+      });
+      timesheetsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) merged.set(k, pickLatest(merged.get(k), v));
+      });
+      ssotLogsMap.forEach((v, k) => {
+        if (!deletedIds.has(k)) merged.set(k, pickLatest(merged.get(k), v));
+      });
+      setDeletedLogIds(new Set(deletedIds));
       setLiveWorkLogs(Array.from(merged.values()));
+    };
+
+    const pollSsotState = async () => {
+      try {
+        const res = await fetch('/api/ssot/state', { cache: 'no-store' });
+        if (res.ok) {
+          const payload = await res.json();
+          if (Array.isArray(payload?.deletedLogIds)) {
+            payload.deletedLogIds.forEach((id: string) => {
+              const delId = String(id);
+              deletedIds.add(delId);
+              ssotLogsMap.delete(delId);
+              workLogsMap.delete(delId);
+              dailyLogsMap.delete(delId);
+              timesheetsMap.delete(delId);
+            });
+          }
+          if (Array.isArray(payload?.timesheets)) {
+            ssotLogsMap.clear();
+            payload.timesheets.forEach((item: any) => {
+              if (item?.id) {
+                const parsed = parseRawLog(String(item.id), item);
+                if (parsed) ssotLogsMap.set(parsed.id, parsed);
+              }
+            });
+            syncLogsSnapshots();
+          }
+        }
+      } catch {}
     };
 
     try {
@@ -250,7 +318,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         collection(db, 'work_logs'),
         (snap) => {
           workLogsMap.clear();
-          snap.docs.forEach((docSnap) => workLogsMap.set(docSnap.id, parseLogDoc(docSnap)));
+          snap.docs.forEach((docSnap) => {
+            const p = parseLogDoc(docSnap);
+            if (p) workLogsMap.set(docSnap.id, p);
+          });
           syncLogsSnapshots();
         },
         (err) => console.warn('ProjectList work_logs listener notice:', err)
@@ -260,11 +331,95 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         collection(db, 'daily_logs'),
         (snap) => {
           dailyLogsMap.clear();
-          snap.docs.forEach((docSnap) => dailyLogsMap.set(docSnap.id, parseLogDoc(docSnap)));
+          snap.docs.forEach((docSnap) => {
+            const p = parseLogDoc(docSnap);
+            if (p) dailyLogsMap.set(docSnap.id, p);
+          });
           syncLogsSnapshots();
         },
         (err) => console.warn('ProjectList daily_logs listener notice:', err)
       );
+
+      unsubTimesheets = onSnapshot(
+        collection(db, 'timesheets'),
+        (snap) => {
+          timesheetsMap.clear();
+          snap.docs.forEach((docSnap) => {
+            const p = parseLogDoc(docSnap);
+            if (p) timesheetsMap.set(docSnap.id, p);
+          });
+          syncLogsSnapshots();
+        },
+        (err) => console.warn('ProjectList timesheets listener notice:', err)
+      );
+
+      if (typeof EventSource !== 'undefined') {
+        sseSource = new EventSource('/api/ssot/stream');
+        sseSource.onmessage = (ev) => {
+          try {
+            const payload = JSON.parse(ev.data);
+            if (payload?.type === 'INIT_SSOT' && Array.isArray(payload.timesheets)) {
+              if (Array.isArray(payload.deletedLogIds)) {
+                payload.deletedLogIds.forEach((id: string) => deletedIds.add(String(id)));
+              }
+              ssotLogsMap.clear();
+              payload.timesheets.forEach((item: any) => {
+                if (item?.id) {
+                  const parsed = parseRawLog(String(item.id), item);
+                  if (parsed) ssotLogsMap.set(parsed.id, parsed);
+                }
+              });
+              syncLogsSnapshots();
+            } else if (payload?.type === 'UPSERT_TIMESHEETS' && Array.isArray(payload.timesheets)) {
+              payload.timesheets.forEach((item: any) => {
+                if (item?.id) {
+                  deletedIds.delete(String(item.id));
+                  const parsed = parseRawLog(String(item.id), item);
+                  if (parsed) ssotLogsMap.set(parsed.id, parsed);
+                }
+              });
+              syncLogsSnapshots();
+            } else if (payload?.type === 'DELETE_TIMESHEET' && payload?.id) {
+              const delId = String(payload.id);
+              deletedIds.add(delId);
+              ssotLogsMap.delete(delId);
+              workLogsMap.delete(delId);
+              dailyLogsMap.delete(delId);
+              timesheetsMap.delete(delId);
+              syncLogsSnapshots();
+            }
+          } catch {}
+        };
+      }
+
+      if (typeof BroadcastChannel !== 'undefined') {
+        bcChannel = new BroadcastChannel('bim_ssot_realtime_channel');
+        bcChannel.onmessage = (event) => {
+          const msg = event?.data;
+          if (!msg) return;
+          if (msg.type === 'UPSERT_LOG' && msg.log && msg.log.id) {
+            deletedIds.delete(String(msg.log.id));
+            const parsed = parseRawLog(String(msg.log.id), msg.log);
+            if (parsed) {
+              ssotLogsMap.set(parsed.id, parsed);
+              syncLogsSnapshots();
+            }
+          } else if (msg.type === 'DELETE_LOG' && msg.id) {
+            const delId = String(msg.id);
+            deletedIds.add(delId);
+            ssotLogsMap.delete(delId);
+            workLogsMap.delete(delId);
+            dailyLogsMap.delete(delId);
+            timesheetsMap.delete(delId);
+            syncLogsSnapshots();
+          } else if (msg.type === 'REFRESH_SSOT') {
+            pollSsotState();
+          }
+        };
+      }
+
+      pollSsotState();
+      pollTimer = setInterval(pollSsotState, 3000);
     } catch (e) {
       console.warn('ProjectList work_logs setup notice:', e);
     }
@@ -272,36 +427,53 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     return () => {
       if (unsubWorkLogs) unsubWorkLogs();
       if (unsubDailyLogs) unsubDailyLogs();
+      if (unsubTimesheets) unsubTimesheets();
+      if (sseSource) sseSource.close();
+      if (bcChannel) bcChannel.close();
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, []);
 
   const combinedWorkLogs = useMemo(() => {
     const map = new Map<string, DailyWorkLog>();
-    (allWorkLogs || []).forEach((w) => map.set(w.id, w));
-    (workLogs || []).forEach((w) => map.set(w.id, w));
-    liveWorkLogs.forEach((w) => map.set(w.id, w));
+    const upsert = (raw: DailyWorkLog) => {
+      if (!raw || !raw.id || (raw as any).isDeleted || deletedLogIds.has(raw.id)) return;
+      const sanitized = sanitizeWorkLogRecord(raw);
+      const existing = map.get(sanitized.id);
+      if (!existing) {
+        map.set(sanitized.id, sanitized);
+        return;
+      }
+      const existingTs = new Date((existing as any).updatedAt || existing.timestamp || existing.createdAt || 0).getTime() || 0;
+      const incomingTs = new Date((sanitized as any).updatedAt || sanitized.timestamp || sanitized.createdAt || 0).getTime() || 0;
+      if (incomingTs >= existingTs) {
+        map.set(sanitized.id, sanitized);
+      }
+    };
+    (workLogs || []).forEach(upsert);
+    (allWorkLogs || []).forEach(upsert);
+    liveWorkLogs.forEach(upsert);
     return Array.from(map.values());
-  }, [allWorkLogs, workLogs, liveWorkLogs]);
+  }, [allWorkLogs, workLogs, liveWorkLogs, deletedLogIds]);
 
-  // Aggregate total Logged Hours for a target project dynamically, respecting manual overrides
+  // Dynamically aggregate total Logged Hours for a project by summing all active Daily Hour Tracking entries
   const getProjectDynamicLoggedHours = (project: BimProject): number => {
+    const logsSum = combinedWorkLogs
+      .filter((w) => !w.isTestEntry && !(w as any).isDeleted && doesLogBelongToProject(w, project))
+      .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+
     if (
+      project.isManualLoggedOverride === true &&
       project.manualHoursOverride !== undefined &&
       project.manualHoursOverride !== null &&
       !Number.isNaN(Number(project.manualHoursOverride))
     ) {
-      return Number(project.manualHoursOverride);
+      const baseLogged = Number(project.manualHoursBaseLogged ?? logsSum);
+      const delta = logsSum - baseLogged;
+      return Math.max(0, Number(project.manualHoursOverride) + delta);
     }
-    if (
-      project.totalLogged !== undefined &&
-      project.totalLogged !== null &&
-      !Number.isNaN(Number(project.totalLogged))
-    ) {
-      return Number(project.totalLogged);
-    }
-    return combinedWorkLogs
-      .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, project))
-      .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+
+    return logsSum;
   };
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -399,7 +571,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
     if (field === 'totalLogged') {
       const currentLoggedFromWorkLogs = combinedWorkLogs
-        .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, targetProj))
+        .filter((w) => !w.isTestEntry && !(w as any).isDeleted && doesLogBelongToProject(w, targetProj))
         .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
 
       // 1. Update local state immediately for instant UI feedback
@@ -408,6 +580,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         totalCompletedHours: value,
         manualHoursOverride: value,
         manualHoursBaseLogged: currentLoggedFromWorkLogs,
+        isManualLoggedOverride: true,
       });
 
       // 2. Persist update to central database
@@ -425,6 +598,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         totalCompletedHours: value,
         manualHoursOverride: value,
         manualHoursBaseLogged: currentLoggedFromWorkLogs,
+        isManualLoggedOverride: true,
         updatedAt: new Date().toISOString(),
       };
       try {

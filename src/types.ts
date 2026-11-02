@@ -215,6 +215,7 @@ export interface BimProject {
   totalLogged?: number;
   manualHoursOverride?: number;
   manualHoursBaseLogged?: number;
+  isManualLoggedOverride?: boolean;
   currentLOD: LODLevel;
   targetLOD: LODLevel;
   budgetAmount: number;

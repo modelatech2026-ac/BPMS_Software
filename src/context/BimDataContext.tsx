@@ -767,42 +767,48 @@ export const doesLogBelongToProject = (
   const logCode = (log.projectCode || '').trim().toLowerCase();
   const projCode = (project.code || '').trim().toLowerCase();
   if (logCode && projCode) {
-    if (logCode === projCode || logCode.includes(projCode) || projCode.includes(logCode)) {
+    if (logCode === projCode) {
       return true;
     }
   }
 
-  // 3. Project Name / Substring match
-  const logNameKey = (log.projectName || '')
-    .trim()
-    .replace(/^BIM[\s-_]+/i, '')
-    .trim()
-    .toLowerCase();
-  const projNameKey = (project.name || '')
-    .trim()
-    .replace(/^BIM[\s-_]+/i, '')
-    .trim()
-    .toLowerCase();
+  // 3. Project Name match (normalized via cleanProjectName)
+  const rawLogName = (log.projectName || '').trim();
+  const rawProjName = (project.name || '').trim();
+  const cleanedLogName = cleanProjectName(rawLogName).toLowerCase();
+  const cleanedProjName = cleanProjectName(rawProjName).toLowerCase();
 
-  if (logNameKey && projNameKey) {
-    if (logNameKey === projNameKey) return true;
-    if (logNameKey.length >= 2 && projNameKey.length >= 2) {
-      if (projNameKey.includes(logNameKey) || logNameKey.includes(projNameKey)) {
+  const isGenericLogName =
+    !cleanedLogName ||
+    cleanedLogName === 'bim project' ||
+    cleanedLogName === 'unassigned project' ||
+    cleanedLogName === 'project';
+
+  if (!isGenericLogName && cleanedProjName) {
+    if (cleanedLogName === cleanedProjName) return true;
+    const normLogKey = normalizeProjectNameKey(rawLogName);
+    const normProjKey = normalizeProjectNameKey(rawProjName);
+    if (normLogKey && normProjKey && normLogKey === normProjKey) return true;
+
+    // Only allow substring match if the log does not carry an explicit projectId pointing elsewhere
+    if (!logProjId && cleanedLogName.length >= 4 && cleanedProjName.length >= 4) {
+      if (cleanedProjName.includes(cleanedLogName) || cleanedLogName.includes(cleanedProjName)) {
         return true;
       }
     }
   }
 
-  // 4. Raw lowercased string check
-  const rawLogName = (log.projectName || '').trim().toLowerCase();
-  const rawProjName = (project.name || '').trim().toLowerCase();
-  if (rawLogName && rawProjName) {
-    if (rawLogName === rawProjName) return true;
-    if (rawLogName.length >= 2 && rawProjName.length >= 2) {
-      if (rawProjName.includes(rawLogName) || rawLogName.includes(rawProjName)) {
-        return true;
-      }
-    }
+  // 4. Raw lowercased exact string check
+  const lowerLogName = rawLogName.toLowerCase();
+  const lowerProjName = rawProjName.toLowerCase();
+  if (
+    lowerLogName &&
+    lowerProjName &&
+    lowerLogName !== 'bim project' &&
+    lowerLogName !== 'unassigned project' &&
+    lowerLogName === lowerProjName
+  ) {
+    return true;
   }
 
   return false;
@@ -3119,8 +3125,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 : data.additionalHours !== undefined
                 ? Number(data.additionalHours)
                 : undefined;
+            const isExplicitLoggedOverride = Boolean(data.isManualLoggedOverride === true);
             const resolvedLoggedHours =
-              data.manualHoursOverride !== undefined
+              isExplicitLoggedOverride && data.manualHoursOverride !== undefined
                 ? Number(data.manualHoursOverride)
                 : data.totalLogged !== undefined
                 ? Number(data.totalLogged)
@@ -3182,10 +3189,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
                     totalLogged: resolvedLoggedHours,
                   }
                 : {}),
-              ...(data.manualHoursOverride !== undefined
-                ? { manualHoursOverride: Number(data.manualHoursOverride) }
-                : data.totalLogged !== undefined
-                ? { manualHoursOverride: Number(data.totalLogged) }
+              ...(isExplicitLoggedOverride && data.manualHoursOverride !== undefined
+                ? {
+                    isManualLoggedOverride: true,
+                    manualHoursOverride: Number(data.manualHoursOverride),
+                  }
                 : {}),
               ...(data.manualHoursBaseLogged !== undefined ? { manualHoursBaseLogged: Number(data.manualHoursBaseLogged) } : {}),
               ...(data.currentLOD !== undefined ? { currentLOD: data.currentLOD } : {}),
@@ -3653,8 +3661,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               : incoming.additionalHours !== undefined
               ? Number(incoming.additionalHours)
               : undefined;
+          const isExplicitLoggedOverride = Boolean(incoming.isManualLoggedOverride === true);
           const nextLogged =
-            incoming.manualHoursOverride !== undefined
+            isExplicitLoggedOverride && incoming.manualHoursOverride !== undefined
               ? Number(incoming.manualHoursOverride)
               : incoming.totalLogged !== undefined
               ? Number(incoming.totalLogged)
@@ -3681,9 +3690,17 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
               ? {
                   totalLogged: nextLogged,
                   totalCompletedHours: nextLogged,
-                  manualHoursOverride: nextLogged,
                 }
               : {}),
+            ...(isExplicitLoggedOverride && incoming.manualHoursOverride !== undefined
+              ? {
+                  isManualLoggedOverride: true,
+                  manualHoursOverride: Number(incoming.manualHoursOverride),
+                }
+              : {
+                  isManualLoggedOverride: p.isManualLoggedOverride,
+                  manualHoursOverride: p.isManualLoggedOverride ? p.manualHoursOverride : undefined,
+                }),
           };
         });
 
@@ -5254,28 +5271,31 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     const project = getProjectById(projectId);
     if (!project) return 0;
 
+    // Deduplicate all active operational daily hour tracking logs across allWorkLogs and workLogs
+    const logMap = new Map<string, DailyWorkLog>();
+    (workLogs || []).forEach((w) => {
+      if (w && w.id && !(w as any).isDeleted) logMap.set(w.id, w);
+    });
+    (allWorkLogs || []).forEach((w) => {
+      if (w && w.id && !(w as any).isDeleted) logMap.set(w.id, w);
+    });
+
+    const logsSum = Array.from(logMap.values())
+      .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, project))
+      .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+
     if (
+      project.isManualLoggedOverride === true &&
       project.manualHoursOverride !== undefined &&
       project.manualHoursOverride !== null &&
       !Number.isNaN(Number(project.manualHoursOverride))
     ) {
-      return Number(project.manualHoursOverride);
+      const baseLogged = Number(project.manualHoursBaseLogged ?? logsSum);
+      const delta = logsSum - baseLogged;
+      return Math.max(0, Number(project.manualHoursOverride) + delta);
     }
 
-    if (
-      project.totalLogged !== undefined &&
-      project.totalLogged !== null &&
-      !Number.isNaN(Number(project.totalLogged))
-    ) {
-      return Number(project.totalLogged);
-    }
-
-    const sourceLogs = allWorkLogs && allWorkLogs.length > 0 ? allWorkLogs : workLogs || [];
-
-    // Sum operational hours (excluding test entries) from all organizational workLogs for this project
-    return sourceLogs
-      .filter((w) => !w.isTestEntry && doesLogBelongToProject(w, project))
-      .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+    return logsSum;
   };
 
   const getEmployeeLoggedHours = (
@@ -5520,7 +5540,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       );
       normalizedUpdates.totalLogged = logVal;
       normalizedUpdates.totalCompletedHours = logVal;
-      normalizedUpdates.manualHoursOverride = logVal;
+      if (normalizedUpdates.isManualLoggedOverride === true || normalizedUpdates.manualHoursOverride !== undefined) {
+        normalizedUpdates.manualHoursOverride = logVal;
+        normalizedUpdates.isManualLoggedOverride = true;
+      }
     }
 
     let updatedDoc: BimProject | undefined = existingProj
@@ -5569,7 +5592,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (sanitizedPayload.totalCompletedHours !== undefined) {
         sanitizedPayload.totalHoursLogged = Number(sanitizedPayload.totalCompletedHours) || 0;
         sanitizedPayload.totalLogged = Number(sanitizedPayload.totalCompletedHours) || 0;
-        sanitizedPayload.manualHoursOverride = Number(sanitizedPayload.totalCompletedHours) || 0;
+        if (sanitizedPayload.isManualLoggedOverride === true) {
+          sanitizedPayload.manualHoursOverride = Number(sanitizedPayload.totalCompletedHours) || 0;
+        }
       }
       if ('plannedDeliveryDate' in normalizedUpdates) {
         sanitizedPayload.plannedDeliveryDate = normalizedUpdates.plannedDeliveryDate || '';
@@ -5794,12 +5819,13 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Firestore addWorkLog error:', fsErr);
     }
 
-    // 3. Update project task completed hours if applicable (only for operational entries)
+    // 3. Synchronize project total logged hours and task completed hours in real time
     if (!isTestEntryFlag) {
+      const nextAllLogs = [newLog, ...(allWorkLogs || []).filter((w) => w.id !== logId)];
       setProjects((prev) =>
         prev.map((proj) => {
-          if (proj.id !== logData.projectId) return proj;
-          const updatedTasks = proj.tasks.map((task) => {
+          if (!doesLogBelongToProject(newLog, proj)) return proj;
+          const updatedTasks = (proj.tasks || []).map((task) => {
             if (task.name === logData.taskName) {
               const newCompleted = (task.completedHours || 0) + hoursValue;
               return {
@@ -5813,9 +5839,25 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
             }
             return task;
           });
-          const updatedProj = { ...proj, tasks: updatedTasks };
+          const dynamicTotal = nextAllLogs
+            .filter((w) => !w.isTestEntry && !(w as any).isDeleted && doesLogBelongToProject(w, proj))
+            .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+          const updatedProj: BimProject = {
+            ...proj,
+            tasks: updatedTasks,
+            totalCompletedHours: dynamicTotal,
+            totalLogged: dynamicTotal,
+            isManualLoggedOverride: false,
+            manualHoursOverride: undefined,
+          };
           try {
-            updateDoc(doc(db, 'projects', proj.id), { tasks: updatedTasks }).catch(() => {});
+            updateDoc(doc(db, 'projects', proj.id), {
+              tasks: updatedTasks,
+              totalCompletedHours: dynamicTotal,
+              totalHoursLogged: dynamicTotal,
+              totalLogged: dynamicTotal,
+              isManualLoggedOverride: false,
+            }).catch(() => {});
           } catch {}
           return updatedProj;
         })
@@ -5831,14 +5873,10 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       ? sanitizeWorkLogRecord({ ...previousLog, ...updates })
       : undefined;
 
-    setAllWorkLogs((prev) =>
-      prev.map((w) => {
-        if (w.id === id) {
-          return sanitizeWorkLogRecord({ ...w, ...updates });
-        }
-        return w;
-      })
+    const nextAllLogs = (allWorkLogs || []).map((w) =>
+      w.id === id ? sanitizeWorkLogRecord({ ...w, ...updates }) : w
     );
+    setAllWorkLogs(nextAllLogs);
     try {
       const nowIso = new Date().toISOString();
       const basePayload = fullUpdated
@@ -5879,60 +5917,61 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Firestore updateWorkLog notice:', e);
     }
 
-    if (previousLog && fullUpdated) {
-      const prevOperationalHours = previousLog.isTestEntry ? 0 : Number(previousLog.hoursLogged) || 0;
-      const nextOperationalHours = fullUpdated.isTestEntry ? 0 : Number(fullUpdated.hoursLogged) || 0;
+    if (previousLog || fullUpdated) {
+      const prevOperationalHours = previousLog?.isTestEntry ? 0 : Number(previousLog?.hoursLogged) || 0;
+      const nextOperationalHours = fullUpdated?.isTestEntry ? 0 : Number(fullUpdated?.hoursLogged) || 0;
       const hoursDelta = nextOperationalHours - prevOperationalHours;
-      const targetProjId = fullUpdated.projectId || previousLog.projectId;
 
-      if (hoursDelta !== 0 && targetProjId) {
-        setProjects((prev) =>
-          prev.map((proj) => {
-            if (proj.id !== targetProjId) return proj;
-            const updatedTasks = (proj.tasks || []).map((task) => {
-              if (task.name === (fullUpdated?.taskName || previousLog?.taskName)) {
-                const newCompleted = Math.max(0, (task.completedHours || 0) + hoursDelta);
-                return {
-                  ...task,
-                  completedHours: newCompleted,
-                  status:
-                    newCompleted >= task.estimatedHours
-                      ? ('Completed' as const)
-                      : ('In Progress' as const),
-                };
-              }
-              return task;
-            });
-            const updatedTotalCompleted =
-              proj.totalCompletedHours && proj.totalCompletedHours > 0
-                ? Math.max(0, proj.totalCompletedHours + hoursDelta)
-                : proj.totalCompletedHours;
-            const updatedProj = {
-              ...proj,
-              totalCompletedHours: updatedTotalCompleted,
+      setProjects((prev) =>
+        prev.map((proj) => {
+          const matchesPrev = previousLog ? doesLogBelongToProject(previousLog, proj) : false;
+          const matchesNext = fullUpdated ? doesLogBelongToProject(fullUpdated, proj) : false;
+          if (!matchesPrev && !matchesNext) return proj;
+
+          const updatedTasks = (proj.tasks || []).map((task) => {
+            if (task.name === (fullUpdated?.taskName || previousLog?.taskName)) {
+              const newCompleted = Math.max(0, (task.completedHours || 0) + hoursDelta);
+              return {
+                ...task,
+                completedHours: newCompleted,
+                status:
+                  newCompleted >= task.estimatedHours
+                    ? ('Completed' as const)
+                    : ('In Progress' as const),
+              };
+            }
+            return task;
+          });
+          const dynamicTotal = nextAllLogs
+            .filter((w) => !w.isTestEntry && !(w as any).isDeleted && doesLogBelongToProject(w, proj))
+            .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+          const updatedProj: BimProject = {
+            ...proj,
+            totalCompletedHours: dynamicTotal,
+            totalLogged: dynamicTotal,
+            isManualLoggedOverride: false,
+            manualHoursOverride: undefined,
+            tasks: updatedTasks,
+          };
+          try {
+            updateDoc(doc(db, 'projects', proj.id), {
               tasks: updatedTasks,
-            };
-            try {
-              updateDoc(doc(db, 'projects', proj.id), {
-                tasks: updatedTasks,
-                ...(updatedTotalCompleted !== undefined
-                  ? { totalCompletedHours: updatedTotalCompleted, totalHoursLogged: updatedTotalCompleted }
-                  : {}),
-              }).catch(() => {});
-            } catch {}
-            return updatedProj;
-          })
-        );
-      }
+              totalCompletedHours: dynamicTotal,
+              totalHoursLogged: dynamicTotal,
+              totalLogged: dynamicTotal,
+              isManualLoggedOverride: false,
+            }).catch(() => {});
+          } catch {}
+          return updatedProj;
+        })
+      );
     }
   };
 
   const deleteWorkLog = (id: string) => {
-    let deletedLog: DailyWorkLog | undefined;
-    setAllWorkLogs((prev) => {
-      deletedLog = prev.find((w) => w.id === id);
-      return prev.filter((w) => w.id !== id);
-    });
+    const deletedLog = allWorkLogs.find((w) => w.id === id);
+    const nextAllLogs = (allWorkLogs || []).filter((w) => w.id !== id);
+    setAllWorkLogs(nextAllLogs);
     try {
       fetch(`/api/ssot/timesheets/${encodeURIComponent(id)}`, {
         method: 'DELETE',
@@ -5957,47 +5996,48 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Firestore deleteWorkLog notice:', e);
     }
 
-    if (deletedLog && !deletedLog.isTestEntry && deletedLog.projectId) {
+    if (deletedLog && !deletedLog.isTestEntry) {
       const removedHours = Number(deletedLog.hoursLogged) || 0;
-      if (removedHours > 0) {
-        setProjects((prev) =>
-          prev.map((proj) => {
-            if (proj.id !== deletedLog?.projectId) return proj;
-            const updatedTasks = (proj.tasks || []).map((task) => {
-              if (task.name === deletedLog?.taskName) {
-                const newCompleted = Math.max(0, (task.completedHours || 0) - removedHours);
-                return {
-                  ...task,
-                  completedHours: newCompleted,
-                  status:
-                    newCompleted >= task.estimatedHours
-                      ? ('Completed' as const)
-                      : ('In Progress' as const),
-                };
-              }
-              return task;
-            });
-            const updatedTotalCompleted =
-              proj.totalCompletedHours && proj.totalCompletedHours > 0
-                ? Math.max(0, proj.totalCompletedHours - removedHours)
-                : proj.totalCompletedHours;
-            const updatedProj = {
-              ...proj,
-              totalCompletedHours: updatedTotalCompleted,
+      setProjects((prev) =>
+        prev.map((proj) => {
+          if (!doesLogBelongToProject(deletedLog, proj)) return proj;
+          const updatedTasks = (proj.tasks || []).map((task) => {
+            if (task.name === deletedLog?.taskName) {
+              const newCompleted = Math.max(0, (task.completedHours || 0) - removedHours);
+              return {
+                ...task,
+                completedHours: newCompleted,
+                status:
+                  newCompleted >= task.estimatedHours
+                    ? ('Completed' as const)
+                    : ('In Progress' as const),
+              };
+            }
+            return task;
+          });
+          const dynamicTotal = nextAllLogs
+            .filter((w) => !w.isTestEntry && !(w as any).isDeleted && doesLogBelongToProject(w, proj))
+            .reduce((sum, w) => sum + (Number(w.hoursLogged) || 0), 0);
+          const updatedProj: BimProject = {
+            ...proj,
+            totalCompletedHours: dynamicTotal,
+            totalLogged: dynamicTotal,
+            isManualLoggedOverride: false,
+            manualHoursOverride: undefined,
+            tasks: updatedTasks,
+          };
+          try {
+            updateDoc(doc(db, 'projects', proj.id), {
               tasks: updatedTasks,
-            };
-            try {
-              updateDoc(doc(db, 'projects', proj.id), {
-                tasks: updatedTasks,
-                ...(updatedTotalCompleted !== undefined
-                  ? { totalCompletedHours: updatedTotalCompleted, totalHoursLogged: updatedTotalCompleted }
-                  : {}),
-              }).catch(() => {});
-            } catch {}
-            return updatedProj;
-          })
-        );
-      }
+              totalCompletedHours: dynamicTotal,
+              totalHoursLogged: dynamicTotal,
+              totalLogged: dynamicTotal,
+              isManualLoggedOverride: false,
+            }).catch(() => {});
+          } catch {}
+          return updatedProj;
+        })
+      );
     }
   };
 
