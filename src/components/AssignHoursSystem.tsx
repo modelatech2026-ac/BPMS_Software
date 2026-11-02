@@ -907,6 +907,28 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
     );
   }, [currentUser, isSuperAdmin]);
 
+  const hasAssignedHoursAccess = useMemo(() => {
+    if (isSuperAdmin || isFullAccessRole) return true;
+    const authorizedRoles = [
+      'MANAGER',
+      'PROJECT_MANAGER',
+      'PROJECT MANAGER',
+      'DIRECTOR',
+      'SUPER_ADMIN',
+      'SUPER ADMIN',
+    ];
+    const role = (currentUser?.role || '').trim().toUpperCase();
+    const appRole = (currentUser?.appRole || '').trim().toUpperCase();
+    const accessLevel = (currentUser?.accessLevel || '').trim().toUpperCase();
+    const securityRole = (currentUser?.securityRole || '').trim().toUpperCase();
+    return (
+      authorizedRoles.includes(role) ||
+      authorizedRoles.includes(appRole) ||
+      authorizedRoles.includes(accessLevel) ||
+      authorizedRoles.includes(securityRole)
+    );
+  }, [currentUser, isSuperAdmin, isFullAccessRole]);
+
   const isViewer = useMemo(() => {
     if (isSuperAdmin || isFullAccessRole) return false;
     if (!currentUser) return false;
@@ -1910,8 +1932,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
           </div>
         </div>
 
-        {/* Primary Top Metrics (Hidden for Viewer Role) */}
-        {!isViewer && (
+        {/* Primary Top Metrics (Visible exclusively to Manager, Director, and Super Admin roles) */}
+        {hasAssignedHoursAccess && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-5 pt-5 border-t border-slate-800">
             <div className="p-3.5 bg-slate-800/60 rounded-xl border border-slate-700/60">
               <div className="flex items-center justify-between gap-2">
@@ -2247,7 +2269,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
               <tr>
                 <th className="py-3 px-3.5 min-w-[200px]">Team Member</th>
                 <th className="py-3 px-3 min-w-[180px]">Project</th>
-                {!isViewer && <th className="py-3 px-3 min-w-[130px]">Assigned Hours</th>}
+                {hasAssignedHoursAccess && <th className="py-3 px-3 min-w-[130px]">Assigned Hours</th>}
                 <th className="py-3 px-3 min-w-[130px]">Logged Hours</th>
                 <th className="py-3 px-3 min-w-[160px]">Timeline (Start - Due)</th>
                 <th className="py-3 px-3.5 text-right min-w-[90px]">Action</th>
@@ -2256,7 +2278,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
             <tbody className="divide-y divide-slate-800 font-normal">
               {filteredAllocations.length === 0 ? (
                 <tr>
-                  <td colSpan={!isViewer ? 6 : 5} className="py-12 text-center text-slate-500">
+                  <td colSpan={hasAssignedHoursAccess ? 6 : 5} className="py-12 text-center text-slate-500">
                     <p className="text-sm font-semibold text-slate-400">No resource hour allocations found.</p>
                     <p className="text-xs text-slate-500 mt-1">
                       {filterStartDate || filterEndDate
@@ -2490,8 +2512,8 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                         </div>
                       </td>
 
-                      {/* Assigned Hours (Hidden for Viewer Role) */}
-                      {!isViewer && (
+                      {/* Assigned Hours (Visible exclusively to Manager, Director, and Super Admin roles) */}
+                      {hasAssignedHoursAccess && (
                         <td className="py-3 px-3">
                           {canManageAllocations ? (
                             <div className="flex items-center gap-1.5">
