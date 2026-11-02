@@ -2159,16 +2159,18 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
                     <button
                       type="button"
                       onClick={() => {
-                        setFilterStartDate('');
-                        setFilterEndDate('');
+                        const today = new Date().toISOString().split('T')[0];
+                        setFilterStartDate(today);
+                        setFilterEndDate(today);
                       }}
                       className={`px-2 py-1.5 rounded text-[11px] font-medium transition text-center ${
-                        !filterStartDate && !filterEndDate
+                        filterStartDate === new Date().toISOString().split('T')[0] &&
+                        filterEndDate === new Date().toISOString().split('T')[0]
                           ? 'bg-emerald-600 text-white'
                           : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
                       }`}
                     >
-                      All Dates
+                      Today
                     </button>
                     <button
                       type="button"

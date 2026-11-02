@@ -775,16 +775,18 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setStartDateFilter('');
-                        setEndDateFilter('');
+                        const today = new Date().toISOString().split('T')[0];
+                        setStartDateFilter(today);
+                        setEndDateFilter(today);
                       }}
                       className={`px-2 py-1.5 rounded text-[11px] font-medium transition text-center ${
-                        !startDateFilter && !endDateFilter
+                        startDateFilter === new Date().toISOString().split('T')[0] &&
+                        endDateFilter === new Date().toISOString().split('T')[0]
                           ? 'bg-emerald-600 text-white'
                           : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
                       }`}
                     >
-                      All Dates
+                      Today
                     </button>
                     <button
                       type="button"
