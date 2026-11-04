@@ -1,10 +1,31 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
+import appletConfig from "../../firebase-applet-config.json";
+
+// Support Vercel/Vite environment variables with automatic fallback to firebase-applet-config.json
+const metaEnv = (import.meta as any).env || {};
+
+const firebaseConfig = {
+  apiKey: metaEnv.VITE_FIREBASE_API_KEY || appletConfig.apiKey,
+  authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || appletConfig.authDomain,
+  projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || appletConfig.projectId,
+  storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || appletConfig.storageBucket,
+  messagingSenderId:
+    metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || appletConfig.messagingSenderId,
+  appId: metaEnv.VITE_FIREBASE_APP_ID || appletConfig.appId,
+  measurementId: metaEnv.VITE_FIREBASE_MEASUREMENT_ID || appletConfig.measurementId,
+};
+
+const firestoreDatabaseId =
+  metaEnv.VITE_FIREBASE_DATABASE_ID ||
+  appletConfig.firestoreDatabaseId ||
+  "ai-studio-2ndremixproducti-6c4d93ca-07ef-472f-9f29-aa7277b9bf64";
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
+
+// Keep your existing database and auth setup
+export const db = getFirestore(app, firestoreDatabaseId); /* CRITICAL: The app will break without this line */
 export const auth = getAuth(app);
 export const googleAuthProvider = new GoogleAuthProvider();
 googleAuthProvider.setCustomParameters({
@@ -68,4 +89,3 @@ export async function testFirestoreConnection() {
     }
   }
 }
-
