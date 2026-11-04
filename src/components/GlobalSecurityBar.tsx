@@ -333,28 +333,60 @@ export const GlobalSecurityBar: React.FC<GlobalSecurityBarProps> = ({
                   </div>
 
                   {/* Active Role Switcher */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-1">
-                      Current Security Role
-                    </label>
-                    <select
-                      value={securityRole}
-                      onChange={(e) => switchSecurityRole(e.target.value as any)}
-                      className={`w-full text-xs rounded-xl px-2.5 py-2 font-semibold border focus:outline-none focus:border-blue-500 transition cursor-pointer ${
-                        isLight
-                          ? 'bg-slate-100 border-slate-300 text-slate-900'
-                          : 'bg-slate-800 border-slate-700 text-white'
-                      }`}
-                    >
-                      <option value="Super Admin">Super Admin (Full Governance)</option>
-                      <option value="Director">Director (Executive Access)</option>
-                      <option value="Project Manager">Project Manager</option>
-                      <option value="BIM Specialist">BIM Specialist</option>
-                      <option value="Lead Coordinator">Lead Coordinator</option>
-                      <option value="Editor">Editor</option>
-                      <option value="Viewer">Viewer (Timesheet Only)</option>
-                    </select>
-                  </div>
+                  {(() => {
+                    const isViewerRole =
+                      securityRole === 'Viewer' ||
+                      String(securityRole).toLowerCase().startsWith('viewer') ||
+                      currentUser?.role === 'Viewer' ||
+                      currentUser?.role === 'VIEWER' ||
+                      currentUser?.appRole === 'VIEWER';
+
+                    return (
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-1 flex items-center justify-between">
+                          <span>Current Security Role</span>
+                          {isViewerRole && (
+                            <span className="inline-flex items-center gap-1 text-[9px] text-slate-400 font-medium normal-case">
+                              <Lock className="w-2.5 h-2.5" />
+                              Locked
+                            </span>
+                          )}
+                        </label>
+                        <select
+                          value={isViewerRole ? 'Viewer' : securityRole}
+                          disabled={isViewerRole}
+                          aria-readonly={isViewerRole}
+                          onChange={(e) => {
+                            if (isViewerRole) return;
+                            switchSecurityRole(e.target.value as any);
+                          }}
+                          className={`w-full text-xs rounded-xl px-2.5 py-2 font-semibold border focus:outline-none transition ${
+                            isViewerRole
+                              ? isLight
+                                ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed opacity-80'
+                                : 'bg-slate-800/60 border-slate-700/70 text-slate-300 cursor-not-allowed opacity-80'
+                              : isLight
+                              ? 'bg-slate-100 border-slate-300 text-slate-900 focus:border-blue-500 cursor-pointer'
+                              : 'bg-slate-800 border-slate-700 text-white focus:border-blue-500 cursor-pointer'
+                          }`}
+                        >
+                          {isViewerRole ? (
+                            <option value="Viewer">Viewer</option>
+                          ) : (
+                            <>
+                              <option value="Super Admin">Super Admin (Full Governance)</option>
+                              <option value="Director">Director (Executive Access)</option>
+                              <option value="Project Manager">Project Manager</option>
+                              <option value="BIM Specialist">BIM Specialist</option>
+                              <option value="Lead Coordinator">Lead Coordinator</option>
+                              <option value="Editor">Editor</option>
+                              <option value="Viewer">Viewer (Timesheet Only)</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+                    );
+                  })()}
 
                   {/* Menu Action Items */}
                   <div className="space-y-1 pt-1 border-t border-slate-800">

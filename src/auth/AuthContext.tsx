@@ -1439,6 +1439,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    */
   const switchSecurityRole = (newRole: SecurityRole) => {
     if (!user) return;
+    const isViewerLocked =
+      securityRole === 'Viewer' ||
+      String(securityRole).toLowerCase().startsWith('viewer') ||
+      user.securityRole === 'Viewer' ||
+      user.role === 'Viewer' ||
+      user.role === 'VIEWER' ||
+      user.appRole === 'VIEWER';
+    if (isViewerLocked && newRole !== 'Viewer') {
+      return;
+    }
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('bpms_active_security_role_override', newRole);
     }
