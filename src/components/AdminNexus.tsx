@@ -276,11 +276,14 @@ export const AdminNexus: React.FC = () => {
       return rank(b.status) - rank(a.status);
     });
 
+    const seenIds = new Set<string>();
     for (const req of sortedByTime) {
       const key = (req.email || '').trim().toLowerCase();
+      const idKey = String(req.id || '').trim().toLowerCase();
       if (!key) continue;
-      if (!byEmail.has(key)) {
+      if (!byEmail.has(key) && (!idKey || !seenIds.has(idKey))) {
         byEmail.set(key, req);
+        if (idKey) seenIds.add(idKey);
       }
     }
 
@@ -781,8 +784,15 @@ export const AdminNexus: React.FC = () => {
     // Also include any external Google onboarding requests not yet in employees (strictly exclude rejected)
     onboardingRequests.forEach((req) => {
       if ((req.status || '').toUpperCase() === 'REJECTED') return;
+      const reqIdLower = String(req.id || '').trim().toLowerCase();
+      const reqEmailLower = (req.email || '').trim().toLowerCase();
       const alreadyInList = list.some(
-        (u) => u.email.toLowerCase() === req.email.toLowerCase()
+        (u) =>
+          (reqEmailLower && (u.email || '').trim().toLowerCase() === reqEmailLower) ||
+          (reqIdLower && (
+            String(u.id || '').trim().toLowerCase() === reqIdLower ||
+            String(u.id || '').trim().replace(/^emp-/, '').toLowerCase() === reqIdLower.replace(/^emp-/, '')
+          ))
       );
       if (!alreadyInList) {
         const customPerm = permissionsMap[req.id] || {};
@@ -814,7 +824,18 @@ export const AdminNexus: React.FC = () => {
       }
     });
 
-    return list;
+    const seenUserIds = new Set<string>();
+    const seenUserEmails = new Set<string>();
+    return list.filter((u) => {
+      const idKey = String(u.id || '').trim().toLowerCase();
+      const emailKey = String(u.email || '').trim().toLowerCase();
+      if ((idKey && seenUserIds.has(idKey)) || (emailKey && seenUserEmails.has(emailKey))) {
+        return false;
+      }
+      if (idKey) seenUserIds.add(idKey);
+      if (emailKey) seenUserEmails.add(emailKey);
+      return true;
+    });
   }, [employees, onboardingRequests, permissionsMap]);
 
   const [searchQuery, setSearchQuery] = useState('');

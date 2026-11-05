@@ -652,8 +652,15 @@ export const mergeAccessRequestsWithLocal = (
     const resolvedOrgDiscipline =
       item.orgDiscipline || item.assignedDiscipline || item.discipline || item.primaryDiscipline || item.organization || resolvedItemDiscipline;
 
+    const resolvedId =
+      cleanEmail === SUPER_ADMIN_EMAIL.toLowerCase() &&
+      cleanId.includes('chakrabortyaditi2508')
+        ? generateRequestDocId(cleanEmail)
+        : item.id || generateRequestDocId(cleanEmail);
+
     const normalizedItem: OnboardingRequest = {
       ...item,
+      id: resolvedId,
       email: cleanEmail,
       name: item.name || item.fullName || cleanEmail.split('@')[0],
       fullName: item.fullName || item.name || cleanEmail.split('@')[0],
@@ -692,7 +699,21 @@ export const mergeAccessRequestsWithLocal = (
     }
   }
 
-  const result = Array.from(byEmail.values()).sort((a, b) => {
+  const seenIds = new Set<string>();
+  const uniqueById: OnboardingRequest[] = [];
+  for (const req of byEmail.values()) {
+    let finalId = String(req.id || '').trim();
+    if (!finalId || seenIds.has(finalId.toLowerCase())) {
+      finalId = generateRequestDocId(req.email);
+      if (seenIds.has(finalId.toLowerCase())) {
+        finalId = `${finalId}_${uniqueById.length}`;
+      }
+    }
+    seenIds.add(finalId.toLowerCase());
+    uniqueById.push(finalId === req.id ? req : { ...req, id: finalId });
+  }
+
+  const result = uniqueById.sort((a, b) => {
     const pA = isStatusPending(a.status) ? 1 : 0;
     const pB = isStatusPending(b.status) ? 1 : 0;
     if (pA !== pB) return pB - pA;
@@ -2298,7 +2319,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           ? cleanEmail
           : 'sushoovandas@gmail.com'
         : isAditiSuper
-        ? SUPER_ADMIN_EMAIL.toLowerCase()
+        ? cleanEmail || SUPER_ADMIN_EMAIL.toLowerCase()
         : cleanEmail;
       const isSuper = isAditiSuper || isSuperAdminEmail(effectiveEmail);
       const rawStatus = String(data.status || 'pending').trim().toLowerCase();
@@ -2332,8 +2353,8 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (data.assignedAccessLevel as AccessLevel) || mapAppRoleToAccessLevel(normalizedRole);
 
       return {
-        id: isSushovan ? 'sushoovan_das' : d.id,
-        googleId: isSushovan ? 'sushoovan_das' : data.uid || d.id,
+        id: isSushovan ? 'sushoovan_das' : d.id || generateRequestDocId(effectiveEmail),
+        googleId: isSushovan ? 'sushoovan_das' : data.uid || d.id || generateRequestDocId(effectiveEmail),
         email: effectiveEmail,
         name: isAditiSuper ? SUPER_ADMIN_NAME : fullName,
         fullName: isAditiSuper ? SUPER_ADMIN_NAME : fullName,
@@ -2381,11 +2402,14 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         return rank(b.status) - rank(a.status);
       });
 
+      const seenIds = new Set<string>();
       for (const req of sorted) {
         const key = (req.email || '').trim().toLowerCase();
+        const idKey = String(req.id || '').trim().toLowerCase();
         if (!key) continue;
-        if (!byEmail.has(key)) {
+        if (!byEmail.has(key) && (!idKey || !seenIds.has(idKey))) {
           byEmail.set(key, req);
+          if (idKey) seenIds.add(idKey);
         }
       }
 
