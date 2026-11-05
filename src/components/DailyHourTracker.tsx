@@ -33,6 +33,7 @@ import {
   sanitizeEmployeeRecord,
   sanitizeWorkLogRecord,
   isRecordOwnedByMember,
+  isRemovedMockMember,
 } from '../context/BimDataContext';
 import { normalizeUserRole } from '../auth/googleAuth';
 import { generateRequestDocId } from '../auth/roleSync';
@@ -772,6 +773,9 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
       if (!data || data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
         return null;
       }
+      if (isRemovedMockMember(data)) {
+        return null;
+      }
       const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
       if (rawEmail === 'sushovan.das@bimworkspace.com' || rawEmail === 'aditi@bimworkspace.com') {
         return null;
@@ -884,7 +888,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const deletedIds = new Set<string>();
 
     const parseRawData = (docId: string, data: any): DailyWorkLog | null => {
-      if (!data || data.isDeleted === true || deletedIds.has(docId)) return null;
+      if (!data || data.isDeleted === true || deletedIds.has(docId) || isRemovedMockMember(data)) return null;
       const rawEmployeeName = String(data.employeeName || 'BIM Modeler').trim();
       const rawEmail = String(data.memberEmail || data.userEmail || '').trim().toLowerCase();
       const resolvedCreatedAt =
@@ -1172,7 +1176,7 @@ export const DailyHourTracker: React.FC<DailyHourTrackerProps> = ({
     const knownKeys = new Set<string>();
 
     const registerMember = (rawEmp: Employee) => {
-      if (!rawEmp || rawEmp.isDeleted || rawEmp.status === 'deleted') return;
+      if (!rawEmp || rawEmp.isDeleted || rawEmp.status === 'deleted' || isRemovedMockMember(rawEmp)) return;
       const emp = sanitizeEmployeeRecord(rawEmp);
       const emailKey = (emp.email || '').toLowerCase().trim();
       const nameKey = (emp.name || '')

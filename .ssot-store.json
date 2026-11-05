@@ -604,30 +604,6 @@
       "updatedAt": "2026-11-02T09:47:46.220Z"
     },
     {
-      "id": "log-1793213233382-lfoobx",
-      "employeeId": "emp-req_harry_gmail_com_756005743",
-      "memberId": "emp-req_harry_gmail_com_756005743",
-      "employeeName": "Harry Potter",
-      "projectId": "proj-1793083708282",
-      "projectName": "HRMS",
-      "date": "2026-10-29",
-      "hoursLogged": 4,
-      "discipline": "AI & Automation",
-      "activityType": "AI & Automation",
-      "taskName": "",
-      "lodStage": "LOD 350",
-      "notes": "Logged 4h on AI & Automation for HRMS",
-      "billable": false,
-      "timestamp": "2026-10-28T18:47:13.382Z",
-      "memberEmail": "harry@gmail.com",
-      "userEmail": "harry@gmail.com",
-      "userId": "emp-req_harry_gmail_com_756005743",
-      "isTestEntry": false,
-      "loggedBy": "harry@gmail.com",
-      "createdAt": "2026-10-28T18:47:13.381Z",
-      "updatedAt": "2026-11-02T09:47:46.220Z"
-    },
-    {
       "id": "log-1793595255640-3d7ge4",
       "employeeId": "req_shuvamm_modelatech_com_3182156566",
       "memberId": "req_shuvamm_modelatech_com_3182156566",
@@ -2934,30 +2910,6 @@
       "isDeleted": false
     },
     {
-      "id": "emp-QftZDoklIin7Hrcxd8d9",
-      "name": "amyy",
-      "email": "amy@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=amyy",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
       "id": "emp-req_surupa008_gmail_com_2544593171",
       "name": "Debrupa Ghosh",
       "email": "surupa008@gmail.com",
@@ -2999,30 +2951,6 @@
         "MEP - Plumbing"
       ],
       "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_harry_gmail_com_756005743",
-      "name": "Harry Potter",
-      "email": "harry@gmail.com",
-      "role": "VIEWER",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Harry%20Potter",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1793083708282"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
       "updatedAt": "2026-11-02T09:47:46.148Z",
       "isDeleted": false
     },
@@ -3093,27 +3021,6 @@
       "isDeleted": false
     },
     {
-      "id": "emp-req_anu_gmail_com_6236333529",
-      "name": "Anumana Bhattacharya",
-      "email": "anu@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Anumana%20Bhattacharya",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS"
-      ],
-      "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
       "id": "emp-req_damayantic_modelatech_com_9336366808",
       "name": "Damayanti Chanda",
       "email": "damayantic@modelatech.com",
@@ -3131,207 +3038,6 @@
         "BIM - ACS"
       ],
       "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-XtX0TXNAbIMtB8c5zS7e",
-      "name": "kiara",
-      "email": "kira@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=kiara",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS"
-      ],
-      "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_piyu_gmail_com_4068906362",
-      "name": "Piya Roy",
-      "email": "piyu@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Piya%20Roy",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS"
-      ],
-      "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-hcXqh6pZOB2qmouYGa1v",
-      "name": "anny",
-      "email": "an@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=anny",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS"
-      ],
-      "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_ha_gmail_com_1141479338",
-      "name": "harry",
-      "email": "ha@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=harry",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS"
-      ],
-      "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_hm_gmail_com",
-      "name": "hammy",
-      "email": "hm@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=hammy",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS"
-      ],
-      "phone": "",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_abcd_gmail_co_5922596858",
-      "name": "ABCD",
-      "email": "abcd@gmail.co",
-      "role": "VIEWER",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=ABCD",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_anki_gmail_com_3966087556",
-      "name": "Ankita Ghosh",
-      "email": "anki@gmail.com",
-      "role": "VIEWER",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Ankita%20Ghosh",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_step_gmail_com_6704880195",
-      "name": "Stephen",
-      "email": "step@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Stephen",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_steph_gmail_com_1670991373",
-      "name": "steph",
-      "email": "steph@gmail.com",
-      "role": "VIEWER",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=steph",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
       "updatedAt": "2026-11-02T09:47:46.148Z",
       "isDeleted": false
     },
@@ -3399,78 +3105,6 @@
       ],
       "skills": [
         "SES",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_jish_gmail_com_4219487035",
-      "name": "jishu",
-      "email": "jish@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=jishu",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_bheem_gmail_com_1769418488",
-      "name": "Bheem",
-      "email": "bheem@gmail.com",
-      "role": "VIEWER",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Bheem",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
-        "Revit 2026",
-        "Navisworks Manage",
-        "BIM Coordination"
-      ],
-      "phone": "+1 (555) 019-2834",
-      "updatedAt": "2026-11-02T09:47:46.148Z",
-      "isDeleted": false
-    },
-    {
-      "id": "emp-req_rony_gmail_com_1731712185",
-      "name": "rony",
-      "email": "rony@gmail.com",
-      "role": "EDITOR",
-      "primaryDiscipline": "BIM - ACS",
-      "discipline": "BIM - ACS",
-      "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=rony",
-      "weeklyCapacityHours": 40,
-      "experienceYears": 4,
-      "status": "Active",
-      "activeProjectIds": [
-        "proj-1"
-      ],
-      "skills": [
-        "BIM - ACS",
         "Revit 2026",
         "Navisworks Manage",
         "BIM Coordination"

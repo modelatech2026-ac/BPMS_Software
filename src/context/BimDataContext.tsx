@@ -262,77 +262,147 @@ const DEFAULT_CURRENT_USER: AuthUser = {
   avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
 };
 
-const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [
-  {
-    id: 'req_hm_gmail_com',
-    googleId: 'req_hm_gmail_com',
-    email: 'hm@gmail.com',
-    name: 'hammy',
-    fullName: 'hammy',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=hammy',
-    role: 'Editor',
-    requestedRole: 'Editor',
-    assignedRole: 'EDITOR',
-    assignedAccessLevel: 'Editor',
-    primaryDiscipline: 'BIM - ACS',
-    discipline: 'BIM - ACS',
-    organization: 'BIM - ACS',
-    reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
-    accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
-    createdAt: '2026-10-28T19:55:00.000Z',
-    requestedAt: '2026-10-28T19:55:00.000Z',
-    requestTimestamp: '2026-10-28T19:55:00.000Z',
-    timestamp: '2026-10-28T19:55:00.000Z',
-    status: 'pending',
-    notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
-  },
-  {
-    id: 'req_an_gmail_com',
-    googleId: 'hcXqh6pZOB2qmouYGa1v',
-    email: 'an@gmail.com',
-    name: 'anny',
-    fullName: 'anny',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=anny',
-    role: 'Editor',
-    requestedRole: 'Editor',
-    assignedRole: 'EDITOR',
-    assignedAccessLevel: 'Editor',
-    primaryDiscipline: 'BIM - ACS',
-    discipline: 'BIM - ACS',
-    organization: 'BIM - ACS',
-    reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
-    accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
-    createdAt: '2026-10-28T19:29:31.248Z',
-    requestedAt: '2026-10-28T19:29:31.248Z',
-    requestTimestamp: '2026-10-28T19:29:31.248Z',
-    timestamp: '2026-10-28T19:29:31.248Z',
-    status: 'pending',
-    notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
-  },
-  {
-    id: 'req_ha_gmail_com',
-    googleId: 'zqolVcnoKm1EA1RfexfY',
-    email: 'ha@gmail.com',
-    name: 'harry',
-    fullName: 'harry',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=harry',
-    role: 'Editor',
-    requestedRole: 'Editor',
-    assignedRole: 'EDITOR',
-    assignedAccessLevel: 'Editor',
-    primaryDiscipline: 'BIM - ACS',
-    discipline: 'BIM - ACS',
-    organization: 'BIM - ACS',
-    reasonForAccess: 'Sign-in Access Request for ProductionPulse BPMS',
-    accessReason: 'Sign-in Access Request for ProductionPulse BPMS',
-    createdAt: '2026-10-28T18:57:56.591Z',
-    requestedAt: '2026-10-28T18:57:56.591Z',
-    requestTimestamp: '2026-10-28T18:57:56.591Z',
-    timestamp: '2026-10-28T18:57:56.591Z',
-    status: 'pending',
-    notes: 'Sign-in access request awaiting Super Admin review in Admin Nexus.',
-  },
-];
+export const REMOVED_MOCK_MEMBER_NAMES = new Set<string>([
+  'harry potter',
+  'amyy',
+  'anumana bhattacharya',
+  'kiara',
+  'piya roy',
+  'anny',
+  'harry',
+  'hammy',
+  'abcd',
+  'ankita ghosh',
+  'stephen',
+  'jishu',
+  'steph',
+  'bheem',
+  'rony',
+]);
+
+export const REMOVED_MOCK_MEMBER_EMAILS = new Set<string>([
+  'harry.potter@hogwarts.edu',
+  'harry@gmail.com',
+  'amy@gmail.com',
+  'anu@gmail.com',
+  'kira@gmail.com',
+  'piyu@gmail.com',
+  'an@gmail.com',
+  'ha@gmail.com',
+  'hm@gmail.com',
+  'abcd@gmail.co',
+  'anki@gmail.com',
+  'step@gmail.com',
+  'jish@gmail.com',
+  'steph@gmail.com',
+  'bheem@gmail.com',
+  'rony@gmail.com',
+]);
+
+export const REMOVED_MOCK_MEMBER_IDS = new Set<string>([
+  'harry_potter',
+  'emp-harry_potter',
+  'harry_gmail_com',
+  'emp-harry_gmail_com',
+  'harry_potter_hogwarts_edu',
+  'emp-harry_potter_hogwarts_edu',
+  'jishu',
+  'emp-jishu',
+  'jish_gmail_com',
+  'emp-jish_gmail_com',
+  'amy_gmail_com',
+  'emp-amy_gmail_com',
+  'anu_gmail_com',
+  'emp-anu_gmail_com',
+  'kira_gmail_com',
+  'emp-kira_gmail_com',
+  'piyu_gmail_com',
+  'emp-piyu_gmail_com',
+  'an_gmail_com',
+  'emp-an_gmail_com',
+  'ha_gmail_com',
+  'emp-ha_gmail_com',
+  'hm_gmail_com',
+  'emp-hm_gmail_com',
+  'abcd_gmail_co',
+  'emp-abcd_gmail_co',
+  'anki_gmail_com',
+  'emp-anki_gmail_com',
+  'step_gmail_com',
+  'emp-step_gmail_com',
+  'steph_gmail_com',
+  'emp-steph_gmail_com',
+  'bheem_gmail_com',
+  'emp-bheem_gmail_com',
+  'rony_gmail_com',
+  'emp-rony_gmail_com',
+  'req_seed_hammy',
+  'req_seed_anny',
+  'req_seed_harry',
+]);
+
+export const isRemovedMockMember = (item: {
+  id?: string;
+  employeeId?: string;
+  memberId?: string;
+  userId?: string;
+  assignedTo?: string;
+  name?: string;
+  employeeName?: string;
+  fullName?: string;
+  memberName?: string;
+  assignedToName?: string;
+  email?: string;
+  memberEmail?: string;
+  userEmail?: string;
+  assignedToEmail?: string;
+  loggedBy?: string;
+}): boolean => {
+  if (!item) return false;
+  const ids = [
+    item.id,
+    item.employeeId,
+    item.memberId,
+    item.userId,
+    item.assignedTo,
+  ];
+  for (const rawId of ids) {
+    const cleanId = String(rawId || '').trim().toLowerCase();
+    if (!cleanId) continue;
+    const stripped = cleanId.replace(/^emp-/, '');
+    if (REMOVED_MOCK_MEMBER_IDS.has(cleanId) || REMOVED_MOCK_MEMBER_IDS.has(stripped)) {
+      return true;
+    }
+  }
+
+  const emails = [
+    item.email,
+    item.memberEmail,
+    item.userEmail,
+    item.assignedToEmail,
+    item.loggedBy,
+  ];
+  for (const rawEmail of emails) {
+    const email = String(rawEmail || '').trim().toLowerCase();
+    if (email && REMOVED_MOCK_MEMBER_EMAILS.has(email)) return true;
+  }
+
+  const names = [
+    item.name,
+    item.employeeName,
+    item.fullName,
+    item.memberName,
+    item.assignedToName,
+    item.loggedBy,
+  ];
+  for (const n of names) {
+    const clean = String(n || '').trim().toLowerCase();
+    if (clean && REMOVED_MOCK_MEMBER_NAMES.has(clean)) return true;
+  }
+  return false;
+};
+
+const DEFAULT_ONBOARDING_REQUESTS: OnboardingRequest[] = [];
 
 export const getRequestTimeMs = (req: any): number => {
   if (!req) return 0;
@@ -553,7 +623,7 @@ export const mergeAccessRequestsWithLocal = (
   const byEmail = new Map<string, OnboardingRequest>();
 
   for (const item of combined) {
-    if (!item || item.isDeleted) continue;
+    if (!item || item.isDeleted || isRemovedMockMember(item)) continue;
     const rawStatus = String(item.status || 'pending').trim().toLowerCase();
     if (rawStatus === 'deleted') continue;
 
@@ -1514,6 +1584,7 @@ export const mergeAllocationsWithLocal = (
     if (deletedIds.has(item.id)) return;
     if ((item as any).isDeleted === true) return;
     if (String(item.status || '').trim().toLowerCase() === 'deleted') return;
+    if (isRemovedMockMember(item)) return;
 
     const existing = mergedMap.get(item.id);
     if (!existing) {
@@ -1761,6 +1832,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }): boolean => {
       if (!item) return false;
       if (item.isDeleted) return true;
+      if (isRemovedMockMember(item)) return true;
       const st = String(item.status || '').trim().toLowerCase();
       if (st === 'deleted' || st === 'suspended') return true;
 
@@ -1829,6 +1901,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
           const filtered = parsed
             .filter((e) => {
               if (!e || e.isDeleted || String(e.status || '').toLowerCase() === 'deleted') return false;
+              if (isRemovedMockMember(e)) return false;
               const email = (e.email || '').toLowerCase().trim();
               if (email === 'modelatech2026@gmail.com') return true;
               return email !== 'sushovan.das@bimworkspace.com' && email !== 'aditi@bimworkspace.com';
@@ -1850,7 +1923,9 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map((w) => sanitizeWorkLogRecord(w));
+          return parsed
+            .filter((w) => !isRemovedMockMember(w))
+            .map((w) => sanitizeWorkLogRecord(w));
         }
       }
     } catch {}
@@ -1863,7 +1938,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return parsed.filter((a) => !isRemovedMockMember(a));
         }
       }
     } catch {}
@@ -2191,6 +2266,7 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const data = typeof d.data === 'function' ? d.data({ serverTimestamps: 'estimate' }) : d;
       if (!data) return null;
       if (data.isDeleted || String(data.status || '').trim().toLowerCase() === 'deleted') return null;
+      if (isRemovedMockMember({ ...data, id: d.id })) return null;
       const cleanEmail = String(data.email || data.userEmail || data.memberEmail || '').trim().toLowerCase();
       if (!cleanEmail) return null;
       if (
@@ -2790,6 +2866,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         if (!data || data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') {
           return false;
         }
+        if (isRemovedMockMember({ ...data, id: data.id || docId })) {
+          deleteDoc(doc(db, 'users', docId)).catch(() => {});
+          deleteDoc(doc(db, 'team_members', docId)).catch(() => {});
+          return false;
+        }
         const email = String(data.email || data.userEmail || '').trim().toLowerCase();
         if (email === 'sushovan.das@bimworkspace.com' || email === 'aditi@bimworkspace.com') {
           return false;
@@ -2860,7 +2941,11 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
         setEmployees((currentEmployees) => {
           let changed = false;
-          const updated = currentEmployees.map((e) => sanitizeEmployeeRecord(e));
+          const filteredBase = currentEmployees.filter((e) => !isRemovedMockMember(e) && !isMemberDeleted(e));
+          if (filteredBase.length !== currentEmployees.length) {
+            changed = true;
+          }
+          const updated = filteredBase.map((e) => sanitizeEmployeeRecord(e));
 
           dedupedUserDocs.forEach(({ docId, data }) => {
             const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
@@ -3384,6 +3469,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (!data) return null;
       const docId = String(rawId || data.id || '').trim();
       if (!docId || deletedLogIdsSet.has(docId) || data.isDeleted === true) return null;
+      if (isRemovedMockMember({ ...data, id: docId })) {
+        deleteDoc(doc(db, 'work_logs', docId)).catch(() => {});
+        deleteDoc(doc(db, 'daily_logs', docId)).catch(() => {});
+        deleteDoc(doc(db, 'timesheets', docId)).catch(() => {});
+        return null;
+      }
 
       const rawEmployeeName = String(data.employeeName || 'BIM Modeler').trim();
       const isNameSuperAdmin = rawEmployeeName.toLowerCase() === SUPER_ADMIN_NAME.toLowerCase();
@@ -3466,12 +3557,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       setAllWorkLogs((prev) => {
         const nextMap = new Map<string, DailyWorkLog>();
         (prev || []).forEach((w) => {
-          if (w && w.id && !deletedLogIdsSet.has(w.id)) {
+          if (w && w.id && !deletedLogIdsSet.has(w.id) && !isRemovedMockMember(w)) {
             nextMap.set(w.id, sanitizeWorkLogRecord(w));
           }
         });
         combined.forEach((v, k) => {
-          if (!deletedLogIdsSet.has(k)) {
+          if (!deletedLogIdsSet.has(k) && !isRemovedMockMember(v)) {
             nextMap.set(k, pickNewerLog(nextMap.get(k), v));
           }
         });
@@ -3788,9 +3879,21 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (!Array.isArray(rawMembers) || rawMembers.length === 0) return;
       setEmployees((currentEmployees) => {
         let changed = false;
-        const updated = currentEmployees.map((e) => sanitizeEmployeeRecord(e));
+        const filteredBase = currentEmployees.filter((e) => !isRemovedMockMember(e) && !isMemberDeleted(e));
+        if (filteredBase.length !== currentEmployees.length) {
+          changed = true;
+        }
+        const updated = filteredBase.map((e) => sanitizeEmployeeRecord(e));
         rawMembers.forEach((data) => {
-          if (!data || data.isDeleted === true || String(data.status || '').toLowerCase() === 'deleted') return;
+          if (
+            !data ||
+            data.isDeleted === true ||
+            String(data.status || '').toLowerCase() === 'deleted' ||
+            isRemovedMockMember(data) ||
+            isMemberDeleted(data)
+          ) {
+            return;
+          }
           const rawEmail = String(data.email || data.userEmail || '').trim().toLowerCase();
           const name = String(data.fullName || data.name || (rawEmail ? rawEmail.split('@')[0] : '')).trim();
           if (!name && !rawEmail) return;
@@ -3835,57 +3938,70 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         const parsedEmps: Employee[] = localSavedEmps ? JSON.parse(localSavedEmps) : [];
 
         if (Array.isArray(parsedLogs) && parsedLogs.length > 0) {
-          const cleanLogs = parsedLogs.map((l) => JSON.parse(JSON.stringify(sanitizeWorkLogRecord(l))));
-          fetch('/api/ssot/timesheets', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ isBackfill: true, logs: cleanLogs }),
-          }).catch(() => {});
-          cleanLogs.forEach((l) => {
-            if (l && l.id) {
-              const payload = {
-                ...l,
-                hours: Number(l.hoursLogged) || 0,
-                hoursLogged: Number(l.hoursLogged) || 0,
-              };
-              setDoc(doc(db, 'timesheets', l.id), payload, { merge: true }).catch(() => {});
-              setDoc(doc(db, 'daily_logs', l.id), payload, { merge: true }).catch(() => {});
-              setDoc(doc(db, 'work_logs', l.id), payload, { merge: true }).catch(() => {});
-            }
-          });
+          const cleanLogs = parsedLogs
+            .filter((l) => l && !isRemovedMockMember(l))
+            .map((l) => JSON.parse(JSON.stringify(sanitizeWorkLogRecord(l))));
+          if (cleanLogs.length > 0) {
+            fetch('/api/ssot/timesheets', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ isBackfill: true, logs: cleanLogs }),
+            }).catch(() => {});
+            cleanLogs.forEach((l) => {
+              if (l && l.id) {
+                const payload = {
+                  ...l,
+                  hours: Number(l.hoursLogged) || 0,
+                  hoursLogged: Number(l.hoursLogged) || 0,
+                };
+                setDoc(doc(db, 'timesheets', l.id), payload, { merge: true }).catch(() => {});
+                setDoc(doc(db, 'daily_logs', l.id), payload, { merge: true }).catch(() => {});
+                setDoc(doc(db, 'work_logs', l.id), payload, { merge: true }).catch(() => {});
+              }
+            });
+          }
         }
 
         if (Array.isArray(parsedEmps) && parsedEmps.length > 0) {
           const cleanEmps = parsedEmps
-            .filter((e) => e && !e.isDeleted && String(e.status || '').toLowerCase() !== 'deleted')
+            .filter(
+              (e) =>
+                e &&
+                !e.isDeleted &&
+                String(e.status || '').toLowerCase() !== 'deleted' &&
+                !isRemovedMockMember(e) &&
+                !isMemberDeleted(e)
+            )
             .map((e) => JSON.parse(JSON.stringify(sanitizeEmployeeRecord(e))));
-          fetch('/api/ssot/team-members', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ isBackfill: true, members: cleanEmps }),
-          }).catch(() => {});
-          cleanEmps.forEach((emp) => {
-            if (!emp) return;
-            const cleanEmail = (emp.email || '').trim().toLowerCase();
-            const docId = cleanEmail ? generateRequestDocId(cleanEmail) : (emp.id || '').replace(/^emp-/, '');
-            if (!docId) return;
-            const payload = JSON.parse(
-              JSON.stringify({
-                id: emp.id,
-                name: emp.name,
-                fullName: emp.name,
-                email: cleanEmail || emp.email || '',
-                role: emp.role || 'VIEWER',
-                discipline: emp.discipline || emp.primaryDiscipline || 'BIM - ACS',
-                primaryDiscipline: emp.primaryDiscipline || emp.discipline || 'BIM - ACS',
-                assignedTo: emp.id,
-                status: 'APPROVED',
-                isDeleted: false,
-              })
-            );
-            setDoc(doc(db, 'team_members', docId), payload, { merge: true }).catch(() => {});
-            setDoc(doc(db, 'users', docId), payload, { merge: true }).catch(() => {});
-          });
+          if (cleanEmps.length > 0) {
+            fetch('/api/ssot/team-members', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ isBackfill: true, members: cleanEmps }),
+            }).catch(() => {});
+            cleanEmps.forEach((emp) => {
+              if (!emp) return;
+              const cleanEmail = (emp.email || '').trim().toLowerCase();
+              const docId = cleanEmail ? generateRequestDocId(cleanEmail) : (emp.id || '').replace(/^emp-/, '');
+              if (!docId) return;
+              const payload = JSON.parse(
+                JSON.stringify({
+                  id: emp.id,
+                  name: emp.name,
+                  fullName: emp.name,
+                  email: cleanEmail || emp.email || '',
+                  role: emp.role || 'VIEWER',
+                  discipline: emp.discipline || emp.primaryDiscipline || 'BIM - ACS',
+                  primaryDiscipline: emp.primaryDiscipline || emp.discipline || 'BIM - ACS',
+                  assignedTo: emp.id,
+                  status: 'APPROVED',
+                  isDeleted: false,
+                })
+              );
+              setDoc(doc(db, 'team_members', docId), payload, { merge: true }).catch(() => {});
+              setDoc(doc(db, 'users', docId), payload, { merge: true }).catch(() => {});
+            });
+          }
         }
       } catch {}
     }
@@ -4258,7 +4374,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (snapshot) => {
           projectAssignmentsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            projectAssignmentsMap.set(docSnap.id, parseAllocDoc(docSnap));
+            const parsed = parseAllocDoc(docSnap);
+            if (isRemovedMockMember(parsed)) {
+              deleteDoc(doc(db, 'project_assignments', docSnap.id)).catch(() => {});
+              return;
+            }
+            projectAssignmentsMap.set(docSnap.id, parsed);
           });
           syncMergedAllocations();
         },
@@ -4272,7 +4393,12 @@ export const BimDataProvider: React.FC<{ children: React.ReactNode }> = ({
         (snapshot) => {
           assignedHoursMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            assignedHoursMap.set(docSnap.id, parseAllocDoc(docSnap));
+            const parsed = parseAllocDoc(docSnap);
+            if (isRemovedMockMember(parsed)) {
+              deleteDoc(doc(db, 'assigned_hours', docSnap.id)).catch(() => {});
+              return;
+            }
+            assignedHoursMap.set(docSnap.id, parsed);
           });
           syncMergedAllocations();
         },

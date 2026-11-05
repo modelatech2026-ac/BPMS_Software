@@ -36,6 +36,7 @@ import {
   mergeAllocationsWithLocal,
   getDeletedAllocationIds,
   registerDeletedAllocationId,
+  isRemovedMockMember,
 } from '../context/BimDataContext';
 import { db } from '../firebase/config';
 import {
@@ -174,7 +175,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
 
   const activeTeamMembers = useMemo(() => {
     const raw = (employees || [])
-      .filter((member) => !member.isDeleted && member.status !== 'deleted')
+      .filter((member) => !member.isDeleted && member.status !== 'deleted' && !isRemovedMockMember(member))
       .map((member) => sanitizeEmployeeRecord({ ...member }));
     const seen = new Set<string>();
     return raw.filter((member) => {
@@ -205,6 +206,7 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
   // Exclude allocations explicitly marked as deleted while keeping all live active allocations visible
   const isLiveActiveMember = (item: ResourceAllocationItem) => {
     if (!item) return false;
+    if (isRemovedMockMember(item)) return false;
     if (getDeletedAllocationIds().has(item.id)) return false;
     if ((item as any).isDeleted === true) return false;
     if (String(item.status || '').trim().toLowerCase() === 'deleted') return false;
@@ -465,7 +467,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         (snapshot) => {
           assignedHoursMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            assignedHoursMap.set(docSnap.id, parseSnapshotDoc(docSnap));
+            const parsed = parseSnapshotDoc(docSnap);
+            if (!isRemovedMockMember(parsed)) {
+              assignedHoursMap.set(docSnap.id, parsed);
+            }
           });
           syncMerged(snapshot.metadata.fromCache);
         },
@@ -479,7 +484,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         (snapshot) => {
           projectAssignmentsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            projectAssignmentsMap.set(docSnap.id, parseSnapshotDoc(docSnap));
+            const parsed = parseSnapshotDoc(docSnap);
+            if (!isRemovedMockMember(parsed)) {
+              projectAssignmentsMap.set(docSnap.id, parsed);
+            }
           });
           syncMerged(snapshot.metadata.fromCache);
         },
@@ -493,7 +501,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         (snapshot) => {
           dailyLogsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            dailyLogsMap.set(docSnap.id, parseDailyLogDoc(docSnap));
+            const parsed = parseDailyLogDoc(docSnap);
+            if (!isRemovedMockMember(parsed)) {
+              dailyLogsMap.set(docSnap.id, parsed);
+            }
           });
           syncMergedDailyLogs();
         },
@@ -507,7 +518,10 @@ export const AssignHoursSystem: React.FC<AssignHoursSystemProps> = ({ onSelectPr
         (snapshot) => {
           workLogsMap.clear();
           snapshot.docs.forEach((docSnap) => {
-            workLogsMap.set(docSnap.id, parseDailyLogDoc(docSnap));
+            const parsed = parseDailyLogDoc(docSnap);
+            if (!isRemovedMockMember(parsed)) {
+              workLogsMap.set(docSnap.id, parsed);
+            }
           });
           syncMergedDailyLogs();
         },

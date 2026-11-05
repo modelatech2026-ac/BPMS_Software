@@ -22,6 +22,7 @@ import {
   isUserSuperAdmin,
   normalizeDateToIso,
   getCurrentWeekRange,
+  isRemovedMockMember,
 } from '../context/BimDataContext';
 import { Employee, BimProject, PRIMARY_DISCIPLINES } from '../types';
 import { EditEmployeeModal } from './EditEmployeeModal';
@@ -163,7 +164,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
     >();
 
     const activeEmployees = (employees || []).filter(
-      (e) => !e.isDeleted && e.status !== 'deleted'
+      (e) => !e.isDeleted && e.status !== 'deleted' && !isRemovedMockMember(e)
     );
 
     const resolveEmployee = (empId?: string, email?: string, name?: string): Employee | undefined => {
@@ -237,6 +238,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
 
     // 2. Aggregate all real-time allocations from assigned_hours / project_assignments per member
     (resourceAllocations || []).forEach((alloc) => {
+      if (isRemovedMockMember(alloc)) return;
       const proj = resolveProject(alloc.projectId, alloc.projectName);
       const resolvedProjId = proj?.id || alloc.projectId || '';
       if (projectFilter !== 'all' && !matchProjectId(resolvedProjId, projectFilter)) {
@@ -284,7 +286,7 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
 
     // 3. Ensure any daily_logs / work_logs entries also sync to the member's consolidated row
     (activeWorkLogs || []).forEach((log) => {
-      if (log.isTestEntry) return;
+      if (log.isTestEntry || isRemovedMockMember(log)) return;
       const proj = resolveProject(log.projectId, log.projectName);
       const resolvedProjId = proj?.id || log.projectId || '';
       if (projectFilter !== 'all' && !matchProjectId(resolvedProjId, projectFilter)) {
@@ -327,9 +329,18 @@ export const EmployeeDirectory: React.FC<EmployeeDirectoryProps> = ({
     const rows: EfficiencyMatrixRow[] = [];
 
     memberMap.forEach((item, rowKey) => {
+      if (
+        isRemovedMockMember({
+          id: item.employeeId,
+          name: item.employeeName,
+          email: item.employeeEmail,
+        })
+      ) {
+        return;
+      }
       const loggedHours = (activeWorkLogs || [])
         .filter((w) => {
-          if (w.isTestEntry) return false;
+          if (w.isTestEntry || isRemovedMockMember(w)) return false;
           if (projectFilter !== 'all' && !matchProjectId(w.projectId, projectFilter)) {
             return false;
           }

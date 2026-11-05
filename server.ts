@@ -17,80 +17,56 @@ const accessRequestsStore = new Map<string, any>();
 const deletedRequestEmails = new Map<string, number>();
 const sseClients = new Set<express.Response>();
 
-const INITIAL_SEED_REQUESTS = [
-  {
-    id: "req_hm_gmail_com",
-    uid: "req_hm_gmail_com",
-    email: "hm@gmail.com",
-    name: "hammy",
-    fullName: "hammy",
-    discipline: "BIM - ACS",
-    primaryDiscipline: "BIM - ACS",
-    organization: "BIM - ACS",
-    reasonForAccess: "Sign-in Access Request for ProductionPulse BPMS",
-    accessReason: "Sign-in Access Request for ProductionPulse BPMS",
-    notes: "Sign-in Access Request for ProductionPulse BPMS",
-    status: "pending",
-    role: "Editor",
-    requestedRole: "Editor",
-    assignedRole: "EDITOR",
-    assignedAccessLevel: "Editor",
-    createdAt: "2026-10-28T19:55:00.000Z",
-    requestedAt: "2026-10-28T19:55:00.000Z",
-    requestTimestamp: "2026-10-28T19:55:00.000Z",
-    timestamp: "2026-10-28T19:55:00.000Z",
-    updatedAt: "2026-10-28T19:55:00.000Z",
-    isDeleted: false,
-  },
-  {
-    id: "req_an_gmail_com",
-    uid: "hcXqh6pZOB2qmouYGa1v",
-    email: "an@gmail.com",
-    name: "anny",
-    fullName: "anny",
-    discipline: "BIM - ACS",
-    primaryDiscipline: "BIM - ACS",
-    organization: "BIM - ACS",
-    reasonForAccess: "Sign-in Access Request for ProductionPulse BPMS",
-    accessReason: "Sign-in Access Request for ProductionPulse BPMS",
-    notes: "Sign-in Access Request for ProductionPulse BPMS",
-    status: "pending",
-    role: "Editor",
-    requestedRole: "Editor",
-    assignedRole: "EDITOR",
-    assignedAccessLevel: "Editor",
-    createdAt: "2026-10-28T19:29:31.248Z",
-    requestedAt: "2026-10-28T19:29:31.248Z",
-    requestTimestamp: "2026-10-28T19:29:31.248Z",
-    timestamp: "2026-10-28T19:29:31.248Z",
-    updatedAt: "2026-10-28T19:29:31.248Z",
-    isDeleted: false,
-  },
-  {
-    id: "req_ha_gmail_com",
-    uid: "zqolVcnoKm1EA1RfexfY",
-    email: "ha@gmail.com",
-    name: "harry",
-    fullName: "harry",
-    discipline: "BIM - ACS",
-    primaryDiscipline: "BIM - ACS",
-    organization: "BIM - ACS",
-    reasonForAccess: "Sign-in Access Request for ProductionPulse BPMS",
-    accessReason: "Sign-in Access Request for ProductionPulse BPMS",
-    notes: "Sign-in Access Request for ProductionPulse BPMS",
-    status: "pending",
-    role: "Editor",
-    requestedRole: "Editor",
-    assignedRole: "EDITOR",
-    assignedAccessLevel: "Editor",
-    createdAt: "2026-10-28T18:57:56.591Z",
-    requestedAt: "2026-10-28T18:57:56.591Z",
-    requestTimestamp: "2026-10-28T18:57:56.591Z",
-    timestamp: "2026-10-28T18:57:56.591Z",
-    updatedAt: "2026-10-28T18:57:56.591Z",
-    isDeleted: false,
-  },
-];
+const REMOVED_MOCK_NAMES = new Set<string>([
+  "harry potter",
+  "amyy",
+  "anumana bhattacharya",
+  "kiara",
+  "piya roy",
+  "anny",
+  "harry",
+  "hammy",
+  "abcd",
+  "ankita ghosh",
+  "stephen",
+  "jishu",
+  "steph",
+  "bheem",
+  "rony",
+]);
+
+const REMOVED_MOCK_EMAILS = new Set<string>([
+  "harry.potter@hogwarts.edu",
+  "harry@gmail.com",
+  "amy@gmail.com",
+  "anu@gmail.com",
+  "kira@gmail.com",
+  "piyu@gmail.com",
+  "an@gmail.com",
+  "ha@gmail.com",
+  "hm@gmail.com",
+  "abcd@gmail.co",
+  "anki@gmail.com",
+  "step@gmail.com",
+  "jish@gmail.com",
+  "steph@gmail.com",
+  "bheem@gmail.com",
+  "rony@gmail.com",
+]);
+
+function isRemovedMockRecord(item: any): boolean {
+  if (!item) return false;
+  const email = String(item.email || item.memberEmail || item.userEmail || "").trim().toLowerCase();
+  if (email && REMOVED_MOCK_EMAILS.has(email)) return true;
+  const names = [item.name, item.fullName, item.employeeName, item.memberName];
+  for (const n of names) {
+    const clean = String(n || "").trim().toLowerCase();
+    if (clean && REMOVED_MOCK_NAMES.has(clean)) return true;
+  }
+  return false;
+}
+
+const INITIAL_SEED_REQUESTS: any[] = [];
 
 function loadAccessRequestsStore() {
   try {
@@ -104,6 +80,7 @@ function loadAccessRequestsStore() {
       }
       if (Array.isArray(parsed?.requests)) {
         parsed.requests.forEach((req: any) => {
+          if (isRemovedMockRecord(req)) return;
           const emailKey = String(req?.email || "").trim().toLowerCase();
           if (emailKey && !deletedRequestEmails.has(emailKey)) {
             accessRequestsStore.set(emailKey, req);
@@ -212,6 +189,10 @@ app.get("/api/access-requests", (_req, res) => {
 app.post("/api/access-requests", (req, res) => {
   try {
     const body = req.body || {};
+    if (isRemovedMockRecord(body)) {
+      res.json({ success: true, ignored: true });
+      return;
+    }
     const cleanEmail = String(body.email || "").trim().toLowerCase();
     if (!cleanEmail) {
       res.status(400).json({ success: false, error: "Valid email is required" });
@@ -324,6 +305,7 @@ function loadSsotStore() {
       }
       if (Array.isArray(parsed?.timesheets)) {
         parsed.timesheets.forEach((log: any) => {
+          if (isRemovedMockRecord(log)) return;
           if (log?.id && !ssotDeletedLogIds.has(String(log.id))) {
             ssotTimesheets.set(String(log.id), log);
           }
@@ -331,6 +313,7 @@ function loadSsotStore() {
       }
       if (Array.isArray(parsed?.teamMembers)) {
         parsed.teamMembers.forEach((member: any) => {
+          if (isRemovedMockRecord(member)) return;
           const key = String(member?.id || member?.email || "").trim();
           if (key && !ssotDeletedMemberIds.has(key)) {
             ssotTeamMembers.set(key, member);
@@ -482,7 +465,7 @@ app.post("/api/ssot/timesheets", (req, res) => {
     const nowIso = new Date().toISOString();
 
     for (const item of items) {
-      if (!item || !item.id) continue;
+      if (!item || !item.id || isRemovedMockRecord(item)) continue;
       const logId = String(item.id).trim();
       if (body.isBackfill && ssotDeletedLogIds.has(logId)) continue;
       if (!body.isBackfill) {
@@ -541,7 +524,7 @@ app.post("/api/ssot/team-members", (req, res) => {
     const nowIso = new Date().toISOString();
 
     for (const item of items) {
-      if (!item) continue;
+      if (!item || isRemovedMockRecord(item)) continue;
       const idKey = String(item.id || "").trim();
       const emailKey = String(item.email || "").trim().toLowerCase();
       const nameKey = String(item.name || item.fullName || "").trim().toLowerCase();

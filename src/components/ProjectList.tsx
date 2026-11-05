@@ -35,6 +35,7 @@ import {
   getProjectEstimatedHours,
   getProjectChangedHours,
   getProjectTargetHours,
+  isRemovedMockMember,
 } from '../context/BimDataContext';
 import { BimProject, ProjectStatus, PROJECT_STATUS_OPTIONS, ResourceAllocationItem, DailyWorkLog } from '../types';
 import { calculateDeliveryVariance, getProjectStatusStyle } from '../utils/deliveryVariance';
@@ -170,6 +171,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     const source =
       liveAssignedHours.length > 0 ? liveAssignedHours : resourceAllocations || [];
     return source.filter((item) => {
+      if (isRemovedMockMember(item)) return false;
       try {
         const saved = localStorage.getItem('bim_deleted_members_v1');
         if (saved) {
@@ -225,7 +227,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     const deletedIds = new Set<string>();
 
     const parseRawLog = (docId: string, data: any): DailyWorkLog | null => {
-      if (!data || data.isDeleted === true || deletedIds.has(docId)) return null;
+      if (!data || data.isDeleted === true || deletedIds.has(docId) || isRemovedMockMember({ ...data, id: docId })) return null;
       const resolvedCreatedAt =
         typeof data.createdAt === 'string'
           ? data.createdAt

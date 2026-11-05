@@ -8,6 +8,7 @@ import {
   PENDING_ACCESS_REQUESTS_KEY,
   DELETED_ACCESS_REQUESTS_KEY,
   ACCESS_REQUESTS_CHANNEL,
+  isRemovedMockMember,
 } from '../context/BimDataContext';
 import { UserAccessRecord, AccessLevel, OnboardingRequest, UserRole, PRIMARY_DISCIPLINES, Discipline } from '../types';
 import {
@@ -168,7 +169,7 @@ export const AdminNexus: React.FC = () => {
   const normalizeRawRequest = (raw: any): OnboardingRequest | null => {
     if (!raw) return null;
     const rawStatus = String(raw.status || 'pending').trim().toLowerCase();
-    if (raw.isDeleted === true || rawStatus === 'deleted') return null;
+    if (raw.isDeleted === true || rawStatus === 'deleted' || isRemovedMockMember(raw)) return null;
 
     const cleanEmail = String(raw.email || raw.userEmail || raw.memberEmail || '').trim().toLowerCase();
     if (!cleanEmail) return null;
