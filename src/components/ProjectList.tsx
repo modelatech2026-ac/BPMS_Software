@@ -501,50 +501,100 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const [inlineDrafts, setInlineDrafts] = useState<Record<string, string>>({});
   const [activeInlineKey, setActiveInlineKey] = useState<string | null>(null);
 
-  const hasSuperAdminOrDirectorRole = Boolean(
-    isUserSuperAdmin(currentUser) ||
-      currentUser?.role === 'SUPER_ADMIN' ||
-      currentUser?.role === 'DIRECTOR' ||
-      currentUser?.appRole === 'SUPER_ADMIN' ||
-      currentUser?.appRole === 'DIRECTOR' ||
-      currentUser?.securityRole === 'Super Admin' ||
-      currentUser?.securityRole === 'Director'
-  );
-  const isSuperAdmin = hasSuperAdminOrDirectorRole && adminEditUnlocked;
+  const isStrictSuperAdminRole = useMemo(() => {
+    if (!currentUser) return false;
+    const rawRole = String(currentUser.role || '').trim();
+    const rawAppRole = String(currentUser.appRole || '').trim();
+    const rawSecurityRole = String(currentUser.securityRole || '').trim();
+    const rawAccessLevel = String(currentUser.accessLevel || '').trim();
 
-  const isOnlySuperAdmin = Boolean(
-    currentUser?.role === 'SUPER_ADMIN' ||
-      currentUser?.appRole === 'SUPER_ADMIN' ||
-      currentUser?.securityRole === 'Super Admin' ||
-      currentUser?.accessLevel === 'Super Admin' ||
-      (isUserSuperAdmin(currentUser) &&
-        currentUser?.role !== 'DIRECTOR' &&
-        currentUser?.role !== 'Director' &&
-        currentUser?.appRole !== 'DIRECTOR' &&
-        currentUser?.securityRole !== 'Director' &&
-        currentUser?.accessLevel !== 'Director')
-  );
+    const nonSuperAdminRoles = [
+      'DIRECTOR',
+      'Director',
+      'PROJECT_MANAGER',
+      'Project Manager',
+      'MANAGER',
+      'Manager',
+      'BIM Project Manager',
+      'Assistant Manager',
+      'BIM Specialist',
+      'Lead Coordinator',
+      'EDITOR',
+      'Editor',
+      'VIEWER',
+      'Viewer',
+    ];
+    if (
+      nonSuperAdminRoles.includes(rawSecurityRole) ||
+      nonSuperAdminRoles.includes(rawAppRole) ||
+      nonSuperAdminRoles.includes(rawRole) ||
+      nonSuperAdminRoles.includes(rawAccessLevel)
+    ) {
+      return false;
+    }
 
-  const isManagerRole = Boolean(
-    currentUser?.role === 'MANAGER' ||
-      currentUser?.role === 'PROJECT_MANAGER' ||
-      currentUser?.role === 'Manager' ||
-      currentUser?.role === 'Project Manager' ||
-      currentUser?.role === 'BIM Project Manager' ||
-      currentUser?.role === 'Assistant Manager' ||
-      currentUser?.role?.toUpperCase() === 'MANAGER' ||
-      currentUser?.role?.toUpperCase() === 'PROJECT_MANAGER' ||
-      currentUser?.role?.toUpperCase().includes('MANAGER') ||
-      currentUser?.appRole === 'MANAGER' ||
-      currentUser?.appRole === 'PROJECT_MANAGER' ||
-      currentUser?.securityRole === 'Project Manager' ||
-      currentUser?.accessLevel === 'Project Manager'
-  );
+    return (
+      rawRole === 'SUPER_ADMIN' ||
+      rawAppRole === 'SUPER_ADMIN' ||
+      rawSecurityRole === 'Super Admin' ||
+      rawRole === 'Super Admin' ||
+      rawAccessLevel === 'Super Admin'
+    );
+  }, [currentUser]);
 
-  const canEditHours = (isOnlySuperAdmin || isManagerRole) && adminEditUnlocked;
+  const hasSuperAdminOrDirectorRole = isStrictSuperAdminRole;
+  const isSuperAdmin = isStrictSuperAdminRole && adminEditUnlocked;
+  const isOnlySuperAdmin = isSuperAdmin;
+  const canEditHours = isSuperAdmin;
+
+  useEffect(() => {
+    if (!isSuperAdmin) {
+      setActiveInlineKey(null);
+      setInlineDrafts({});
+      setEditingActualDateProject(null);
+      setProjectToDelete(null);
+      setProjectToEdit(null);
+    }
+  }, [isSuperAdmin]);
+
+  const handleStatusChange = (projectId: string, newStatus: ProjectStatus) => {
+    if (!isSuperAdmin) {
+      console.warn('Security Guard: Project status modification is restricted to SUPER_ADMIN.');
+      return;
+    }
+    updateProjectStatus(projectId, newStatus);
+  };
+
+  const handleOpenDateOverride = (project: BimProject) => {
+    if (!isSuperAdmin) {
+      console.warn('Security Guard: Delivery date modification is restricted to SUPER_ADMIN.');
+      return;
+    }
+    setEditingActualDateProject(project);
+    setNewPlannedDateValue(project.plannedDeliveryDate || project.targetCompletionDate || '');
+    setNewActualDateValue(project.actualDeliveredDate || '');
+  };
+
+  const handleSaveDateOverride = () => {
+    if (!isSuperAdmin || !editingActualDateProject) {
+      console.warn('Security Guard: Saving delivery dates is restricted to SUPER_ADMIN.');
+      return;
+    }
+    const trimmedPlanned = newPlannedDateValue.trim();
+    const trimmedActual = newActualDateValue.trim();
+    updateProject(editingActualDateProject.id, {
+      plannedDeliveryDate: trimmedPlanned,
+      targetCompletionDate: trimmedPlanned,
+      actualDeliveredDate: trimmedActual || undefined,
+    });
+    setEditingActualDateProject(null);
+  };
 
   const handleConfirmDeleteProject = async () => {
-    if (!projectToDelete) return;
+    if (!isSuperAdmin || !projectToDelete) {
+      console.warn('Security Guard: Project deletion is restricted to SUPER_ADMIN.');
+      return;
+    }
     const targetId = projectToDelete.id;
     setDeletedProjectIds((prev) => {
       const next = prev.includes(targetId) ? prev : [...prev, targetId];
@@ -567,6 +617,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     field: 'totalLogged' | 'estimatedHours' | 'changedHours',
     value: number
   ) => {
+    if (!isSuperAdmin) {
+      console.warn('Security Guard: Project hours modification is restricted to SUPER_ADMIN.');
+      return;
+    }
     if (Number.isNaN(value) || value < 0) return;
     const targetProj = projects.find((p) => p.id === projectId);
     if (!targetProj) return;
@@ -679,6 +733,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   };
 
   const commitLoggedHours = (project: BimProject, rawValue: string) => {
+    if (!isSuperAdmin) {
+      setActiveInlineKey(null);
+      setInlineDrafts({});
+      return;
+    }
     const loggedKey = `${project.id}:logged`;
     const effectiveRaw =
       inlineDrafts[loggedKey] !== undefined ? inlineDrafts[loggedKey] : rawValue;
@@ -696,6 +755,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   };
 
   const commitEstimatedHours = (project: BimProject, rawValue: string) => {
+    if (!isSuperAdmin) {
+      setActiveInlineKey(null);
+      setInlineDrafts({});
+      return;
+    }
     const estimatedKey = `${project.id}:estimated`;
     const effectiveRaw =
       inlineDrafts[estimatedKey] !== undefined ? inlineDrafts[estimatedKey] : rawValue;
@@ -713,6 +777,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   };
 
   const commitChangedHours = (project: BimProject, rawValue: string) => {
+    if (!isSuperAdmin) {
+      setActiveInlineKey(null);
+      setInlineDrafts({});
+      return;
+    }
     const changedKey = `${project.id}:changed`;
     const effectiveRaw =
       inlineDrafts[changedKey] !== undefined ? inlineDrafts[changedKey] : rawValue;
@@ -1014,13 +1083,14 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       >
                         {/* Project Name (Only project name, no description below) */}
                         <td className="py-2.5 px-4">
-                          {isOnlySuperAdmin ? (
+                          {isSuperAdmin ? (
                             <div className="flex items-center justify-between gap-2 font-semibold text-white group-hover:text-blue-300 transition text-[13px] whitespace-nowrap">
                               <span>{project.name}</span>
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  if (!isSuperAdmin) return;
                                   onSelectProject(project);
                                 }}
                                 className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition shrink-0"
@@ -1037,7 +1107,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                           )}
                         </td>
 
-                        {/* Status with Manual Select Dropdown (Super Admin / Director only) */}
+                        {/* Status with Manual Select Dropdown (Super Admin only) */}
                         <td
                           className="py-2.5 px-3"
                           onClick={(e) => {
@@ -1048,8 +1118,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                             <div className="relative inline-block">
                               <select
                                 value={project.status}
+                                disabled={!isSuperAdmin}
                                 onChange={(e) => {
-                                  updateProjectStatus(project.id, e.target.value as ProjectStatus);
+                                  handleStatusChange(project.id, e.target.value as ProjectStatus);
                                 }}
                                 className={`appearance-none font-semibold text-[11px] px-2.5 py-1 pr-6 rounded-md border cursor-pointer focus:outline-none transition shadow-xs ${getProjectStatusStyle(
                                   project.status
@@ -1340,11 +1411,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                             <span>{plannedDate || '—'}</span>
                             {isSuperAdmin && (
                               <button
-                                onClick={() => {
-                                  setEditingActualDateProject(project);
-                                  setNewPlannedDateValue(plannedDate || '');
-                                  setNewActualDateValue(actualDate || '');
-                                }}
+                                type="button"
+                                onClick={() => handleOpenDateOverride(project)}
                                 className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition"
                                 title="Edit Planned & Actual Delivery Dates (Super Admin Privilege)"
                               >
@@ -1367,11 +1435,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                                 <span className="text-slate-500 font-mono text-xs">—</span>
                               )}
                               <button
-                                onClick={() => {
-                                  setEditingActualDateProject(project);
-                                  setNewPlannedDateValue(plannedDate || '');
-                                  setNewActualDateValue(actualDate || '');
-                                }}
+                                type="button"
+                                onClick={() => handleOpenDateOverride(project)}
                                 className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition"
                                 title="Edit Actual Delivered Date (Super Admin Privilege)"
                               >
@@ -1397,11 +1462,12 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                             >
                               View
                             </button>
-                            {isOnlySuperAdmin && (
+                            {isSuperAdmin && (
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  if (!isSuperAdmin) return;
                                   onSelectProject(project);
                                 }}
                                 className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border border-amber-500/20 hover:border-amber-500/40 transition"
@@ -1411,10 +1477,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
                             )}
-                            {hasSuperAdminOrDirectorRole && (
+                            {isSuperAdmin && (
                               <button
                                 type="button"
-                                onClick={() => setProjectToDelete(project)}
+                                onClick={() => {
+                                  if (!isSuperAdmin) return;
+                                  setProjectToDelete(project);
+                                }}
                                 className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 hover:border-rose-500/40 transition"
                                 title="Are you sure you want to permanently delete this project record?"
                                 aria-label={`Delete project ${project.name}`}
@@ -1433,8 +1502,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           </div>
         </div>
 
-      {/* Super Admin / Director Confirmation Modal: Delete Project Record */}
-      {projectToDelete && (
+      {/* Super Admin Confirmation Modal: Delete Project Record */}
+      {isSuperAdmin && projectToDelete && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 text-slate-100 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -1490,7 +1559,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         </div>
       )}
       {/* Super Admin Modal: Edit Actual Delivered Date */}
-      {editingActualDateProject && (
+      {isSuperAdmin && editingActualDateProject && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 text-slate-100 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -1555,16 +1624,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  const trimmedPlanned = newPlannedDateValue.trim();
-                  const trimmedActual = newActualDateValue.trim();
-                  updateProject(editingActualDateProject.id, {
-                    plannedDeliveryDate: trimmedPlanned,
-                    targetCompletionDate: trimmedPlanned,
-                    actualDeliveredDate: trimmedActual || undefined,
-                  });
-                  setEditingActualDateProject(null);
-                }}
+                onClick={handleSaveDateOverride}
                 className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold transition flex items-center gap-1.5"
               >
                 <Check className="w-3.5 h-3.5" />
@@ -1576,11 +1636,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       )}
 
       {/* Super Admin Edit Project Modal */}
-      <NewProjectModal
-        isOpen={Boolean(projectToEdit)}
-        onClose={() => setProjectToEdit(null)}
-        projectToEdit={projectToEdit}
-      />
+      {isSuperAdmin && (
+        <NewProjectModal
+          isOpen={Boolean(projectToEdit)}
+          onClose={() => setProjectToEdit(null)}
+          projectToEdit={projectToEdit}
+        />
+      )}
     </div>
   );
 };
